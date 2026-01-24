@@ -10,8 +10,9 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(err) => {
             eprintln!("{err}\n");
-            eprintln!("Usage: render-test <file.html> [more.html ...]");
-            eprintln!("Each HTML path must have a baseline PNG next to it: same path with a .png extension.");
+            eprintln!("Usage: render-test <case.html|case.url> [more ...]");
+            eprintln!("Each case must have a baseline PNG next to it: same path with a .png extension.");
+            eprintln!("A .url case file contains a single URL (first non-empty, non-comment line).");
             return ExitCode::from(2);
         }
     };
@@ -38,8 +39,8 @@ fn main() -> ExitCode {
     let mut passed = 0usize;
     let mut failed = 0usize;
 
-    for html_path in &args.html_paths {
-        match run_case(&browser_exe, &output_dir, html_path) {
+    for case_path in &args.case_paths {
+        match run_case(&browser_exe, &output_dir, case_path) {
             Ok(()) => passed += 1,
             Err(err) => {
                 failed += 1;
@@ -58,15 +59,15 @@ fn main() -> ExitCode {
 
 #[derive(Debug)]
 struct Args {
-    html_paths: Vec<PathBuf>,
+    case_paths: Vec<PathBuf>,
 }
 
 fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Args, String> {
-    let html_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
-    if html_paths.is_empty() {
-        return Err("Missing HTML path(s).".to_owned());
+    let case_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+    if case_paths.is_empty() {
+        return Err("Missing case path(s).".to_owned());
     }
-    Ok(Args { html_paths })
+    Ok(Args { case_paths })
 }
 
 fn find_browser_exe() -> Result<PathBuf, String> {
@@ -107,21 +108,38 @@ fn find_browser_exe() -> Result<PathBuf, String> {
 
 fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(), String> {
     let expected_png = html_path.with_extension("png");
+    let case_target = parse_case_target(html_path)?;
     if !expected_png.is_file() {
-        return Err(format!(
-            "FAIL {}\nMissing baseline PNG: {}\nHint: generate it with:\n  {} {} --screenshot={}\n",
-            html_path.display(),
-            expected_png.display(),
-            browser_exe.display(),
-            html_path.display(),
-            expected_png.display(),
-        ));
+        return Err(match &case_target {
+            CaseTarget::File => format!(
+                "FAIL {}\nMissing baseline PNG: {}\nHint: generate it with:\n  {} {} --screenshot={}\n",
+                html_path.display(),
+                expected_png.display(),
+                browser_exe.display(),
+                html_path.display(),
+                expected_png.display(),
+            ),
+            CaseTarget::Url(url) => format!(
+                "FAIL {}\nMissing baseline PNG: {}\nURL: {url}\nHint: generate it with:\n  {} \"{url}\" --screenshot={}\n",
+                html_path.display(),
+                expected_png.display(),
+                browser_exe.display(),
+                expected_png.display(),
+            ),
+        });
     }
 
     let actual_png = output_dir.join(actual_filename_for_html(html_path)?);
 
     println!("Case: {}", html_path.display());
-    render_to_png(browser_exe, html_path, &actual_png, DEFAULT_RENDER_TIMEOUT)?;
+    if let CaseTarget::Url(url) = &case_target {
+        println!("URL:  {url}");
+    }
+    let browser_arg = match &case_target {
+        CaseTarget::File => OsString::from(html_path),
+        CaseTarget::Url(url) => OsString::from(url),
+    };
+    render_to_png(browser_exe, &browser_arg, &actual_png, DEFAULT_RENDER_TIMEOUT)?;
 
     let comparison = compare_files(&expected_png, &actual_png)?;
     if comparison.matches {
@@ -159,7 +177,7 @@ fn actual_filename_for_html(html_path: &Path) -> Result<String, String> {
 
 fn render_to_png(
     browser_exe: &Path,
-    html_path: &Path,
+    browser_arg: &OsString,
     png_path: &Path,
     timeout: Duration,
 ) -> Result<(), String> {
@@ -167,7 +185,7 @@ fn render_to_png(
 
     let screenshot_arg = format!("--screenshot={}", png_path.display());
     let mut child = Command::new(browser_exe)
-        .arg(html_path)
+        .arg(browser_arg)
         .arg(screenshot_arg)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -182,8 +200,7 @@ fn render_to_png(
         {
             if !status.success() {
                 return Err(format!(
-                    "Browser process failed for {} (exit={})",
-                    html_path.display(),
+                    "Browser process failed (exit={})",
                     status.code().unwrap_or(-1)
                 ));
             }
@@ -203,12 +220,33 @@ fn render_to_png(
             return Err(format!(
                 "Browser render timed out after {:?} for {}",
                 timeout,
-                html_path.display()
+                browser_arg.to_string_lossy()
             ));
         }
 
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[derive(Debug)]
+enum CaseTarget {
+    File,
+    Url(String),
+}
+
+fn parse_case_target(case_path: &Path) -> Result<CaseTarget, String> {
+    if case_path.extension().and_then(|s| s.to_str()) != Some("url") {
+        return Ok(CaseTarget::File);
+    }
+
+    let raw = std::fs::read_to_string(case_path)
+        .map_err(|err| format!("Failed to read {}: {err}", case_path.display()))?;
+    let url = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .ok_or_else(|| format!("{} does not contain a URL", case_path.display()))?;
+    Ok(CaseTarget::Url(url.to_owned()))
 }
 
 #[derive(Clone, Copy, Debug)]

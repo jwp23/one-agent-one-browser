@@ -3,8 +3,14 @@ use std::path::PathBuf;
 
 #[derive(Debug, Default)]
 pub struct Args {
-    pub html_path: Option<PathBuf>,
+    pub target: Option<Target>,
     pub screenshot_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub enum Target {
+    File(PathBuf),
+    Url(String),
 }
 
 pub fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, String> {
@@ -39,12 +45,18 @@ pub fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, Stri
             }
         }
 
-        if parsed.html_path.is_some() {
+        if parsed.target.is_some() {
             return Err("Unexpected extra argument (expected a single HTML file path)".to_owned());
         }
-        parsed.html_path = Some(PathBuf::from(arg));
+
+        if let Some(s) = arg.to_str() {
+            if s.starts_with("http://") || s.starts_with("https://") {
+                parsed.target = Some(Target::Url(s.to_owned()));
+                continue;
+            }
+        }
+        parsed.target = Some(Target::File(PathBuf::from(arg)));
     }
 
     Ok(parsed)
 }
-

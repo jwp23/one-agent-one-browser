@@ -15,6 +15,7 @@ fn render_regression_suite() {
         cases_dir.join("display-none.html"),
         cases_dir.join("visibility-hidden.html"),
         cases_dir.join("hn-frontpage.html"),
+        cases_dir.join("hn-frontpage-2026-01-16.url"),
     ];
 
     let mut cmd = Command::new(&harness);

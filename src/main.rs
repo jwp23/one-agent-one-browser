@@ -9,8 +9,9 @@ fn main() {
         }
     };
 
-    let app = match args.html_path {
-        Some(path) => browser::BrowserApp::from_file(&path),
+    let app = match args.target {
+        Some(cli::Target::File(path)) => browser::BrowserApp::from_file(&path),
+        Some(cli::Target::Url(url)) => browser::BrowserApp::from_url(&url),
         None => browser::BrowserApp::from_html("Hello World", "<p>Hello World</p>"),
     };
 

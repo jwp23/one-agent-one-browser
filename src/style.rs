@@ -97,12 +97,16 @@ pub struct StyleComputer {
 }
 
 impl StyleComputer {
+    pub fn from_css(css_source: &str) -> StyleComputer {
+        StyleComputer {
+            stylesheet: Stylesheet::parse(css_source),
+        }
+    }
+
     pub fn from_document(document: &Document) -> StyleComputer {
         let mut css_source = String::new();
         collect_style_text(&document.root, &mut css_source);
-        StyleComputer {
-            stylesheet: Stylesheet::parse(&css_source),
-        }
+        StyleComputer::from_css(&css_source)
     }
 
     pub fn compute_style(
