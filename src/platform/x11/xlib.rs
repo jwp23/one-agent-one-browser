@@ -23,11 +23,13 @@ pub struct Visual {
 
 pub const ALL_PLANES: c_ulong = !0;
 pub const EVENT_TYPE_KEY_PRESS: c_int = 2;
+pub const EVENT_TYPE_BUTTON_PRESS: c_int = 4;
 pub const EVENT_TYPE_EXPOSE: c_int = 12;
 pub const EVENT_TYPE_CONFIGURE_NOTIFY: c_int = 22;
 pub const EVENT_TYPE_CLIENT_MESSAGE: c_int = 33;
 
 pub const EVENT_MASK_KEY_PRESS: c_long = 1 << 0;
+pub const EVENT_MASK_BUTTON_PRESS: c_long = 1 << 2;
 pub const EVENT_MASK_EXPOSURE: c_long = 1 << 15;
 pub const EVENT_MASK_STRUCTURE_NOTIFY: c_long = 1 << 17;
 
@@ -62,6 +64,25 @@ pub struct XConfigureEvent {
     pub border_width: c_int,
     pub above: Window,
     pub override_redirect: Bool,
+}
+
+#[repr(C)]
+pub struct XButtonEvent {
+    pub type_: c_int,
+    pub serial: c_ulong,
+    pub send_event: Bool,
+    pub display: *mut Display,
+    pub window: Window,
+    pub root: Window,
+    pub subwindow: Window,
+    pub time: c_ulong,
+    pub x: c_int,
+    pub y: c_int,
+    pub x_root: c_int,
+    pub y_root: c_int,
+    pub state: c_uint,
+    pub button: c_uint,
+    pub same_screen: Bool,
 }
 
 #[repr(C)]

@@ -1,14 +1,15 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
-use crate::render::{DisplayCommand, DrawRect, DrawText, FontMetricsPx, TextStyle};
+use crate::render::{DisplayCommand, DrawRect, DrawText, FontMetricsPx, LinkHitRegion, TextStyle};
 use crate::style::{ComputedStyle, Display, TextAlign, Visibility};
+use std::rc::Rc;
 
 use super::LayoutEngine;
 
 #[derive(Clone, Debug)]
 enum InlineToken {
-    Word(String, TextStyle, bool),
-    Space(TextStyle, bool),
+    Word(String, TextStyle, bool, Option<Rc<str>>),
+    Space(TextStyle, bool, Option<Rc<str>>),
     Newline,
     Box(Size, bool),
 }
@@ -32,6 +33,7 @@ pub(super) fn layout_inline_nodes<'doc>(
             parent_style,
             ancestors,
             paint,
+            None,
             &mut cursor,
             &mut tokens,
         );
@@ -51,7 +53,16 @@ pub(super) fn measure_inline_nodes<'doc>(
     let mut cursor = InlineCursor::default();
 
     for &node in nodes {
-        collect_tokens(engine, node, parent_style, ancestors, false, &mut cursor, &mut tokens);
+        collect_tokens(
+            engine,
+            node,
+            parent_style,
+            ancestors,
+            false,
+            None,
+            &mut cursor,
+            &mut tokens,
+        );
     }
 
     measure_tokens(engine, &tokens, parent_style, max_width)
@@ -62,15 +73,20 @@ struct InlineCursor {
     pending_space: Option<PendingSpace>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct PendingSpace {
     style: TextStyle,
     visible: bool,
+    link_href: Option<Rc<str>>,
 }
 
 impl InlineCursor {
-    fn mark_pending_space(&mut self, style: TextStyle, visible: bool) {
-        self.pending_space = Some(PendingSpace { style, visible });
+    fn mark_pending_space(&mut self, style: TextStyle, visible: bool, link_href: Option<Rc<str>>) {
+        self.pending_space = Some(PendingSpace {
+            style,
+            visible,
+            link_href,
+        });
     }
 
     fn clear_pending_space(&mut self) {
@@ -84,7 +100,7 @@ impl InlineCursor {
         if matches!(out.last(), Some(InlineToken::Newline) | None) {
             return;
         }
-        out.push(InlineToken::Space(space.style, space.visible));
+        out.push(InlineToken::Space(space.style, space.visible, space.link_href));
     }
 }
 
@@ -94,6 +110,7 @@ fn collect_tokens<'doc>(
     parent_style: &ComputedStyle,
     ancestors: &mut Vec<&'doc Element>,
     paint: bool,
+    link_href: Option<Rc<str>>,
     cursor: &mut InlineCursor,
     out: &mut Vec<InlineToken>,
 ) {
@@ -104,6 +121,7 @@ fn collect_tokens<'doc>(
                 text,
                 engine.text_style_for(parent_style),
                 visible,
+                link_href,
                 cursor,
                 out,
             )
@@ -120,6 +138,7 @@ fn collect_tokens<'doc>(
                 return;
             }
 
+            let link_href = anchor_href(el).or(link_href);
             let paint = paint && style.visibility == Visibility::Visible;
             if is_replaced_element(el) {
                 cursor.flush_pending_space(out);
@@ -133,7 +152,16 @@ fn collect_tokens<'doc>(
                 Display::Inline => {
                     push_inline_spacing(out, style.margin.left.saturating_add(style.padding.left));
                     for child in &el.children {
-                        collect_tokens(engine, child, &style, ancestors, paint, cursor, out);
+                        collect_tokens(
+                            engine,
+                            child,
+                            &style,
+                            ancestors,
+                            paint,
+                            link_href.clone(),
+                            cursor,
+                            out,
+                        );
                     }
                     push_inline_spacing(out, style.margin.right.saturating_add(style.padding.right));
                 }
@@ -146,6 +174,17 @@ fn collect_tokens<'doc>(
             ancestors.pop();
         }
     }
+}
+
+fn anchor_href(element: &Element) -> Option<Rc<str>> {
+    if element.name != "a" {
+        return None;
+    }
+    let href = element.attributes.get("href")?.trim();
+    if href.is_empty() {
+        return None;
+    }
+    Some(Rc::from(href))
 }
 
 fn is_replaced_element(element: &Element) -> bool {
@@ -185,13 +224,14 @@ fn push_text(
     text: &str,
     style: TextStyle,
     visible: bool,
+    link_href: Option<Rc<str>>,
     cursor: &mut InlineCursor,
     out: &mut Vec<InlineToken>,
 ) {
     let mut iter = text.chars().peekable();
     while let Some(ch) = iter.next() {
         if ch.is_whitespace() {
-            cursor.mark_pending_space(style, visible);
+            cursor.mark_pending_space(style, visible, link_href.clone());
             continue;
         }
 
@@ -206,7 +246,7 @@ fn push_text(
             word.push(next);
             iter.next();
         }
-        out.push(InlineToken::Word(word, style, visible));
+        out.push(InlineToken::Word(word, style, visible, link_href.clone()));
     }
 }
 
@@ -233,7 +273,7 @@ fn layout_tokens(
                 ));
                 x_px = 0;
             }
-            InlineToken::Space(style, visible) => {
+            InlineToken::Space(style, visible, link_href) => {
                 if x_px == 0 {
                     continue;
                 }
@@ -248,10 +288,11 @@ fn layout_tokens(
                     space_width_px,
                     metrics,
                     *visible,
+                    link_href.clone(),
                 ));
                 x_px = x_px.saturating_add(space_width_px);
             }
-            InlineToken::Word(text, style, visible) => {
+            InlineToken::Word(text, style, visible, link_href) => {
                 if text.is_empty() {
                     continue;
                 }
@@ -271,6 +312,7 @@ fn layout_tokens(
                     word_width_px,
                     metrics,
                     *visible,
+                    link_href.clone(),
                 ));
                 x_px = x_px.saturating_add(word_width_px);
             }
@@ -309,7 +351,7 @@ fn layout_tokens(
         let mut x_px = content_box.x.saturating_add(x_offset);
         for frag in line.fragments {
             match frag {
-                Fragment::Text(text, style, width, _metrics, visible) => {
+                Fragment::Text(text, style, width, _metrics, visible, link_href) => {
                     if paint && visible {
                         engine.list.commands.push(DisplayCommand::Text(DrawText {
                             x_px,
@@ -317,6 +359,15 @@ fn layout_tokens(
                             text,
                             style,
                         }));
+                        if let Some(href) = link_href {
+                            engine.link_regions.push(LinkHitRegion {
+                                href,
+                                x_px,
+                                y_px,
+                                width_px: width,
+                                height_px: line.height_px,
+                            });
+                        }
                     }
                     x_px = x_px.saturating_add(width);
                 }
@@ -366,7 +417,7 @@ fn measure_tokens(
                 ));
                 x_px = 0;
             }
-            InlineToken::Space(style, visible) => {
+            InlineToken::Space(style, _visible, _link_href) => {
                 if x_px == 0 {
                     continue;
                 }
@@ -380,11 +431,12 @@ fn measure_tokens(
                     *style,
                     space_width_px,
                     metrics,
-                    *visible,
+                    false,
+                    None,
                 ));
                 x_px = x_px.saturating_add(space_width_px);
             }
-            InlineToken::Word(text, style, visible) => {
+            InlineToken::Word(text, style, _visible, _link_href) => {
                 if text.is_empty() {
                     continue;
                 }
@@ -403,7 +455,8 @@ fn measure_tokens(
                     *style,
                     word_width_px,
                     metrics,
-                    *visible,
+                    false,
+                    None,
                 ));
                 x_px = x_px.saturating_add(word_width_px);
             }
@@ -440,7 +493,7 @@ fn measure_tokens(
 
 #[derive(Clone, Debug)]
 enum Fragment {
-    Text(String, TextStyle, i32, FontMetricsPx, bool),
+    Text(String, TextStyle, i32, FontMetricsPx, bool, Option<Rc<str>>),
     Box(Size, bool),
 }
 
@@ -474,7 +527,7 @@ impl Line {
 
     fn push(&mut self, fragment: Fragment) {
         match &fragment {
-            Fragment::Text(_, _, width, metrics, _) => {
+            Fragment::Text(_, _, width, metrics, _, _) => {
                 self.width_px = self.width_px.saturating_add(*width);
                 self.ascent_px = self.ascent_px.max(metrics.ascent_px.max(1));
                 self.descent_px = self.descent_px.max(metrics.descent_px.max(0));

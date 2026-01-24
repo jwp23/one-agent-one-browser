@@ -4,23 +4,40 @@ mod table;
 
 use crate::dom::{Document, Element, Node};
 use crate::geom::{Edges, Rect};
-use crate::render::{DisplayCommand, DisplayList, DrawRect, TextMeasurer, TextStyle, Viewport};
+use crate::render::{
+    DisplayCommand,
+    DisplayList,
+    DrawRect,
+    LinkHitRegion,
+    TextMeasurer,
+    TextStyle,
+    Viewport,
+};
 use crate::style::{AutoEdges, ComputedStyle, Display, StyleComputer, TextAlign, Visibility};
+
+pub struct LayoutOutput {
+    pub display_list: DisplayList,
+    pub link_regions: Vec<LinkHitRegion>,
+}
 
 pub fn layout_document(
     document: &Document,
     styles: &StyleComputer,
     measurer: &dyn TextMeasurer,
     viewport: Viewport,
-) -> Result<DisplayList, String> {
+) -> Result<LayoutOutput, String> {
     let mut engine = LayoutEngine {
         styles,
         measurer,
         viewport,
         list: DisplayList::default(),
+        link_regions: Vec::new(),
     };
     engine.layout_document(document)?;
-    Ok(engine.list)
+    Ok(LayoutOutput {
+        display_list: engine.list,
+        link_regions: engine.link_regions,
+    })
 }
 
 struct LayoutEngine<'a> {
@@ -28,6 +45,7 @@ struct LayoutEngine<'a> {
     measurer: &'a dyn TextMeasurer,
     viewport: Viewport,
     list: DisplayList,
+    link_regions: Vec<LinkHitRegion>,
 }
 
 impl LayoutEngine<'_> {
@@ -364,7 +382,26 @@ mod tests {
             height_px: 200,
         };
         let styles = crate::style::StyleComputer::from_document(&doc);
-        let list = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
-        assert!(list.commands.iter().any(|cmd| matches!(cmd, DisplayCommand::Text(_))));
+        let output = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
+        assert!(output
+            .display_list
+            .commands
+            .iter()
+            .any(|cmd| matches!(cmd, DisplayCommand::Text(_))));
+    }
+
+    #[test]
+    fn records_link_hit_regions_for_anchor_text() {
+        let doc = crate::html::parse_document(r#"<p><a href="https://example.com">Hello</a></p>"#);
+        let viewport = Viewport {
+            width_px: 200,
+            height_px: 200,
+        };
+        let styles = crate::style::StyleComputer::from_document(&doc);
+        let output = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
+        assert!(output
+            .link_regions
+            .iter()
+            .any(|region| region.href.as_ref() == "https://example.com"));
     }
 }

@@ -9,5 +9,13 @@ pub struct TickResult {
 pub trait App {
     fn tick(&mut self) -> Result<TickResult, String>;
     fn render(&mut self, painter: &mut dyn Painter, viewport: Viewport) -> Result<(), String>;
-}
 
+    fn mouse_down(
+        &mut self,
+        _x_px: i32,
+        _y_px: i32,
+        _viewport: Viewport,
+    ) -> Result<TickResult, String> {
+        Ok(TickResult::default())
+    }
+}

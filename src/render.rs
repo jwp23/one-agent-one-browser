@@ -1,5 +1,6 @@
 use crate::geom::Color;
 use crate::style::FontFamily;
+use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextStyle {
@@ -66,6 +67,26 @@ pub enum DisplayCommand {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DisplayList {
     pub commands: Vec<DisplayCommand>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkHitRegion {
+    pub href: Rc<str>,
+    pub x_px: i32,
+    pub y_px: i32,
+    pub width_px: i32,
+    pub height_px: i32,
+}
+
+impl LinkHitRegion {
+    pub fn contains_point(&self, x_px: i32, y_px: i32) -> bool {
+        if self.width_px <= 0 || self.height_px <= 0 {
+            return false;
+        }
+        let within_x = x_px >= self.x_px && x_px < self.x_px.saturating_add(self.width_px);
+        let within_y = y_px >= self.y_px && y_px < self.y_px.saturating_add(self.height_px);
+        within_x && within_y
+    }
 }
 
 pub trait TextMeasurer {

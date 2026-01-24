@@ -89,7 +89,10 @@ fn run_window_with_display<A: App>(
         XSelectInput(
             display,
             window,
-            EVENT_MASK_EXPOSURE | EVENT_MASK_KEY_PRESS | EVENT_MASK_STRUCTURE_NOTIFY,
+            EVENT_MASK_EXPOSURE
+                | EVENT_MASK_KEY_PRESS
+                | EVENT_MASK_BUTTON_PRESS
+                | EVENT_MASK_STRUCTURE_NOTIFY,
         );
         XMapWindow(display, window);
     }
@@ -160,6 +163,16 @@ fn run_window_with_display<A: App>(
                             height_px: configure.height,
                         };
                         needs_redraw = true;
+                    }
+                    EVENT_TYPE_BUTTON_PRESS => {
+                        let button: &XButtonEvent =
+                            unsafe { &*(event.inner.as_ptr() as *const XButtonEvent) };
+                        if button.button == 1 {
+                            let tick = app.mouse_down(button.x, button.y, viewport)?;
+                            if tick.needs_redraw {
+                                needs_redraw = true;
+                            }
+                        }
                     }
                     EVENT_TYPE_KEY_PRESS => {
                         should_exit = true;

@@ -1,6 +1,6 @@
 use crate::app::TickResult;
 use crate::dom::Document;
-use crate::render::{DisplayCommand, DisplayList, Painter, Viewport};
+use crate::render::{DisplayCommand, DisplayList, LinkHitRegion, Painter, Viewport};
 use crate::style::StyleComputer;
 use crate::url::Url;
 
@@ -8,8 +8,21 @@ pub struct BrowserApp {
     title: String,
     document: Document,
     styles: StyleComputer,
-    cached_layout: Option<(Viewport, DisplayList)>,
+    cached_layout: Option<CachedLayout>,
     url_loader: Option<UrlLoader>,
+    base: Option<PageBase>,
+}
+
+struct CachedLayout {
+    viewport: Viewport,
+    display_list: DisplayList,
+    link_regions: Vec<LinkHitRegion>,
+}
+
+#[derive(Clone)]
+enum PageBase {
+    Url(Url),
+    FileDir(std::path::PathBuf),
 }
 
 impl BrowserApp {
@@ -25,7 +38,10 @@ impl BrowserApp {
             .parent()
             .map(std::path::Path::to_owned)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        Self::from_html_with_base(&title, &source, Some(ResourceBase::FileDir(base_dir)))
+        let resource_base = ResourceBase::FileDir(base_dir.clone());
+        let mut app = Self::from_html_with_base(&title, &source, Some(resource_base))?;
+        app.base = Some(PageBase::FileDir(base_dir));
+        Ok(app)
     }
 
     pub fn from_html(title: &str, html_source: &str) -> Result<Self, String> {
@@ -37,13 +53,14 @@ impl BrowserApp {
         let title = base_url.as_str().to_owned();
         let loading_document = crate::html::parse_document("<p>Loading...</p>");
         let styles = StyleComputer::from_css("");
-        let loader = UrlLoader::new(base_url)?;
+        let loader = UrlLoader::new(base_url.clone())?;
         Ok(Self {
             title,
             document: loading_document,
             styles,
             cached_layout: None,
             url_loader: Some(loader),
+            base: Some(PageBase::Url(base_url)),
         })
     }
 
@@ -106,21 +123,24 @@ impl BrowserApp {
     }
 
     pub fn render(&mut self, painter: &mut dyn Painter, viewport: Viewport) -> Result<(), String> {
-        if self
+        if !self
             .cached_layout
             .as_ref()
-            .is_some_and(|(cached_viewport, _)| *cached_viewport == viewport)
+            .is_some_and(|cached| cached.viewport == viewport)
         {
-        } else {
-            let display_list =
+            let output =
                 crate::layout::layout_document(&self.document, &self.styles, painter, viewport)?;
-            self.cached_layout = Some((viewport, display_list));
+            self.cached_layout = Some(CachedLayout {
+                viewport,
+                display_list: output.display_list,
+                link_regions: output.link_regions,
+            });
         }
 
         painter.clear()?;
 
-        if let Some((_, list)) = &self.cached_layout {
-            for cmd in &list.commands {
+        if let Some(cached) = &self.cached_layout {
+            for cmd in &cached.display_list.commands {
                 match cmd {
                     DisplayCommand::Rect(rect) => painter.fill_rect(
                         rect.x_px,
@@ -137,6 +157,106 @@ impl BrowserApp {
         }
 
         painter.flush()?;
+        Ok(())
+    }
+
+    fn mouse_down(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        viewport: Viewport,
+    ) -> Result<TickResult, String> {
+        let Some(cached) = self
+            .cached_layout
+            .as_ref()
+            .filter(|cached| cached.viewport == viewport)
+        else {
+            return Ok(TickResult::default());
+        };
+
+        let Some(href) = cached
+            .link_regions
+            .iter()
+            .rev()
+            .find(|region| region.contains_point(x_px, y_px))
+            .map(|region| region.href.clone())
+        else {
+            return Ok(TickResult::default());
+        };
+
+        self.navigate_href(href.as_ref())?;
+        Ok(TickResult {
+            needs_redraw: true,
+            ready_for_screenshot: false,
+        })
+    }
+}
+
+impl BrowserApp {
+    fn navigate_href(&mut self, href: &str) -> Result<(), String> {
+        let href = href.trim();
+        if href.is_empty() {
+            return Ok(());
+        }
+
+        if href.starts_with("http://") || href.starts_with("https://") {
+            let Ok(url) = Url::parse(href) else {
+                return Ok(());
+            };
+            return self.begin_url_navigation(url);
+        }
+
+        match self.base.clone() {
+            Some(PageBase::Url(base)) => {
+                let Some(url) = base.resolve(href) else {
+                    return Ok(());
+                };
+                self.begin_url_navigation(url)?;
+            }
+            Some(PageBase::FileDir(dir)) => {
+                let path = resolve_link_file_path(&dir, href);
+                if let Err(_) = self.load_file(&path) {
+                    return Ok(());
+                }
+            }
+            None => {}
+        }
+
+        Ok(())
+    }
+
+    fn begin_url_navigation(&mut self, url: Url) -> Result<(), String> {
+        self.title = url.as_str().to_owned();
+        self.base = Some(PageBase::Url(url.clone()));
+        self.document = crate::html::parse_document("<p>Loading...</p>");
+        self.styles = StyleComputer::from_css("");
+        self.cached_layout = None;
+        self.url_loader = Some(UrlLoader::new(url)?);
+        Ok(())
+    }
+
+    fn load_file(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let source = std::fs::read_to_string(path)
+            .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+        let title = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Browser")
+            .to_owned();
+        let base_dir = path
+            .parent()
+            .map(std::path::Path::to_owned)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let document = crate::html::parse_document(&source);
+        let resource_base = ResourceBase::FileDir(base_dir.clone());
+        let css = collect_page_stylesheets(&document, Some(&resource_base))?;
+
+        self.title = title;
+        self.document = document;
+        self.styles = StyleComputer::from_css(&css);
+        self.cached_layout = None;
+        self.url_loader = None;
+        self.base = Some(PageBase::FileDir(base_dir));
         Ok(())
     }
 }
@@ -168,6 +288,7 @@ impl BrowserApp {
             styles,
             cached_layout: None,
             url_loader: None,
+            base: None,
         })
     }
 }
@@ -259,6 +380,10 @@ fn resolve_stylesheet_file_path(base_dir: &std::path::Path, href: &str) -> std::
         return std::path::PathBuf::from(href);
     }
     base_dir.join(href)
+}
+
+fn resolve_link_file_path(base_dir: &std::path::Path, href: &str) -> std::path::PathBuf {
+    resolve_stylesheet_file_path(base_dir, href)
 }
 
 struct UrlLoader {
@@ -418,5 +543,9 @@ impl crate::app::App for BrowserApp {
 
     fn render(&mut self, painter: &mut dyn Painter, viewport: Viewport) -> Result<(), String> {
         BrowserApp::render(self, painter, viewport)
+    }
+
+    fn mouse_down(&mut self, x_px: i32, y_px: i32, viewport: Viewport) -> Result<TickResult, String> {
+        BrowserApp::mouse_down(self, x_px, y_px, viewport)
     }
 }
