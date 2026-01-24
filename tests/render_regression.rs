@@ -5,11 +5,17 @@ use std::process::Command;
 fn render_regression_suite() {
     let harness = PathBuf::from(env!("CARGO_BIN_EXE_render-test"));
     let cases_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("cases");
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     let cases = [
         cases_dir.join("hello-strong.html"),
         cases_dir.join("long-word.html"),
         cases_dir.join("multi-paragraph.html"),
+        cases_dir.join("adjacent-inline.html"),
+        cases_dir.join("inline-margin-right.html"),
+        cases_dir.join("display-none.html"),
+        cases_dir.join("visibility-hidden.html"),
+        root_dir.join("test-file.html"),
     ];
 
     let mut cmd = Command::new(&harness);
@@ -31,4 +37,3 @@ fn render_regression_suite() {
         );
     }
 }
-

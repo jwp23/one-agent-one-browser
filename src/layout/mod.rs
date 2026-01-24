@@ -1,0 +1,305 @@
+mod inline;
+mod table;
+
+use crate::dom::{Document, Element, Node};
+use crate::geom::{Edges, Rect};
+use crate::render::{DisplayCommand, DisplayList, DrawRect, TextMeasurer, TextStyle, Viewport};
+use crate::style::{ComputedStyle, Display, StyleComputer, TextAlign, Visibility};
+
+pub fn layout_document(
+    document: &Document,
+    styles: &StyleComputer,
+    measurer: &dyn TextMeasurer,
+    viewport: Viewport,
+) -> Result<DisplayList, String> {
+    let mut engine = LayoutEngine {
+        styles,
+        measurer,
+        viewport,
+        list: DisplayList::default(),
+    };
+    engine.layout_document(document)?;
+    Ok(engine.list)
+}
+
+struct LayoutEngine<'a> {
+    styles: &'a StyleComputer,
+    measurer: &'a dyn TextMeasurer,
+    viewport: Viewport,
+    list: DisplayList,
+}
+
+impl LayoutEngine<'_> {
+    fn layout_document(&mut self, document: &Document) -> Result<(), String> {
+        let root = document.render_root();
+        let root_style = ComputedStyle::root_defaults();
+        let mut ancestors = Vec::new();
+
+        let style = self
+            .styles
+            .compute_style(root, &root_style, &ancestors);
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            width: self.viewport.width_px.max(0),
+            height: self.viewport.height_px.max(0),
+        };
+        let mut cursor_y = rect.y;
+        self.layout_block_box(root, &style, &root_style, &mut ancestors, rect, &mut cursor_y, true)
+    }
+
+    fn layout_block_box<'doc>(
+        &mut self,
+        element: &'doc Element,
+        style: &ComputedStyle,
+        parent_style: &ComputedStyle,
+        ancestors: &mut Vec<&'doc Element>,
+        containing: Rect,
+        cursor_y: &mut i32,
+        paint: bool,
+    ) -> Result<(), String> {
+        if style.display == Display::None {
+            return Ok(());
+        }
+
+        let paint = paint && style.visibility == Visibility::Visible;
+        let margin = style.margin;
+        let padding = style.padding;
+
+        let available_width = containing
+            .width
+            .saturating_sub(margin.left.saturating_add(margin.right))
+            .max(0);
+        let mut used_width = self.resolve_used_width(element, style, available_width);
+        if let Some(min_width) = style.min_width_px {
+            used_width = used_width.max(min_width);
+        }
+        used_width = used_width.max(0);
+
+        let mut x = containing.x.saturating_add(margin.left);
+        let y = cursor_y.saturating_add(margin.top);
+
+        x = apply_block_alignment(parent_style.text_align, containing, x, used_width, margin);
+
+        let border_box = Rect {
+            x,
+            y,
+            width: used_width,
+            height: 0,
+        };
+        let content_box = border_box.inset(padding);
+
+        let mut background_index = None;
+        if paint {
+            if let Some(color) = style.background_color {
+                background_index = Some(self.list.commands.len());
+                self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px: 0,
+                    color,
+                }));
+            }
+        }
+
+        ancestors.push(element);
+        let content_height = match style.display {
+            Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
+                .height,
+            _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+        };
+        ancestors.pop();
+
+        let mut border_height = padding.top.saturating_add(content_height).saturating_add(padding.bottom);
+        if let Some(min_height) = style.height_px {
+            border_height = border_height.max(min_height);
+        }
+
+        if let Some(index) = background_index {
+            if let Some(DisplayCommand::Rect(rect)) = self.list.commands.get_mut(index) {
+                rect.height_px = border_height;
+            }
+        }
+
+        *cursor_y = y
+            .saturating_add(border_height)
+            .saturating_add(margin.bottom);
+
+        Ok(())
+    }
+
+    fn layout_flow_children<'doc>(
+        &mut self,
+        children: &'doc [Node],
+        parent_style: &ComputedStyle,
+        ancestors: &mut Vec<&'doc Element>,
+        content_box: Rect,
+        paint: bool,
+    ) -> Result<i32, String> {
+        let mut cursor_y = content_box.y;
+        let mut inline_nodes: Vec<&'doc Node> = Vec::new();
+
+        for child in children {
+            match child {
+                Node::Text(_) => inline_nodes.push(child),
+                Node::Element(el) => {
+                    let style = self.styles.compute_style(el, parent_style, ancestors);
+                    if style.display == Display::None {
+                        continue;
+                    }
+
+                    if is_flow_block(&style, el) {
+                        if !inline_nodes.is_empty() {
+                            let height = inline::layout_inline_nodes(
+                                self,
+                                &inline_nodes,
+                                parent_style,
+                                ancestors,
+                                content_box,
+                                cursor_y,
+                                paint,
+                            )?;
+                            cursor_y = cursor_y.saturating_add(height);
+                            inline_nodes.clear();
+                        }
+
+                        let mut child_cursor_y = cursor_y;
+                        self.layout_block_box(
+                            el,
+                            &style,
+                            parent_style,
+                            ancestors,
+                            Rect {
+                                x: content_box.x,
+                                y: cursor_y,
+                                width: content_box.width,
+                                height: content_box.height,
+                            },
+                            &mut child_cursor_y,
+                            paint,
+                        )?;
+                        cursor_y = child_cursor_y;
+                    } else {
+                        inline_nodes.push(child);
+                    }
+                }
+            }
+
+            if cursor_y >= self.viewport.height_px {
+                break;
+            }
+        }
+
+        if !inline_nodes.is_empty() && cursor_y < self.viewport.height_px {
+                            let height = inline::layout_inline_nodes(
+                                self,
+                                &inline_nodes,
+                                parent_style,
+                                ancestors,
+                                content_box,
+                                cursor_y,
+                                paint,
+                            )?;
+            cursor_y = cursor_y.saturating_add(height);
+        }
+
+        Ok(cursor_y.saturating_sub(content_box.y).max(0))
+    }
+
+    fn resolve_used_width(&self, element: &Element, style: &ComputedStyle, available_width: i32) -> i32 {
+        if let Some(width) = style.width_px {
+            return width;
+        }
+
+        if style.display == Display::Table {
+            if let Some(percent) = element
+                .attributes
+                .get("width")
+                .and_then(parse_percentage)
+            {
+                let pct_width = (available_width as f32 * (percent / 100.0)).round() as i32;
+                return pct_width.max(0);
+            }
+        }
+
+        available_width
+    }
+
+    fn text_style_for(&self, style: &ComputedStyle) -> TextStyle {
+        TextStyle {
+            color: style.color,
+            bold: style.bold,
+            underline: style.underline,
+            font_family: style.font_family,
+            font_size_px: style.font_size_px,
+        }
+    }
+}
+
+fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
+    match style.display {
+        Display::Block | Display::Table => true,
+        Display::TableRow | Display::TableCell => true,
+        Display::Inline => matches!(element.name.as_str(), "div" | "p" | "table"),
+        Display::None => false,
+    }
+}
+
+fn apply_block_alignment(align: TextAlign, containing: Rect, default_x: i32, width: i32, margin: Edges) -> i32 {
+    if width <= 0 {
+        return default_x;
+    }
+    let available = containing.width.saturating_sub(margin.left.saturating_add(margin.right));
+    if available <= width {
+        return default_x;
+    }
+    match align {
+        TextAlign::Center => containing.x.saturating_add((available - width) / 2),
+        TextAlign::Right => containing
+            .x
+            .saturating_add(available.saturating_sub(width))
+            .saturating_add(margin.left),
+        TextAlign::Left => default_x,
+    }
+}
+
+fn parse_percentage(value: &str) -> Option<f32> {
+    let value = value.trim();
+    let number = value.strip_suffix('%')?;
+    let number: f32 = number.trim().parse().ok()?;
+    Some(number)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FixedMeasurer;
+
+    impl TextMeasurer for FixedMeasurer {
+        fn font_metrics_px(&self, _style: TextStyle) -> crate::render::FontMetricsPx {
+            crate::render::FontMetricsPx {
+                ascent_px: 8,
+                descent_px: 2,
+            }
+        }
+
+        fn text_width_px(&self, text: &str, _style: TextStyle) -> Result<i32, String> {
+            Ok(text.len() as i32)
+        }
+    }
+
+    #[test]
+    fn wraps_words_when_exceeding_width() {
+        let doc = crate::html::parse_document("<p>Hello World</p>");
+        let viewport = Viewport {
+            width_px: 5,
+            height_px: 200,
+        };
+        let styles = crate::style::StyleComputer::from_document(&doc);
+        let list = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
+        assert!(list.commands.iter().any(|cmd| matches!(cmd, DisplayCommand::Text(_))));
+    }
+}

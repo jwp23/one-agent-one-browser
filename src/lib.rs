@@ -1,10 +1,12 @@
 pub mod browser;
 pub mod cli;
+pub mod css;
 pub mod dom;
+pub mod geom;
 pub mod html;
 pub mod image;
 pub mod layout;
 pub mod png;
 pub mod platform;
 pub mod render;
-
+pub mod style;
