@@ -1,0 +1,3 @@
+[submodule "vendor/web-platform-tests"]
+	path = vendor/web-platform-tests
+	url = https://github.com/web-platform-tests/wpt.git
