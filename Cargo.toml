@@ -2,5 +2,6 @@
 name = "one-agent-one-browser"
 version = "0.1.0"
 edition = "2024"
+default-run = "one-agent-one-browser"
 
 [dependencies]

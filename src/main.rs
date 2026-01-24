@@ -1,12 +1,4 @@
-mod cli;
-mod browser;
-mod dom;
-mod html;
-mod image;
-mod layout;
-mod png;
-mod platform;
-mod render;
+use one_agent_one_browser::{browser, cli, platform};
 
 fn main() {
     let args = match cli::parse_args(std::env::args_os().skip(1)) {
