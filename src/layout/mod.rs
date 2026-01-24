@@ -404,4 +404,21 @@ mod tests {
             .iter()
             .any(|region| region.href.as_ref() == "https://example.com"));
     }
+
+    #[test]
+    fn records_link_hit_regions_for_flex_item_anchor() {
+        let doc = crate::html::parse_document(
+            r#"<style>header { display: flex; }</style><header><a href="/posts/">Posts</a></header>"#,
+        );
+        let viewport = Viewport {
+            width_px: 200,
+            height_px: 200,
+        };
+        let styles = crate::style::StyleComputer::from_document(&doc);
+        let output = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
+        assert!(output
+            .link_regions
+            .iter()
+            .any(|region| region.href.as_ref() == "/posts/"));
+    }
 }

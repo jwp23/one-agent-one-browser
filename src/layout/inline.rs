@@ -23,6 +23,28 @@ pub(super) fn layout_inline_nodes<'doc>(
     start_y: i32,
     paint: bool,
 ) -> Result<i32, String> {
+    layout_inline_nodes_with_link(
+        engine,
+        nodes,
+        parent_style,
+        ancestors,
+        content_box,
+        start_y,
+        paint,
+        None,
+    )
+}
+
+pub(super) fn layout_inline_nodes_with_link<'doc>(
+    engine: &mut LayoutEngine<'_>,
+    nodes: &[&'doc Node],
+    parent_style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
+    content_box: Rect,
+    start_y: i32,
+    paint: bool,
+    link_href: Option<Rc<str>>,
+) -> Result<i32, String> {
     let mut tokens = Vec::new();
     let mut cursor = InlineCursor::default();
 
@@ -33,7 +55,7 @@ pub(super) fn layout_inline_nodes<'doc>(
             parent_style,
             ancestors,
             paint,
-            None,
+            link_href.clone(),
             &mut cursor,
             &mut tokens,
         );

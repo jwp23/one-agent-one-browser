@@ -1,6 +1,7 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
 use crate::style::{ComputedStyle, Display, FlexAlignItems, FlexJustifyContent};
+use std::rc::Rc;
 
 use super::inline;
 use super::LayoutEngine;
@@ -71,6 +72,17 @@ fn collect_flex_items<'doc>(
         }
     }
     Ok(items)
+}
+
+fn anchor_href(element: &Element) -> Option<Rc<str>> {
+    if element.name != "a" {
+        return None;
+    }
+    let href = element.attributes.get("href")?.trim();
+    if href.is_empty() {
+        return None;
+    }
+    Some(Rc::from(href))
 }
 
 fn measure_items<'doc>(
@@ -214,8 +226,18 @@ fn layout_item<'doc>(
                 }
                 _ => {
                     let nodes: Vec<&Node> = el.children.iter().collect();
+                    let link_href = anchor_href(el);
                     let _height =
-                        inline::layout_inline_nodes(engine, &nodes, &child_style, ancestors, item_box, y_px, paint)?;
+                        inline::layout_inline_nodes_with_link(
+                            engine,
+                            &nodes,
+                            &child_style,
+                            ancestors,
+                            item_box,
+                            y_px,
+                            paint,
+                            link_href,
+                        )?;
                 }
             }
             ancestors.pop();
