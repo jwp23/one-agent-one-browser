@@ -147,8 +147,39 @@ fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(
         println!("PASS {}", html_path.display());
         Ok(())
     } else {
+        let note_details = comparison
+            .note
+            .as_ref()
+            .map(|note| format!("\n{note}\n"))
+            .unwrap_or_default();
+        let diff_details = if let Some(png_diff) = &comparison.png_diff {
+            format!(
+                "\nPixels:  {} / {}\nBBox:    {}\nDiff PNG: {}\n",
+                png_diff.diff_pixels,
+                png_diff.total_pixels,
+                png_diff
+                    .bbox
+                    .map(|bbox| format!(
+                        "x={}..{} y={}..{} ({}x{})",
+                        bbox.min_x,
+                        bbox.max_x,
+                        bbox.min_y,
+                        bbox.max_y,
+                        bbox.width(),
+                        bbox.height()
+                    ))
+                    .unwrap_or_else(|| "none".to_owned()),
+                png_diff
+                    .diff_png
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+            )
+        } else {
+            String::new()
+        };
         Err(format!(
-            "FAIL {}\nExpected: {} (len={}, fnv1a64={})\nActual:   {} (len={}, fnv1a64={})\n{}\nHint: to accept the new output:\n  cp {} {}\n",
+            "FAIL {}\nExpected: {} (len={}, fnv1a64={})\nActual:   {} (len={}, fnv1a64={})\n{}\n{}{}Hint: to accept the new output:\n  cp {} {}\n",
             html_path.display(),
             expected_png.display(),
             comparison.expected.len,
@@ -160,6 +191,8 @@ fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(
                 .first_difference
                 .map(|offset| format!("First differing byte offset: {offset}"))
                 .unwrap_or_else(|| "Files differ.".to_owned()),
+            note_details,
+            diff_details,
             actual_png.display(),
             expected_png.display(),
         ))
@@ -255,12 +288,14 @@ struct FileDigest {
     fnv1a64: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct FileComparison {
     matches: bool,
     expected: FileDigest,
     actual: FileDigest,
     first_difference: Option<u64>,
+    note: Option<String>,
+    png_diff: Option<PngDiff>,
 }
 
 fn compare_files(expected: &Path, actual: &Path) -> Result<FileComparison, String> {
@@ -284,6 +319,8 @@ fn compare_files(expected: &Path, actual: &Path) -> Result<FileComparison, Strin
             expected: expected_digest,
             actual: actual_digest,
             first_difference: None,
+            note: None,
+            png_diff: None,
         });
     }
 
@@ -293,11 +330,32 @@ fn compare_files(expected: &Path, actual: &Path) -> Result<FileComparison, Strin
         .position(|(a, b)| a != b)
         .map(|offset| offset as u64);
 
+    let mut note = None;
+    let mut png_diff = None;
+    match compare_png_pixels(expected, actual) {
+        Ok(diff) => {
+            if diff.diff_pixels == 0 {
+                return Ok(FileComparison {
+                    matches: true,
+                    expected: expected_digest,
+                    actual: actual_digest,
+                    first_difference,
+                    note: None,
+                    png_diff: None,
+                });
+            }
+            png_diff = Some(diff);
+        }
+        Err(err) => note = Some(format!("PNG diff unavailable: {err}")),
+    }
+
     Ok(FileComparison {
         matches: false,
         expected: expected_digest,
         actual: actual_digest,
         first_difference,
+        note,
+        png_diff,
     })
 }
 
@@ -312,4 +370,299 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 fn format_u64_hex(value: u64) -> String {
     format!("0x{value:016x}")
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PixelBbox {
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+}
+
+impl PixelBbox {
+    fn width(self) -> u32 {
+        self.max_x.saturating_sub(self.min_x).saturating_add(1)
+    }
+
+    fn height(self) -> u32 {
+        self.max_y.saturating_sub(self.min_y).saturating_add(1)
+    }
+}
+
+#[derive(Debug)]
+struct PngDiff {
+    diff_pixels: u64,
+    total_pixels: u64,
+    bbox: Option<PixelBbox>,
+    diff_png: Option<PathBuf>,
+}
+
+fn compare_png_pixels(expected: &Path, actual: &Path) -> Result<PngDiff, String> {
+    let expected_img = read_png_rgb(expected)?;
+    let actual_img = read_png_rgb(actual)?;
+
+    if expected_img.width != actual_img.width || expected_img.height != actual_img.height {
+        return Err(format!(
+            "PNG dimensions differ: expected {}x{}, got {}x{}",
+            expected_img.width, expected_img.height, actual_img.width, actual_img.height
+        ));
+    }
+
+    let total_pixels = (expected_img.width as u64) * (expected_img.height as u64);
+    let mut diff_pixels: u64 = 0;
+    let mut bbox: Option<PixelBbox> = None;
+
+    let mut diff_rgb = Vec::with_capacity(expected_img.rgb.len());
+
+    for (idx, (e, a)) in expected_img
+        .rgb
+        .chunks_exact(3)
+        .zip(actual_img.rgb.chunks_exact(3))
+        .enumerate()
+    {
+        if e == a {
+            diff_rgb.extend_from_slice(&fade_pixel(e));
+            continue;
+        }
+
+        diff_pixels += 1;
+        let x = (idx as u32) % expected_img.width;
+        let y = (idx as u32) / expected_img.width;
+        bbox = Some(expand_bbox(bbox, x, y));
+        diff_rgb.extend_from_slice(&[255, 0, 255]);
+    }
+
+    let diff_png = if diff_pixels == 0 {
+        None
+    } else {
+        let diff_png = diff_path_for_actual(actual)?;
+        let diff_image = one_agent_one_browser::image::RgbImage::new(
+            expected_img.width,
+            expected_img.height,
+            diff_rgb,
+        )?;
+        one_agent_one_browser::png::write_rgb_png(&diff_png, &diff_image)?;
+        Some(diff_png)
+    };
+
+    Ok(PngDiff {
+        diff_pixels,
+        total_pixels,
+        bbox,
+        diff_png,
+    })
+}
+
+fn diff_path_for_actual(actual_png: &Path) -> Result<PathBuf, String> {
+    let file_name = actual_png
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("Invalid PNG path: {}", actual_png.display()))?;
+    let diff_name = file_name
+        .strip_suffix(".actual.png")
+        .map(|stem| format!("{stem}.diff.png"))
+        .unwrap_or_else(|| format!("{file_name}.diff.png"));
+    Ok(actual_png.with_file_name(diff_name))
+}
+
+fn fade_pixel(pixel: &[u8]) -> [u8; 3] {
+    let [r, g, b] = pixel else {
+        return [255, 255, 255];
+    };
+    [fade_channel(*r), fade_channel(*g), fade_channel(*b)]
+}
+
+fn fade_channel(value: u8) -> u8 {
+    (((value as u16) * 3 + 255) / 4) as u8
+}
+
+fn expand_bbox(current: Option<PixelBbox>, x: u32, y: u32) -> PixelBbox {
+    match current {
+        None => PixelBbox {
+            min_x: x,
+            max_x: x,
+            min_y: y,
+            max_y: y,
+        },
+        Some(bbox) => PixelBbox {
+            min_x: bbox.min_x.min(x),
+            max_x: bbox.max_x.max(x),
+            min_y: bbox.min_y.min(y),
+            max_y: bbox.max_y.max(y),
+        },
+    }
+}
+
+struct PngImage {
+    width: u32,
+    height: u32,
+    rgb: Vec<u8>,
+}
+
+fn read_png_rgb(path: &Path) -> Result<PngImage, String> {
+    const SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
+    let bytes =
+        std::fs::read(path).map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+    let signature = bytes
+        .get(0..8)
+        .ok_or_else(|| format!("{} is too small to be a PNG", path.display()))?;
+    if signature != SIGNATURE {
+        return Err(format!("{} is not a PNG (invalid signature)", path.display()));
+    }
+
+    let mut offset = 8usize;
+    let mut width: Option<u32> = None;
+    let mut height: Option<u32> = None;
+    let mut idat = Vec::<u8>::new();
+
+    while offset + 12 <= bytes.len() {
+        let chunk_len = read_u32_be(&bytes[offset..offset + 4])? as usize;
+        let chunk_type = bytes[offset + 4..offset + 8].to_owned();
+        offset += 8;
+
+        let data_end = offset
+            .checked_add(chunk_len)
+            .ok_or_else(|| "PNG chunk length overflow".to_owned())?;
+        let crc_end = data_end
+            .checked_add(4)
+            .ok_or_else(|| "PNG chunk length overflow".to_owned())?;
+        if crc_end > bytes.len() {
+            return Err(format!("{} has a truncated PNG chunk", path.display()));
+        }
+
+        let chunk_data = &bytes[offset..data_end];
+        offset = crc_end;
+
+        match chunk_type.as_slice() {
+            b"IHDR" => {
+                if chunk_len != 13 {
+                    return Err(format!("{} has an invalid IHDR length", path.display()));
+                }
+                width = Some(read_u32_be(&chunk_data[0..4])?);
+                height = Some(read_u32_be(&chunk_data[4..8])?);
+                let bit_depth = chunk_data[8];
+                let color_type = chunk_data[9];
+                let compression = chunk_data[10];
+                let filter = chunk_data[11];
+                let interlace = chunk_data[12];
+
+                if bit_depth != 8 || color_type != 2 {
+                    return Err(format!(
+                        "{} uses an unsupported PNG format (bit_depth={bit_depth}, color_type={color_type})",
+                        path.display()
+                    ));
+                }
+                if compression != 0 || filter != 0 || interlace != 0 {
+                    return Err(format!(
+                        "{} uses unsupported PNG parameters (compression={compression}, filter={filter}, interlace={interlace})",
+                        path.display()
+                    ));
+                }
+            }
+            b"IDAT" => idat.extend_from_slice(chunk_data),
+            b"IEND" => break,
+            _ => {}
+        }
+    }
+
+    let width = width.ok_or_else(|| format!("{} is missing IHDR", path.display()))?;
+    let height = height.ok_or_else(|| format!("{} is missing IHDR", path.display()))?;
+    if idat.is_empty() {
+        return Err(format!("{} is missing IDAT", path.display()));
+    }
+
+    let decoded = zlib_decompress_stored(&idat)?;
+    let row_bytes = width
+        .checked_mul(3)
+        .ok_or_else(|| "PNG row size overflow".to_owned())? as usize;
+    let row_total = row_bytes
+        .checked_add(1)
+        .ok_or_else(|| "PNG row size overflow".to_owned())?;
+    let expected_len = (height as usize)
+        .checked_mul(row_total)
+        .ok_or_else(|| "PNG image size overflow".to_owned())?;
+    if decoded.len() != expected_len {
+        return Err(format!(
+            "{} decoded to an unexpected size: got {} bytes, expected {expected_len}",
+            path.display(),
+            decoded.len()
+        ));
+    }
+
+    let mut rgb = Vec::with_capacity(row_bytes * height as usize);
+    for row in 0..height as usize {
+        let start = row * row_total;
+        let filter_type = decoded[start];
+        if filter_type != 0 {
+            return Err(format!(
+                "{} uses unsupported PNG filtering (filter_type={filter_type})",
+                path.display()
+            ));
+        }
+        rgb.extend_from_slice(&decoded[start + 1..start + 1 + row_bytes]);
+    }
+
+    Ok(PngImage { width, height, rgb })
+}
+
+fn read_u32_be(bytes: &[u8]) -> Result<u32, String> {
+    let [a, b, c, d] = bytes else {
+        return Err("Invalid u32 slice".to_owned());
+    };
+    Ok(u32::from_be_bytes([*a, *b, *c, *d]))
+}
+
+fn zlib_decompress_stored(zlib: &[u8]) -> Result<Vec<u8>, String> {
+    if zlib.len() < 2 + 5 + 4 {
+        return Err("Zlib stream is too small".to_owned());
+    }
+
+    let mut offset = 2usize;
+    let mut out = Vec::new();
+
+    loop {
+        let header = *zlib
+            .get(offset)
+            .ok_or_else(|| "Truncated DEFLATE header".to_owned())?;
+        offset += 1;
+
+        let is_final = header & 1 == 1;
+        let btype = (header >> 1) & 0b11;
+        if btype != 0 {
+            return Err("Unsupported DEFLATE block type (expected stored blocks)".to_owned());
+        }
+
+        let len = read_u16_le(zlib.get(offset..offset + 2))? as usize;
+        let nlen = read_u16_le(zlib.get(offset + 2..offset + 4))?;
+        offset += 4;
+
+        if nlen != (!len as u16) {
+            return Err("Invalid stored DEFLATE block (LEN/NLEN mismatch)".to_owned());
+        }
+
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| "DEFLATE block length overflow".to_owned())?;
+        let chunk = zlib
+            .get(offset..end)
+            .ok_or_else(|| "Truncated DEFLATE block".to_owned())?;
+        out.extend_from_slice(chunk);
+        offset = end;
+
+        if is_final {
+            break;
+        }
+    }
+
+    Ok(out)
+}
+
+fn read_u16_le(bytes: Option<&[u8]>) -> Result<u16, String> {
+    let bytes = bytes.ok_or_else(|| "Truncated u16".to_owned())?;
+    let [a, b] = bytes else {
+        return Err("Invalid u16 slice".to_owned());
+    };
+    Ok(u16::from_le_bytes([*a, *b]))
 }

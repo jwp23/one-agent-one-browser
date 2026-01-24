@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 mod x11;
 
-use crate::render::{Painter, Viewport};
+use crate::app::App;
 use std::path::PathBuf;
 
 #[derive(Debug, Default)]
@@ -9,12 +9,9 @@ pub struct WindowOptions {
     pub screenshot_path: Option<PathBuf>,
 }
 
-pub fn run_window<F>(title: &str, options: WindowOptions, render: F) -> Result<(), String>
-where
-    F: FnMut(&mut dyn Painter, Viewport) -> Result<(), String>,
-{
+pub fn run_window(title: &str, options: WindowOptions, app: &mut impl App) -> Result<(), String> {
     #[cfg(target_os = "linux")]
-    return x11::run_window(title, options, render);
+    return x11::run_window(title, options, app);
 
     #[cfg(not(target_os = "linux"))]
     Err("Unsupported platform: this demo currently only supports Linux/X11".to_owned())

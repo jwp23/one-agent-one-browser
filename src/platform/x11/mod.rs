@@ -3,23 +3,22 @@ mod xft;
 mod xlib;
 
 use super::WindowOptions;
-use crate::render::{Painter, Viewport};
+use crate::app::App;
+use crate::render::Viewport;
 use core::ffi::{c_int, c_uint, c_ulong};
 use std::ffi::CString;
+use std::time::Duration;
 
 use painter::X11Painter;
 use xlib::*;
 
-pub fn run_window<F>(title: &str, options: WindowOptions, render: F) -> Result<(), String>
-where
-    F: FnMut(&mut dyn Painter, Viewport) -> Result<(), String>,
-{
+pub fn run_window<A: App>(title: &str, options: WindowOptions, app: &mut A) -> Result<(), String> {
     let display = unsafe { XOpenDisplay(std::ptr::null()) };
     if display.is_null() {
         return Err("XOpenDisplay failed: is $DISPLAY set and an X server available?".to_owned());
     }
 
-    let result = run_window_with_display(display, title, options, render);
+    let result = run_window_with_display(display, title, options, app);
 
     unsafe {
         XCloseDisplay(display);
@@ -28,14 +27,12 @@ where
     result
 }
 
-fn run_window_with_display<F>(
+fn run_window_with_display<A: App>(
     display: *mut Display,
     title: &str,
     options: WindowOptions,
-    mut render: F,
+    app: &mut A,
 ) -> Result<(), String>
-where
-    F: FnMut(&mut dyn Painter, Viewport) -> Result<(), String>,
 {
     let screen = unsafe { XDefaultScreen(display) };
     let visual = unsafe { XDefaultVisual(display, screen) };
@@ -138,57 +135,83 @@ where
 
     let loop_result = (|| {
         let mut needs_redraw = true;
+        let mut should_exit = false;
 
         loop {
-            let mut event = XEvent { inner: [0; 24] };
-            unsafe {
-                XNextEvent(display, &mut event);
-            }
+            while unsafe { XPending(display) } > 0 {
+                let mut event = XEvent { inner: [0; 24] };
+                unsafe {
+                    XNextEvent(display, &mut event);
+                }
 
-            match event.event_type() {
-                EVENT_TYPE_EXPOSE => {
-                    let expose: &XExposeEvent =
-                        unsafe { &*(event.inner.as_ptr() as *const XExposeEvent) };
-                    if expose.count == 0 {
+                match event.event_type() {
+                    EVENT_TYPE_EXPOSE => {
+                        let expose: &XExposeEvent =
+                            unsafe { &*(event.inner.as_ptr() as *const XExposeEvent) };
+                        if expose.count == 0 {
+                            needs_redraw = true;
+                        }
+                    }
+                    EVENT_TYPE_CONFIGURE_NOTIFY => {
+                        let configure: &XConfigureEvent =
+                            unsafe { &*(event.inner.as_ptr() as *const XConfigureEvent) };
+                        viewport = Viewport {
+                            width_px: configure.width,
+                            height_px: configure.height,
+                        };
                         needs_redraw = true;
                     }
-                }
-                EVENT_TYPE_CONFIGURE_NOTIFY => {
-                    let configure: &XConfigureEvent =
-                        unsafe { &*(event.inner.as_ptr() as *const XConfigureEvent) };
-                    viewport = Viewport {
-                        width_px: configure.width,
-                        height_px: configure.height,
-                    };
-                    needs_redraw = true;
-                }
-                EVENT_TYPE_KEY_PRESS => break,
-                EVENT_TYPE_CLIENT_MESSAGE => {
-                    let message: &XClientMessageEvent =
-                        unsafe { &*(event.inner.as_ptr() as *const XClientMessageEvent) };
-                    let data = unsafe { message.data.l };
-                    if message.message_type == wm_protocols_atom
-                        && data[0] as c_ulong == wm_delete_window
-                    {
+                    EVENT_TYPE_KEY_PRESS => {
+                        should_exit = true;
                         break;
                     }
+                    EVENT_TYPE_CLIENT_MESSAGE => {
+                        let message: &XClientMessageEvent =
+                            unsafe { &*(event.inner.as_ptr() as *const XClientMessageEvent) };
+                        let data = unsafe { message.data.l };
+                        if message.message_type == wm_protocols_atom
+                            && data[0] as c_ulong == wm_delete_window
+                        {
+                            should_exit = true;
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+
+            if should_exit {
+                break;
+            }
+
+            let tick = app.tick()?;
+            if tick.needs_redraw {
+                needs_redraw = true;
+            }
+            let ready_for_screenshot = tick.ready_for_screenshot;
+            if screenshot_path.is_some() && ready_for_screenshot {
+                needs_redraw = true;
             }
 
             if needs_redraw {
                 painter.ensure_back_buffer(viewport)?;
-                render(&mut painter, viewport)?;
+                app.render(&mut painter, viewport)?;
                 needs_redraw = false;
 
-                if let Some(path) = screenshot_path.take() {
-                    unsafe {
-                        XSync(display, 0);
+                if ready_for_screenshot {
+                    if let Some(path) = screenshot_path.take() {
+                        unsafe {
+                            XSync(display, 0);
+                        }
+                        let rgb = painter.capture_back_buffer_rgb()?;
+                        crate::png::write_rgb_png(&path, &rgb)?;
+                        break;
                     }
-                    let rgb = painter.capture_back_buffer_rgb()?;
-                    crate::png::write_rgb_png(&path, &rgb)?;
-                    break;
                 }
+            }
+
+            if unsafe { XPending(display) } == 0 && !needs_redraw {
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
 

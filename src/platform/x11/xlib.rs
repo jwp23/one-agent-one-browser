@@ -226,6 +226,7 @@ unsafe extern "C" {
         count: c_int,
     ) -> c_int;
 
+    pub fn XPending(display: *mut Display) -> c_int;
     pub fn XNextEvent(display: *mut Display, event_return: *mut XEvent) -> c_int;
     pub fn XDestroyWindow(display: *mut Display, window: Window) -> c_int;
     pub fn XFlush(display: *mut Display) -> c_int;
@@ -242,4 +243,3 @@ unsafe extern "C" {
         format: c_int,
     ) -> *mut XImage;
 }
-

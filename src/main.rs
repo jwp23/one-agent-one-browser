@@ -27,9 +27,7 @@ fn main() {
     let options = platform::WindowOptions {
         screenshot_path: args.screenshot_path,
     };
-    if let Err(err) = platform::run_window(&title, options, |painter, viewport| {
-        app.render(painter, viewport)
-    }) {
+    if let Err(err) = platform::run_window(&title, options, &mut app) {
         eprintln!("{err}");
         std::process::exit(1);
     }
