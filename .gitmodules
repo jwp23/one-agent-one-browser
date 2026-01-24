@@ -1,3 +1,9 @@
 [submodule "vendor/web-platform-tests"]
 	path = vendor/web-platform-tests
 	url = https://github.com/web-platform-tests/wpt.git
+[submodule "vendor/html-spec"]
+	path = vendor/html-spec
+	url = https://github.com/whatwg/html.git
+[submodule "vendor/css-spec"]
+	path = vendor/css-spec
+	url = https://github.com/w3c/csswg-drafts.git

@@ -4,3 +4,4 @@
 - All code is relevant to rendering the page
 - Focus on quality, stability and correctness
 - Modularize your code like a professional software developer
+- When applicable, our implementation should conform with existing standards available in `vendor/*`
