@@ -1,6 +1,6 @@
 - `cargo run -- test-file.html` renders a page
 - No 3rd party libraries are used
-- We shouldn't fetch anything from the outside/remote endpoints, only local
+- Using ffi to use system libraries are OK, granted they're common and ubiquitous libraries
 - You can use OS/desktop/compositor-available APIs, but you have to write the glue code yourself
 - All code is relevant to rendering the page
 - Focus on quality, stability and correctness
