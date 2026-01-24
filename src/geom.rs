@@ -15,13 +15,31 @@ impl Color {
 
     pub fn from_css_hex(input: &str) -> Option<Color> {
         let hex = input.strip_prefix('#')?;
-        if hex.len() != 6 {
-            return None;
+        match hex.len() {
+            6 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some(Color { r, g, b })
+            }
+            3 => {
+                let bytes = hex.as_bytes();
+                let r = parse_hex_nibble(bytes[0])? * 17;
+                let g = parse_hex_nibble(bytes[1])? * 17;
+                let b = parse_hex_nibble(bytes[2])? * 17;
+                Some(Color { r, g, b })
+            }
+            _ => None,
         }
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some(Color { r, g, b })
+    }
+}
+
+fn parse_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -84,4 +102,3 @@ pub struct Size {
     pub width: i32,
     pub height: i32,
 }
-

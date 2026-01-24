@@ -46,6 +46,15 @@ impl LayoutEngine<'_> {
             width: self.viewport.width_px.max(0),
             height: self.viewport.height_px.max(0),
         };
+        if let Some(color) = resolve_canvas_background(document, self.styles, &root_style, &style) {
+            self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                x_px: rect.x,
+                y_px: rect.y,
+                width_px: rect.width,
+                height_px: rect.height,
+                color,
+            }));
+        }
         let mut cursor_y = rect.y;
         self.layout_block_box(root, &style, &root_style, &mut ancestors, rect, &mut cursor_y, true)
     }
@@ -249,6 +258,21 @@ impl LayoutEngine<'_> {
             font_size_px: style.font_size_px,
         }
     }
+}
+
+fn resolve_canvas_background(
+    document: &Document,
+    styles: &StyleComputer,
+    root_style: &ComputedStyle,
+    body_style: &ComputedStyle,
+) -> Option<crate::geom::Color> {
+    if let Some(html) = document.find_first_element_by_name("html") {
+        let html_style = styles.compute_style(html, root_style, &[]);
+        if html_style.background_color.is_some() {
+            return html_style.background_color;
+        }
+    }
+    body_style.background_color
 }
 
 fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
