@@ -67,20 +67,7 @@ impl<'a> Parser<'a> {
             self.close_top(&mut stack);
         }
 
-        let root = stack
-            .pop()
-            .expect("stack had root")
-            .children
-            .into_iter()
-            .find_map(|node| match node {
-                Node::Element(el) => Some(el),
-                Node::Text(_) => None,
-            })
-            .unwrap_or(Element {
-                name: "html".to_owned(),
-                attributes: Attributes::default(),
-                children: Vec::new(),
-            });
+        let root = stack.pop().expect("stack had root");
 
         Document { root }
     }
@@ -369,10 +356,10 @@ mod tests {
     #[test]
     fn parses_simple_inline_markup() {
         let doc = parse_document("<p>Hello <strong>World</strong></p>");
-        let root = doc.render_root();
-        assert_eq!(root.name, "p");
+        let p = doc.find_first_element_by_name("p").expect("p exists");
+        assert_eq!(p.name, "p");
         assert_eq!(
-            root.children,
+            p.children,
             vec![
                 Node::Text("Hello ".to_owned()),
                 Node::Element(Element {
@@ -387,27 +374,27 @@ mod tests {
     #[test]
     fn treats_void_elements_as_self_closing() {
         let doc = parse_document("<p>hi<br>there</p>");
-        let root = doc.render_root();
-        assert_eq!(root.name, "p");
-        assert_eq!(root.children.len(), 3);
+        let p = doc.find_first_element_by_name("p").expect("p exists");
+        assert_eq!(p.name, "p");
+        assert_eq!(p.children.len(), 3);
     }
 
     #[test]
     fn parses_attributes() {
         let doc = parse_document("<p id=\"a\" class='b c' data-x=1>Hello</p>");
-        let root = doc.render_root();
-        assert_eq!(root.name, "p");
-        assert_eq!(root.attributes.id.as_deref(), Some("a"));
-        assert_eq!(root.attributes.classes, vec!["b".to_owned(), "c".to_owned()]);
-        assert_eq!(root.attributes.get("data-x"), Some("1"));
+        let p = doc.find_first_element_by_name("p").expect("p exists");
+        assert_eq!(p.name, "p");
+        assert_eq!(p.attributes.id.as_deref(), Some("a"));
+        assert_eq!(p.attributes.classes, vec!["b".to_owned(), "c".to_owned()]);
+        assert_eq!(p.attributes.get("data-x"), Some("1"));
     }
 
     #[test]
     fn decodes_entities_in_text() {
         let doc = parse_document("<p>&lt; &amp; &gt; &#x27; &#39;</p>");
-        let root = doc.render_root();
+        let p = doc.find_first_element_by_name("p").expect("p exists");
         assert_eq!(
-            root.children,
+            p.children,
             vec![Node::Text("< & > ' '".to_owned())]
         );
     }

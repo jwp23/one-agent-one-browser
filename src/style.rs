@@ -141,6 +141,17 @@ fn collect_style_text(element: &Element, out: &mut String) {
 }
 
 fn default_display_for_element(element: &Element) -> Display {
+    if element.name == "#document" {
+        return Display::Block;
+    }
+
+    if matches!(
+        element.name.as_str(),
+        "head" | "style" | "script" | "meta" | "link" | "title"
+    ) {
+        return Display::None;
+    }
+
     if element.name == "table" {
         return Display::Table;
     }
@@ -816,15 +827,15 @@ mod tests {
             stylesheet: Stylesheet::parse(".a b { color: #ffffff; }"),
         };
         let root_style = ComputedStyle::root_defaults();
-        let root = doc.render_root();
-        let mut ancestors = Vec::new();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let span = div
+            .find_first_element_by_name("span")
+            .expect("span element exists");
+        let b = span.find_first_element_by_name("b").expect("b exists");
+        let ancestors = vec![div, span];
 
-        fn find_b<'a>(el: &'a Element) -> &'a Element {
-            el.find_first_element_by_name("b").unwrap()
-        }
-
-        let b = find_b(root);
-        ancestors.push(root);
         let style = computer.compute_style(b, &root_style, &ancestors);
         assert_eq!(style.color, Color::WHITE);
     }
