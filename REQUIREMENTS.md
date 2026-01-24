@@ -4,6 +4,7 @@
 - You can use OS/desktop/compositor-available APIs, but you have to write the glue code yourself
 - All code is relevant to rendering the page
 - Focus on quality, stability and correctness
-- No source code file should be larger than 1000 lines of code, refactor as needed
+- No source code file should be larger than 1000 lines of code, refactor as needed (use `cloc --by-file src` to verify)
 - Modularize your code like a professional software developer
 - When applicable, our implementation should conform with existing standards available in `vendor/*`
+- If you have to change the baseline for our regression-tests, really ensure you're correctly updating the baselines, and the new behaviour is what we want
