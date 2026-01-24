@@ -1,12 +1,43 @@
+mod cli;
+mod browser;
+mod dom;
+mod html;
+mod image;
+mod layout;
+mod png;
 mod platform;
-
-use std::path::PathBuf;
+mod render;
 
 fn main() {
-    let _html_path = std::env::args_os().nth(1).map(PathBuf::from);
-    if let Err(err) = platform::run_hello_world_window() {
+    let args = match cli::parse_args(std::env::args_os().skip(1)) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
+    };
+
+    let app = match args.html_path {
+        Some(path) => browser::BrowserApp::from_file(&path),
+        None => browser::BrowserApp::from_html("Hello World", "<p>Hello World</p>"),
+    };
+
+    let mut app = match app {
+        Ok(app) => app,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    };
+
+    let title = app.title().to_owned();
+    let options = platform::WindowOptions {
+        screenshot_path: args.screenshot_path,
+    };
+    if let Err(err) = platform::run_window(&title, options, |painter, viewport| {
+        app.render(painter, viewport)
+    }) {
         eprintln!("{err}");
         std::process::exit(1);
     }
 }
-
