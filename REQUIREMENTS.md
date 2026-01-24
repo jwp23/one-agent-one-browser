@@ -1,7 +1,9 @@
 - `cargo run -- test-file.html` renders a page
 - No 3rd party libraries are used
+- We shouldn't fetch anything from the outside/remote endpoints, only local
 - You can use OS/desktop/compositor-available APIs, but you have to write the glue code yourself
 - All code is relevant to rendering the page
 - Focus on quality, stability and correctness
+- No source code file should be larger than 1000 lines of code, refactor as needed
 - Modularize your code like a professional software developer
 - When applicable, our implementation should conform with existing standards available in `vendor/*`
