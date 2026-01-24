@@ -1,0 +1,6 @@
+- `cargo run -- test-file.html` renders a page
+- No 3rd party libraries are used
+- You can use OS/desktop/compositor-available APIs, but you have to write the glue code yourself
+- All code is relevant to rendering the page
+- Focus on quality, stability and correctness
+- Modularize your code like a professional software developer
