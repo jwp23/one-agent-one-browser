@@ -6,6 +6,7 @@ use crate::geom::{Color, Edges};
 pub enum Display {
     Block,
     Inline,
+    Flex,
     Table,
     TableRow,
     TableCell,
@@ -32,6 +33,18 @@ pub enum TextAlign {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlexJustifyContent {
+    Start,
+    SpaceBetween,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlexAlignItems {
+    Start,
+    Center,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComputedStyle {
     pub display: Display,
     pub visibility: Visibility,
@@ -44,10 +57,15 @@ pub struct ComputedStyle {
     pub text_align: TextAlign,
     pub line_height_px: Option<i32>,
     pub margin: Edges,
+    pub margin_auto: AutoEdges,
     pub padding: Edges,
     pub width_px: Option<i32>,
     pub min_width_px: Option<i32>,
+    pub max_width_px: Option<i32>,
     pub height_px: Option<i32>,
+    pub flex_justify_content: FlexJustifyContent,
+    pub flex_align_items: FlexAlignItems,
+    pub flex_gap_px: i32,
 }
 
 impl ComputedStyle {
@@ -64,10 +82,15 @@ impl ComputedStyle {
             text_align: TextAlign::Left,
             line_height_px: None,
             margin: Edges::ZERO,
+            margin_auto: AutoEdges::NONE,
             padding: Edges::ZERO,
             width_px: None,
             min_width_px: None,
+            max_width_px: None,
             height_px: None,
+            flex_justify_content: FlexJustifyContent::Start,
+            flex_align_items: FlexAlignItems::Start,
+            flex_gap_px: 0,
         }
     }
 
@@ -84,12 +107,34 @@ impl ComputedStyle {
             text_align: parent.text_align,
             line_height_px: parent.line_height_px,
             margin: Edges::ZERO,
+            margin_auto: AutoEdges::NONE,
             padding: Edges::ZERO,
             width_px: None,
             min_width_px: None,
+            max_width_px: None,
             height_px: None,
+            flex_justify_content: FlexJustifyContent::Start,
+            flex_align_items: FlexAlignItems::Start,
+            flex_gap_px: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutoEdges {
+    pub top: bool,
+    pub right: bool,
+    pub bottom: bool,
+    pub left: bool,
+}
+
+impl AutoEdges {
+    pub const NONE: AutoEdges = AutoEdges {
+        top: false,
+        right: false,
+        bottom: false,
+        left: false,
+    };
 }
 
 pub struct StyleComputer {
@@ -167,7 +212,8 @@ fn default_display_for_element(element: &Element) -> Display {
     }
 
     match element.name.as_str() {
-        "html" | "body" | "div" | "p" | "center" => Display::Block,
+        "html" | "body" | "div" | "p" | "center" | "header" | "main" | "footer" | "nav"
+        | "ul" | "ol" | "li" | "h1" | "h2" | "h3" | "blockquote" | "pre" => Display::Block,
         "br" => Display::Inline,
         _ => Display::Inline,
     }
@@ -216,10 +262,15 @@ struct StyleBuilder {
     text_align: Option<Cascaded<TextAlign>>,
     line_height_px: Option<Cascaded<Option<i32>>>,
     margin: Option<Cascaded<Edges>>,
+    margin_auto: Option<Cascaded<AutoEdges>>,
     padding: Option<Cascaded<Edges>>,
     width_px: Option<Cascaded<Option<i32>>>,
     min_width_px: Option<Cascaded<Option<i32>>>,
+    max_width_px: Option<Cascaded<Option<i32>>>,
     height_px: Option<Cascaded<Option<i32>>>,
+    flex_justify_content: Option<Cascaded<FlexJustifyContent>>,
+    flex_align_items: Option<Cascaded<FlexAlignItems>>,
+    flex_gap_px: Option<Cascaded<i32>>,
 }
 
 impl StyleBuilder {
@@ -237,10 +288,15 @@ impl StyleBuilder {
             text_align: None,
             line_height_px: None,
             margin: None,
+            margin_auto: None,
             padding: None,
             width_px: None,
             min_width_px: None,
+            max_width_px: None,
             height_px: None,
+            flex_justify_content: None,
+            flex_align_items: None,
+            flex_gap_px: None,
         }
     }
 
@@ -278,16 +334,36 @@ impl StyleBuilder {
                 .map(|v| v.value)
                 .unwrap_or(self.base.line_height_px),
             margin: self.margin.map(|v| v.value).unwrap_or(self.base.margin),
+            margin_auto: self
+                .margin_auto
+                .map(|v| v.value)
+                .unwrap_or(self.base.margin_auto),
             padding: self.padding.map(|v| v.value).unwrap_or(self.base.padding),
             width_px: self.width_px.map(|v| v.value).unwrap_or(self.base.width_px),
             min_width_px: self
                 .min_width_px
                 .map(|v| v.value)
                 .unwrap_or(self.base.min_width_px),
+            max_width_px: self
+                .max_width_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.max_width_px),
             height_px: self
                 .height_px
                 .map(|v| v.value)
                 .unwrap_or(self.base.height_px),
+            flex_justify_content: self
+                .flex_justify_content
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_justify_content),
+            flex_align_items: self
+                .flex_align_items
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_align_items),
+            flex_gap_px: self
+                .flex_gap_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_gap_px),
         }
     }
 
@@ -401,6 +477,8 @@ impl StyleBuilder {
                     self.apply_display(Display::Block, priority);
                 } else if value.eq_ignore_ascii_case("inline") {
                     self.apply_display(Display::Inline, priority);
+                } else if value.eq_ignore_ascii_case("flex") {
+                    self.apply_display(Display::Flex, priority);
                 }
             }
             "visibility" => {
@@ -422,6 +500,14 @@ impl StyleBuilder {
                     self.apply_background_color(None, priority);
                 }
             }
+            "background" => {
+                let token = value.split_whitespace().next().unwrap_or("").trim();
+                if let Some(color) = parse_css_color(token) {
+                    self.apply_background_color(Some(color), priority);
+                } else if token.eq_ignore_ascii_case("transparent") {
+                    self.apply_background_color(None, priority);
+                }
+            }
             "font-family" => {
                 let family = if value.to_ascii_lowercase().contains("monospace") {
                     FontFamily::Monospace
@@ -440,6 +526,8 @@ impl StyleBuilder {
                     self.apply_bold(true, priority);
                 } else if value.eq_ignore_ascii_case("normal") {
                     self.apply_bold(false, priority);
+                } else if let Ok(weight) = value.trim().parse::<u16>() {
+                    self.apply_bold(weight >= 600, priority);
                 }
             }
             "text-decoration" => {
@@ -461,8 +549,8 @@ impl StyleBuilder {
                 }
             }
             "line-height" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_line_height_px(Some(px), priority);
+                if let Some(px) = self.parse_css_line_height_px(value) {
+                    self.apply_line_height_px(px, priority);
                 } else if value.eq_ignore_ascii_case("normal") {
                     self.apply_line_height_px(None, priority);
                 }
@@ -505,24 +593,37 @@ impl StyleBuilder {
                 }
             }
             "margin" => {
-                if let Some(edges) = parse_css_box_edges(value) {
+                if let Some((edges, auto)) = parse_css_box_edges_with_auto(value) {
                     self.apply_margin(edges, priority);
+                    self.apply_margin_auto(auto, priority);
                 }
             }
             "margin-left" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_margin_component(|e| Edges {
-                        left: px,
-                        ..e
-                    }, priority);
+                if value.trim().eq_ignore_ascii_case("auto") {
+                    self.apply_margin_auto_component(|a| AutoEdges { left: true, ..a }, priority);
+                } else if let Some(px) = parse_css_length_px(value) {
+                    self.apply_margin_component(
+                        |e| Edges { left: px, ..e },
+                        priority,
+                    );
+                    self.apply_margin_auto_component(
+                        |a| AutoEdges { left: false, ..a },
+                        priority,
+                    );
                 }
             }
             "margin-right" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_margin_component(|e| Edges {
-                        right: px,
-                        ..e
-                    }, priority);
+                if value.trim().eq_ignore_ascii_case("auto") {
+                    self.apply_margin_auto_component(|a| AutoEdges { right: true, ..a }, priority);
+                } else if let Some(px) = parse_css_length_px(value) {
+                    self.apply_margin_component(
+                        |e| Edges { right: px, ..e },
+                        priority,
+                    );
+                    self.apply_margin_auto_component(
+                        |a| AutoEdges { right: false, ..a },
+                        priority,
+                    );
                 }
             }
             "margin-top" => {
@@ -551,9 +652,40 @@ impl StyleBuilder {
                     self.apply_min_width(Some(px), priority);
                 }
             }
+            "max-width" => {
+                if let Some(px) = parse_css_length_px(value) {
+                    self.apply_max_width(Some(px), priority);
+                }
+            }
             "height" => {
                 if let Some(px) = parse_css_length_px(value) {
                     self.apply_height(Some(px), priority);
+                }
+            }
+            "justify-content" => {
+                let justify = match value.trim().to_ascii_lowercase().as_str() {
+                    "space-between" => Some(FlexJustifyContent::SpaceBetween),
+                    "flex-start" | "start" => Some(FlexJustifyContent::Start),
+                    _ => None,
+                };
+                if let Some(justify) = justify {
+                    self.apply_flex_justify_content(justify, priority);
+                }
+            }
+            "align-items" => {
+                let align = match value.trim().to_ascii_lowercase().as_str() {
+                    "center" => Some(FlexAlignItems::Center),
+                    "flex-start" | "start" => Some(FlexAlignItems::Start),
+                    _ => None,
+                };
+                if let Some(align) = align {
+                    self.apply_flex_align_items(align, priority);
+                }
+            }
+            "gap" => {
+                let first = value.split_whitespace().next().unwrap_or("");
+                if let Some(px) = parse_css_length_px(first) {
+                    self.apply_flex_gap_px(px.max(0), priority);
                 }
             }
             _ => {}
@@ -604,6 +736,10 @@ impl StyleBuilder {
         apply_cascade(&mut self.margin, value, priority);
     }
 
+    fn apply_margin_auto(&mut self, value: AutoEdges, priority: CascadePriority) {
+        apply_cascade(&mut self.margin_auto, value, priority);
+    }
+
     fn apply_padding(&mut self, value: Edges, priority: CascadePriority) {
         apply_cascade(&mut self.padding, value, priority);
     }
@@ -616,8 +752,24 @@ impl StyleBuilder {
         apply_cascade(&mut self.min_width_px, value, priority);
     }
 
+    fn apply_max_width(&mut self, value: Option<i32>, priority: CascadePriority) {
+        apply_cascade(&mut self.max_width_px, value, priority);
+    }
+
     fn apply_height(&mut self, value: Option<i32>, priority: CascadePriority) {
         apply_cascade(&mut self.height_px, value, priority);
+    }
+
+    fn apply_flex_justify_content(&mut self, value: FlexJustifyContent, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_justify_content, value, priority);
+    }
+
+    fn apply_flex_align_items(&mut self, value: FlexAlignItems, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_align_items, value, priority);
+    }
+
+    fn apply_flex_gap_px(&mut self, value: i32, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_gap_px, value, priority);
     }
 
     fn apply_margin_component<F>(&mut self, update: F, priority: CascadePriority)
@@ -626,6 +778,18 @@ impl StyleBuilder {
     {
         let current = self.margin.as_ref().map(|v| v.value).unwrap_or(self.base.margin);
         self.apply_margin(update(current), priority);
+    }
+
+    fn apply_margin_auto_component<F>(&mut self, update: F, priority: CascadePriority)
+    where
+        F: FnOnce(AutoEdges) -> AutoEdges,
+    {
+        let current = self
+            .margin_auto
+            .as_ref()
+            .map(|v| v.value)
+            .unwrap_or(self.base.margin_auto);
+        self.apply_margin_auto(update(current), priority);
     }
 
     fn apply_padding_component<F>(&mut self, update: F, priority: CascadePriority)
@@ -638,6 +802,35 @@ impl StyleBuilder {
             .map(|v| v.value)
             .unwrap_or(self.base.padding);
         self.apply_padding(update(current), priority);
+    }
+
+    fn current_font_size_px(&self) -> i32 {
+        self.font_size_px
+            .as_ref()
+            .map(|v| v.value)
+            .unwrap_or(self.base.font_size_px)
+    }
+
+    fn parse_css_line_height_px(&self, value: &str) -> Option<Option<i32>> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ch == '.' || ch == '-')
+        {
+            let multiplier: f32 = trimmed.parse().ok()?;
+            let px = (multiplier * self.current_font_size_px() as f32).round() as i32;
+            return Some(Some(px));
+        }
+
+        if let Some(px) = parse_css_length_px(value) {
+            return Some(Some(px));
+        }
+
+        None
     }
 }
 
@@ -770,6 +963,7 @@ fn parse_css_length_px(value: &str) -> Option<i32> {
     let px = match unit.as_str() {
         "px" | "" => number,
         "pt" => number * (96.0 / 72.0),
+        "rem" | "em" => number * 16.0,
         _ => return None,
     };
     Some(px.round() as i32)
@@ -809,6 +1003,59 @@ fn parse_css_box_edges(value: &str) -> Option<Edges> {
         }),
         _ => None,
     }
+}
+
+fn parse_css_box_edges_with_auto(value: &str) -> Option<(Edges, AutoEdges)> {
+    #[derive(Clone, Copy, Debug)]
+    enum Token {
+        Px(i32),
+        Auto,
+    }
+
+    let tokens: Vec<Token> = value
+        .split_whitespace()
+        .filter_map(|part| {
+            if part.eq_ignore_ascii_case("auto") {
+                return Some(Token::Auto);
+            }
+            parse_css_length_px(part).map(Token::Px)
+        })
+        .collect();
+
+    fn to_px(token: Token) -> i32 {
+        match token {
+            Token::Px(px) => px,
+            Token::Auto => 0,
+        }
+    }
+
+    fn to_auto(token: Token) -> bool {
+        matches!(token, Token::Auto)
+    }
+
+    let (top, right, bottom, left) = match tokens.as_slice() {
+        [] => return None,
+        [all] => (*all, *all, *all, *all),
+        [vertical, horizontal] => (*vertical, *horizontal, *vertical, *horizontal),
+        [top, horizontal, bottom] => (*top, *horizontal, *bottom, *horizontal),
+        [top, right, bottom, left] => (*top, *right, *bottom, *left),
+        _ => return None,
+    };
+
+    let edges = Edges {
+        top: to_px(top),
+        right: to_px(right),
+        bottom: to_px(bottom),
+        left: to_px(left),
+    };
+    let auto = AutoEdges {
+        top: to_auto(top),
+        right: to_auto(right),
+        bottom: to_auto(bottom),
+        left: to_auto(left),
+    };
+
+    Some((edges, auto))
 }
 
 fn parse_html_length_px(value: &str) -> Option<i32> {

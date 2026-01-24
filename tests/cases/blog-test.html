@@ -1,0 +1,328 @@
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>
+      embedding-shapes
+    </title>
+    <link href="https://emsh.cat/" rel="canonical">
+    <style>
+html {
+  overflow-y: scroll;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  line-height: 1.7;
+  color: #c9c9c9;
+  background: #161616;
+  max-width: 38rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+header {
+  margin-bottom: 3rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+header > a {
+  font-size: 1.25rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: #e8e8e8;
+  letter-spacing: -0.02em;
+}
+
+header nav {
+  display: flex;
+  gap: 1.5rem;
+}
+
+header nav a {
+  text-decoration: none;
+  color: #777;
+  font-size: 0.9375rem;
+}
+
+header nav a:hover {
+  color: #b8b8b8;
+}
+
+header nav a[aria-current="page"] {
+  color: #e8e8e8;
+  text-shadow: 0.02em 0 0 currentColor, -0.02em 0 0 currentColor;
+}
+
+main h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 1.5rem;
+  line-height: 1.25;
+  letter-spacing: -0.03em;
+  color: #e8e8e8;
+}
+
+main h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 2rem 0 1rem;
+  color: #d8d8d8;
+}
+
+main h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 1.75rem 0 0.75rem;
+  color: #d0d0d0;
+}
+
+main p {
+  margin-bottom: 1.25rem;
+}
+
+main img,
+main video {
+  max-width: 100%;
+  height: auto;
+}
+
+main ul, main ol {
+  margin: 1.25rem 0 1.25rem 1.25rem;
+}
+
+main li {
+  margin-bottom: 0.375rem;
+}
+
+main blockquote {
+  border-left: 2px solid #444;
+  padding-left: 1.25rem;
+  margin: 1.5rem 0;
+  font-style: italic;
+  color: #999;
+}
+
+main pre {
+  background: #1e1e1e;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  border-radius: 4px;
+}
+
+main code {
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+
+main p code, main li code {
+  background: #252525;
+  padding: 0.125em 0.375em;
+  font-size: 0.875em;
+  border-radius: 3px;
+  color: #d4d4d4;
+}
+
+a {
+  color: #8ab4c2;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: #a8ced8;
+  text-decoration-thickness: 2px;
+}
+
+main table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.9375rem;
+}
+
+main th, main td {
+  padding: 0.625rem 0.875rem;
+  text-align: left;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+main th {
+  color: #a8a8a8;
+  font-weight: 600;
+}
+
+main tbody tr:hover {
+  background: #1c1c1c;
+}
+
+.intro {
+  font-size: 1.125rem;
+  color: #888;
+  margin-bottom: 2.5rem;
+}
+
+.post-list {
+  list-style: none;
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.post-list li {
+  margin-bottom: 0.5rem;
+}
+
+.post-list a {
+  text-decoration: none;
+  color: #b8b8b8;
+  font-size: 1.0625rem;
+}
+
+.post-list a:hover {
+  color: #e0e0e0;
+  text-decoration: none;
+}
+
+.post-list a:hover .post-title {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
+.post-date {
+  color: #777;
+  font-size: 0.9375rem;
+}
+
+footer {
+  margin-top: 4rem;
+  color: #555;
+  font-size: 0.8125rem;
+}
+
+.versions {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #2a2a2a;
+}
+
+.versions > summary {
+  cursor: pointer;
+  color: #b8b8b8;
+  font-weight: 600;
+}
+
+.versions > summary:hover {
+  color: #e0e0e0;
+}
+
+.versions details.version {
+  margin-top: 1rem;
+}
+
+.versions details.version > summary {
+  cursor: pointer;
+  color: #999;
+  font-size: 0.9375rem;
+}
+
+.versions details.version > summary code {
+  background: #252525;
+  padding: 0.125em 0.375em;
+  font-size: 0.875em;
+  border-radius: 3px;
+  color: #d4d4d4;
+}
+
+.versions pre {
+  white-space: pre-wrap;
+}
+
+.versions pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+    </style>
+    <link href="/highlight.css" rel="stylesheet">
+    <link href="/favicon.svg" rel="icon">
+    <link href="/rss.xml" rel="alternate" title="embedding-shapes RSS" type="application/rss+xml">
+    <link href="/atom.xml" rel="alternate" title="embedding-shapes Atom" type="application/atom+xml">
+    <script async="async" src="https://plausible.io/js/pa-FG5K-GlhTzYQkb3KeYVzG.js"></script>
+    <script>
+      window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
+plausible.init()
+
+    </script>
+  </head>
+  <body>
+    <header>
+      <a href="/">
+        embedding-shapes
+      </a>
+      <nav>
+        <a aria-current="page" href="/">
+          Home
+        </a>
+        <a href="/posts/">
+          Posts
+        </a>
+        <a href="/about/">
+          About
+        </a>
+      </nav>
+    </header>
+    <main>
+      <p class="intro">
+        Welcome to my blog. I write about technology, Nix, and other topics.
+      </p>
+      <h2>
+        Recent Posts
+      </h2>
+      <ul class="post-list">
+        <li>
+          <a href="/cursor-implied-success-without-evidence/">
+            <span class="post-date">
+              2026-01-16
+            </span>
+            <br>
+            <span class="post-title">
+              Cursor&apos;s latest &quot;browser experiment&quot; implied success without evidence
+            </span>
+          </a>
+        </li>
+        <li>
+          <a href="/introducing-niccup/">
+            <span class="post-date">
+              2025-12-03
+            </span>
+            <br>
+            <span class="post-title">
+              Niccup: Hiccup-like HTML Generation in ~120 Lines of Pure Nix
+            </span>
+          </a>
+        </li>
+      </ul>
+    </main>
+    <footer>
+      <p>
+        Built with 
+        <a href="https://emsh.cat/niccup/">
+          niccup
+        </a>
+      </p>
+    </footer>
+  </body>
+</html>

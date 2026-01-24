@@ -1,10 +1,11 @@
 mod inline;
+mod flex;
 mod table;
 
 use crate::dom::{Document, Element, Node};
 use crate::geom::{Edges, Rect};
 use crate::render::{DisplayCommand, DisplayList, DrawRect, TextMeasurer, TextStyle, Viewport};
-use crate::style::{ComputedStyle, Display, StyleComputer, TextAlign, Visibility};
+use crate::style::{AutoEdges, ComputedStyle, Display, StyleComputer, TextAlign, Visibility};
 
 pub fn layout_document(
     document: &Document,
@@ -65,22 +66,33 @@ impl LayoutEngine<'_> {
 
         let paint = paint && style.visibility == Visibility::Visible;
         let margin = style.margin;
+        let margin_auto = style.margin_auto;
         let padding = style.padding;
+
+        let margin_left_px = if margin_auto.left { 0 } else { margin.left };
+        let margin_right_px = if margin_auto.right { 0 } else { margin.right };
 
         let available_width = containing
             .width
-            .saturating_sub(margin.left.saturating_add(margin.right))
+            .saturating_sub(margin_left_px.saturating_add(margin_right_px))
             .max(0);
         let mut used_width = self.resolve_used_width(element, style, available_width);
         if let Some(min_width) = style.min_width_px {
             used_width = used_width.max(min_width);
         }
+        if let Some(max_width) = style.max_width_px {
+            used_width = used_width.min(max_width);
+        }
         used_width = used_width.max(0);
 
-        let mut x = containing.x.saturating_add(margin.left);
+        let mut x = containing.x.saturating_add(margin_left_px);
         let y = cursor_y.saturating_add(margin.top);
 
-        x = apply_block_alignment(parent_style.text_align, containing, x, used_width, margin);
+        if margin_auto.left || margin_auto.right {
+            x = apply_auto_margin_alignment(margin_auto, containing, x, used_width, margin);
+        } else {
+            x = apply_block_alignment(parent_style.text_align, containing, x, used_width, margin);
+        }
 
         let border_box = Rect {
             x,
@@ -108,6 +120,7 @@ impl LayoutEngine<'_> {
         let content_height = match style.display {
             Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
                 .height,
+            Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
             _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
         };
         ancestors.pop();
@@ -240,7 +253,7 @@ impl LayoutEngine<'_> {
 
 fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
     match style.display {
-        Display::Block | Display::Table => true,
+        Display::Block | Display::Flex | Display::Table => true,
         Display::TableRow | Display::TableCell => true,
         Display::Inline => matches!(element.name.as_str(), "div" | "p" | "table"),
         Display::None => false,
@@ -262,6 +275,34 @@ fn apply_block_alignment(align: TextAlign, containing: Rect, default_x: i32, wid
             .saturating_add(available.saturating_sub(width))
             .saturating_add(margin.left),
         TextAlign::Left => default_x,
+    }
+}
+
+fn apply_auto_margin_alignment(
+    auto: AutoEdges,
+    containing: Rect,
+    default_x: i32,
+    width: i32,
+    margin: Edges,
+) -> i32 {
+    let left_px = if auto.left { 0 } else { margin.left };
+    let right_px = if auto.right { 0 } else { margin.right };
+    let available = containing
+        .width
+        .saturating_sub(left_px.saturating_add(right_px))
+        .max(0);
+
+    if available <= width {
+        return default_x;
+    }
+
+    let remaining = available.saturating_sub(width).max(0);
+    if auto.left && auto.right {
+        containing.x.saturating_add(left_px).saturating_add(remaining / 2)
+    } else if auto.left {
+        containing.x.saturating_add(left_px).saturating_add(remaining)
+    } else {
+        default_x
     }
 }
 

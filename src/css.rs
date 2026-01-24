@@ -303,7 +303,7 @@ fn parse_selector(selector: &str) -> Selector {
     let parts = selector
         .split_whitespace()
         .map(str::trim)
-        .filter(|p| !p.is_empty())
+        .filter(|p| !p.is_empty() && *p != ">")
         .map(parse_compound_selector)
         .collect();
     Selector { parts }
@@ -643,4 +643,3 @@ mod tests {
         assert_eq!(decls[0].value, "2px");
     }
 }
-

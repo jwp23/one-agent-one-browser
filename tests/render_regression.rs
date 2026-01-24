@@ -14,6 +14,7 @@ fn render_regression_suite() {
         cases_dir.join("inline-margin-right.html"),
         cases_dir.join("display-none.html"),
         cases_dir.join("visibility-hidden.html"),
+        cases_dir.join("blog-test.html"),
         cases_dir.join("hn-frontpage.html"),
         cases_dir
             .join("hn-frontpage-2026-01-16")

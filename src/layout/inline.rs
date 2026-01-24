@@ -40,6 +40,23 @@ pub(super) fn layout_inline_nodes<'doc>(
     layout_tokens(engine, &tokens, parent_style, content_box, start_y, paint)
 }
 
+pub(super) fn measure_inline_nodes<'doc>(
+    engine: &LayoutEngine<'_>,
+    nodes: &[&'doc Node],
+    parent_style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
+    max_width: i32,
+) -> Result<Size, String> {
+    let mut tokens = Vec::new();
+    let mut cursor = InlineCursor::default();
+
+    for &node in nodes {
+        collect_tokens(engine, node, parent_style, ancestors, false, &mut cursor, &mut tokens);
+    }
+
+    measure_tokens(engine, &tokens, parent_style, max_width)
+}
+
 #[derive(Default)]
 struct InlineCursor {
     pending_space: Option<PendingSpace>,
@@ -325,6 +342,100 @@ fn layout_tokens(
     }
 
     Ok(y_px.saturating_sub(start_y).max(0))
+}
+
+fn measure_tokens(
+    engine: &LayoutEngine<'_>,
+    tokens: &[InlineToken],
+    parent_style: &ComputedStyle,
+    max_width: i32,
+) -> Result<Size, String> {
+    let max_width = max_width.max(0);
+    let mut lines: Vec<Line> = Vec::new();
+    let base_style = engine.text_style_for(parent_style);
+    let base_metrics = engine.measurer.font_metrics_px(base_style);
+    let mut line = Line::new(parent_style.line_height_px, base_metrics);
+    let mut x_px = 0i32;
+
+    for token in tokens {
+        match token {
+            InlineToken::Newline => {
+                lines.push(std::mem::replace(
+                    &mut line,
+                    Line::new(parent_style.line_height_px, base_metrics),
+                ));
+                x_px = 0;
+            }
+            InlineToken::Space(style, visible) => {
+                if x_px == 0 {
+                    continue;
+                }
+                let space_width_px = engine.measurer.text_width_px(" ", *style)?;
+                if x_px.saturating_add(space_width_px) > max_width {
+                    continue;
+                }
+                let metrics = engine.measurer.font_metrics_px(*style);
+                line.push(Fragment::Text(
+                    " ".to_owned(),
+                    *style,
+                    space_width_px,
+                    metrics,
+                    *visible,
+                ));
+                x_px = x_px.saturating_add(space_width_px);
+            }
+            InlineToken::Word(text, style, visible) => {
+                if text.is_empty() {
+                    continue;
+                }
+                let word_width_px = engine.measurer.text_width_px(text, *style)?;
+                if x_px != 0 && x_px.saturating_add(word_width_px) > max_width {
+                    lines.push(std::mem::replace(
+                        &mut line,
+                        Line::new(parent_style.line_height_px, base_metrics),
+                    ));
+                    x_px = 0;
+                }
+
+                let metrics = engine.measurer.font_metrics_px(*style);
+                line.push(Fragment::Text(
+                    text.clone(),
+                    *style,
+                    word_width_px,
+                    metrics,
+                    *visible,
+                ));
+                x_px = x_px.saturating_add(word_width_px);
+            }
+            InlineToken::Box(size, visible) => {
+                if x_px != 0 && x_px.saturating_add(size.width) > max_width {
+                    lines.push(std::mem::replace(
+                        &mut line,
+                        Line::new(parent_style.line_height_px, base_metrics),
+                    ));
+                    x_px = 0;
+                }
+                line.push(Fragment::Box(*size, *visible));
+                x_px = x_px.saturating_add(size.width);
+            }
+        }
+    }
+
+    if !line.fragments.is_empty() {
+        lines.push(line);
+    }
+
+    let mut width_px = 0i32;
+    let mut height_px = 0i32;
+    for line in lines {
+        width_px = width_px.max(line.width_px);
+        height_px = height_px.saturating_add(line.height_px);
+    }
+
+    Ok(Size {
+        width: width_px.max(0),
+        height: height_px.max(0),
+    })
 }
 
 #[derive(Clone, Debug)]
