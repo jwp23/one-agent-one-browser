@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct Args {
     pub target: Option<Target>,
     pub screenshot_path: Option<PathBuf>,
+    pub headless: bool,
 }
 
 #[derive(Debug)]
@@ -37,6 +38,14 @@ pub fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, Stri
                     return Err("Duplicate --screenshot flag".to_owned());
                 }
                 parsed.screenshot_path = Some(PathBuf::from(path));
+                continue;
+            }
+
+            if flag == "--headless" {
+                if parsed.headless {
+                    return Err("Duplicate --headless flag".to_owned());
+                }
+                parsed.headless = true;
                 continue;
             }
 

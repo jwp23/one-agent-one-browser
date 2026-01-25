@@ -218,6 +218,7 @@ fn render_to_png(
 
     let screenshot_arg = format!("--screenshot={}", png_path.display());
     let mut child = Command::new(browser_exe)
+        .arg("--headless")
         .arg(browser_arg)
         .arg(screenshot_arg)
         .stdout(Stdio::inherit())

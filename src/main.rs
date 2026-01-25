@@ -26,6 +26,7 @@ fn main() {
     let title = app.title().to_owned();
     let options = platform::WindowOptions {
         screenshot_path: args.screenshot_path,
+        headless: args.headless,
     };
     if let Err(err) = platform::run_window(&title, options, &mut app) {
         eprintln!("{err}");

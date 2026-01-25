@@ -87,15 +87,17 @@ fn run_window_with_display<A: App>(
     }
 
     unsafe {
-        XSelectInput(
-            display,
-            window,
-            EVENT_MASK_EXPOSURE
-                | EVENT_MASK_KEY_PRESS
-                | EVENT_MASK_BUTTON_PRESS
-                | EVENT_MASK_STRUCTURE_NOTIFY,
-        );
-        XMapWindow(display, window);
+        if !options.headless {
+            XSelectInput(
+                display,
+                window,
+                EVENT_MASK_EXPOSURE
+                    | EVENT_MASK_KEY_PRESS
+                    | EVENT_MASK_BUTTON_PRESS
+                    | EVENT_MASK_STRUCTURE_NOTIFY,
+            );
+            XMapWindow(display, window);
+        }
     }
 
     let depth_i32 = unsafe { XDefaultDepth(display, screen) };
@@ -136,6 +138,7 @@ fn run_window_with_display<A: App>(
     };
 
     let mut screenshot_path = options.screenshot_path;
+    let headless = options.headless;
 
     let loop_result = (|| {
         let mut needs_redraw = true;
@@ -206,6 +209,9 @@ fn run_window_with_display<A: App>(
             if screenshot_path.is_some() && ready_for_screenshot {
                 needs_redraw = true;
             }
+            if headless && ready_for_screenshot {
+                needs_redraw = true;
+            }
 
             if needs_redraw {
                 painter.ensure_back_buffer(viewport)?;
@@ -219,6 +225,9 @@ fn run_window_with_display<A: App>(
                         }
                         let rgb = painter.capture_back_buffer_rgb()?;
                         crate::png::write_rgb_png(&path, &rgb)?;
+                        break;
+                    }
+                    if headless {
                         break;
                     }
                 }

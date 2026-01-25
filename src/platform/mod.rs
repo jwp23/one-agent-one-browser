@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[derive(Debug, Default)]
 pub struct WindowOptions {
     pub screenshot_path: Option<PathBuf>,
+    pub headless: bool,
 }
 
 pub fn run_window(title: &str, options: WindowOptions, app: &mut impl App) -> Result<(), String> {
