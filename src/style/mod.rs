@@ -38,6 +38,7 @@ pub enum Position {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FontFamily {
     SansSerif,
+    Serif,
     Monospace,
 }
 
@@ -95,6 +96,7 @@ pub struct ComputedStyle {
     pub background_color: Option<Color>,
     pub font_family: FontFamily,
     pub font_size_px: i32,
+    pub letter_spacing_px: i32,
     pub bold: bool,
     pub underline: bool,
     pub text_align: TextAlign,
@@ -136,6 +138,7 @@ impl ComputedStyle {
             background_color: None,
             font_family: FontFamily::SansSerif,
             font_size_px: 16,
+            letter_spacing_px: 0,
             bold: false,
             underline: false,
             text_align: TextAlign::Left,
@@ -177,6 +180,7 @@ impl ComputedStyle {
             background_color: None,
             font_family: parent.font_family,
             font_size_px: parent.font_size_px,
+            letter_spacing_px: parent.letter_spacing_px,
             bold: parent.bold,
             underline: parent.underline,
             text_align: parent.text_align,
@@ -361,6 +365,24 @@ struct Cascaded<T> {
     priority: CascadePriority,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LetterSpacing {
+    Normal,
+    Px(i32),
+    Em(f32),
+}
+
+impl LetterSpacing {
+    fn resolve_px(self, font_size_px: i32) -> i32 {
+        let font_size_px = font_size_px.max(0);
+        match self {
+            LetterSpacing::Normal => 0,
+            LetterSpacing::Px(px) => px,
+            LetterSpacing::Em(factor) => (factor * (font_size_px as f32)).round() as i32,
+        }
+    }
+}
+
 struct StyleBuilder {
     base: ComputedStyle,
     viewport: Option<(i32, i32)>,
@@ -376,6 +398,7 @@ struct StyleBuilder {
     background_color: Option<Cascaded<Option<Color>>>,
     font_family: Option<Cascaded<FontFamily>>,
     font_size_px: Option<Cascaded<i32>>,
+    letter_spacing: Option<Cascaded<LetterSpacing>>,
     bold: Option<Cascaded<bool>>,
     underline: Option<Cascaded<bool>>,
     text_align: Option<Cascaded<TextAlign>>,
@@ -419,6 +442,7 @@ impl StyleBuilder {
             background_color: None,
             font_family: None,
             font_size_px: None,
+            letter_spacing: None,
             bold: None,
             underline: None,
             text_align: None,
@@ -455,6 +479,16 @@ impl StyleBuilder {
     }
 
     fn finish(self) -> ComputedStyle {
+        let font_size_px = self
+            .font_size_px
+            .map(|v| v.value)
+            .unwrap_or(self.base.font_size_px);
+        let letter_spacing_px = self
+            .letter_spacing
+            .map(|v| v.value)
+            .unwrap_or(LetterSpacing::Px(self.base.letter_spacing_px))
+            .resolve_px(font_size_px);
+
         ComputedStyle {
             display: self.display.map(|v| v.value).unwrap_or(self.base.display),
             visibility: self
@@ -485,10 +519,8 @@ impl StyleBuilder {
                 .font_family
                 .map(|v| v.value)
                 .unwrap_or(self.base.font_family),
-            font_size_px: self
-                .font_size_px
-                .map(|v| v.value)
-                .unwrap_or(self.base.font_size_px),
+            font_size_px,
+            letter_spacing_px,
             bold: self.bold.map(|v| v.value).unwrap_or(self.base.bold),
             underline: self
                 .underline
@@ -723,6 +755,10 @@ impl StyleBuilder {
 
     fn apply_font_size_px(&mut self, value: i32, priority: CascadePriority) {
         apply_cascade(&mut self.font_size_px, value, priority);
+    }
+
+    fn apply_letter_spacing(&mut self, value: LetterSpacing, priority: CascadePriority) {
+        apply_cascade(&mut self.letter_spacing, value, priority);
     }
 
     fn apply_bold(&mut self, value: bool, priority: CascadePriority) {

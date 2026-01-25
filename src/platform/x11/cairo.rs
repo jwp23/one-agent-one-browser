@@ -15,6 +15,16 @@ pub(super) struct cairo_surface_t {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+struct cairo_text_extents_t {
+    x_bearing: c_double,
+    y_bearing: c_double,
+    width: c_double,
+    height: c_double,
+    x_advance: c_double,
+    y_advance: c_double,
+}
+
 #[allow(non_camel_case_types)]
 type cairo_status_t = c_int;
 const CAIRO_STATUS_SUCCESS: cairo_status_t = 0;
@@ -102,6 +112,7 @@ unsafe extern "C" {
     );
     fn cairo_set_font_size(cr: *mut cairo_t, size: c_double);
     fn cairo_show_text(cr: *mut cairo_t, utf8: *const c_char);
+    fn cairo_text_extents(cr: *mut cairo_t, utf8: *const c_char, extents: *mut cairo_text_extents_t);
 
     fn cairo_image_surface_create_for_data(
         data: *mut u8,
@@ -297,6 +308,7 @@ impl CairoCanvas {
 
         let family = match style.font_family {
             crate::style::FontFamily::SansSerif => b"Verdana\0".as_ptr().cast::<c_char>(),
+            crate::style::FontFamily::Serif => b"serif\0".as_ptr().cast::<c_char>(),
             crate::style::FontFamily::Monospace => b"monospace\0".as_ptr().cast::<c_char>(),
         };
         let weight = if style.bold {
@@ -304,8 +316,6 @@ impl CairoCanvas {
         } else {
             cairo_font_weight_t::CAIRO_FONT_WEIGHT_NORMAL
         };
-
-        let text = CString::new(text).map_err(|_| "text contains a NUL byte".to_owned())?;
 
         unsafe {
             cairo_save(self.cr);
@@ -323,8 +333,40 @@ impl CairoCanvas {
                 weight,
             );
             cairo_set_font_size(self.cr, f64::from(style.font_size_px.max(1)));
-            cairo_move_to(self.cr, f64::from(x_px), f64::from(y_px));
-            cairo_show_text(self.cr, text.as_ptr());
+
+            if style.letter_spacing_px == 0 {
+                let text = CString::new(text).map_err(|_| "text contains a NUL byte".to_owned())?;
+                cairo_move_to(self.cr, f64::from(x_px), f64::from(y_px));
+                cairo_show_text(self.cr, text.as_ptr());
+            } else {
+                let mut cursor_x = f64::from(x_px);
+                let mut first = true;
+                for ch in text.chars() {
+                    if !first {
+                        cursor_x += f64::from(style.letter_spacing_px);
+                    }
+                    first = false;
+
+                    let mut utf8 = [0u8; 4];
+                    let encoded = ch.encode_utf8(&mut utf8);
+                    let mut c_buf = [0u8; 5];
+                    c_buf[..encoded.len()].copy_from_slice(encoded.as_bytes());
+
+                    cairo_move_to(self.cr, cursor_x, f64::from(y_px));
+                    cairo_show_text(self.cr, c_buf.as_ptr().cast::<c_char>());
+
+                    let mut extents = cairo_text_extents_t {
+                        x_bearing: 0.0,
+                        y_bearing: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                        x_advance: 0.0,
+                        y_advance: 0.0,
+                    };
+                    cairo_text_extents(self.cr, c_buf.as_ptr().cast::<c_char>(), &mut extents);
+                    cursor_x += extents.x_advance;
+                }
+            }
             cairo_restore(self.cr);
             cairo_surface_flush(self.surface);
         }

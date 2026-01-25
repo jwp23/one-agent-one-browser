@@ -2,11 +2,11 @@ use crate::geom::Edges;
 
 use super::parse::{
     parse_css_box_edges, parse_css_box_edges_with_auto, parse_css_color, parse_css_flex,
-    parse_css_length_px,
+    parse_css_font_family, parse_css_length_px,
 };
 use super::{
     AutoEdges, BorderStyle, CascadePriority, Display, FlexAlignItems, FlexDirection,
-    FlexJustifyContent, FlexWrap, FontFamily, Position, StyleBuilder, TextAlign, Visibility,
+    FlexJustifyContent, FlexWrap, LetterSpacing, Position, StyleBuilder, TextAlign, Visibility,
 };
 
 pub(super) fn apply_declaration(
@@ -118,16 +118,21 @@ pub(super) fn apply_declaration(
             }
         }
         "font-family" => {
-            let family = if value.to_ascii_lowercase().contains("monospace") {
-                FontFamily::Monospace
-            } else {
-                FontFamily::SansSerif
-            };
-            builder.apply_font_family(family, priority);
+            builder.apply_font_family(parse_css_font_family(value), priority);
         }
         "font-size" => {
             if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_font_size_px(px, priority);
+            }
+        }
+        "letter-spacing" => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("normal") {
+                builder.apply_letter_spacing(LetterSpacing::Normal, priority);
+            } else if let Some(factor) = parse_em_factor(value) {
+                builder.apply_letter_spacing(LetterSpacing::Em(factor), priority);
+            } else if let Some(px) = builder.parse_css_length_px(value) {
+                builder.apply_letter_spacing(LetterSpacing::Px(px), priority);
             }
         }
         "font-weight" => {
@@ -486,4 +491,10 @@ fn parse_css_opacity_u8(value: &str) -> Option<u8> {
     }
     let number: f32 = value.parse().ok()?;
     Some((number.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+fn parse_em_factor(value: &str) -> Option<f32> {
+    let value = value.trim();
+    let number = value.strip_suffix("em")?;
+    number.trim().parse().ok()
 }

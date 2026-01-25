@@ -1,4 +1,5 @@
 use crate::geom::{Color, Edges};
+use crate::style::FontFamily;
 
 pub(super) fn parse_css_color(value: &str) -> Option<Color> {
     let value = value.trim();
@@ -61,6 +62,41 @@ fn parse_alpha_channel(input: &str) -> Option<u8> {
         return Some((number.clamp(0.0, 1.0) * 255.0).round() as u8);
     }
     Some(number.round().clamp(0.0, 255.0) as u8)
+}
+
+pub(super) fn parse_css_font_family(value: &str) -> FontFamily {
+    let mut saw_monospace = false;
+    let mut saw_serif = false;
+    let mut saw_sans_serif = false;
+
+    for raw in value.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let token = token
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_ascii_lowercase();
+
+        match token.as_str() {
+            "monospace" => saw_monospace = true,
+            "serif" => saw_serif = true,
+            "sans-serif" => saw_sans_serif = true,
+            _ => {}
+        }
+    }
+
+    if saw_monospace {
+        FontFamily::Monospace
+    } else if saw_serif {
+        FontFamily::Serif
+    } else if saw_sans_serif {
+        FontFamily::SansSerif
+    } else {
+        FontFamily::SansSerif
+    }
 }
 
 pub(super) fn parse_css_length_px(value: &str) -> Option<i32> {

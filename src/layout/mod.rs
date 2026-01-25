@@ -726,6 +726,7 @@ impl LayoutEngine<'_> {
             underline: style.underline,
             font_family: style.font_family,
             font_size_px: style.font_size_px,
+            letter_spacing_px: style.letter_spacing_px,
         }
     }
 

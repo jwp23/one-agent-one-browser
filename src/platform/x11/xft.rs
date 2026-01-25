@@ -187,32 +187,24 @@ impl XftRenderer {
     }
 
     pub fn text_width_px(&self, text: &str, style: TextStyle) -> Result<i32, String> {
-        if text.is_empty() {
-            return Ok(0);
+        if style.letter_spacing_px == 0 {
+            return self.text_width_px_no_spacing(text, style);
         }
-        let len: c_int = text
-            .len()
-            .try_into()
-            .map_err(|_| "text length out of range for Xft".to_owned())?;
-        let font = self.font_for(style);
-        let mut extents = XGlyphInfo {
-            _width: 0,
-            _height: 0,
-            _x: 0,
-            _y: 0,
-            x_off: 0,
-            _y_off: 0,
-        };
-        unsafe {
-            XftTextExtentsUtf8(
-                self.display,
-                font,
-                text.as_ptr().cast::<c_uchar>(),
-                len,
-                &mut extents,
-            );
+
+        let mut total_width: i64 = 0;
+        let mut first = true;
+        for ch in text.chars() {
+            if !first {
+                total_width += i64::from(style.letter_spacing_px);
+            }
+            first = false;
+
+            let mut buf = [0u8; 4];
+            let ch = ch.encode_utf8(&mut buf);
+            total_width += i64::from(self.text_width_px_no_spacing(ch, style)?);
         }
-        Ok((extents.x_off as i32).max(0))
+
+        Ok(total_width.clamp(0, i64::from(i32::MAX)) as i32)
     }
 
     pub fn draw_text(
@@ -225,22 +217,53 @@ impl XftRenderer {
         if text.is_empty() {
             return Ok(());
         }
-        let len: c_int = text
-            .len()
-            .try_into()
-            .map_err(|_| "text length out of range for Xft".to_owned())?;
         let font = self.font_for(style);
         let color = self.ensure_color(style.color)?;
-        unsafe {
-            XftDrawStringUtf8(
-                self.draw,
-                color,
-                font,
-                x_px,
-                y_px,
-                text.as_ptr().cast::<c_uchar>(),
-                len,
-            );
+        if style.letter_spacing_px == 0 {
+            let len: c_int = text
+                .len()
+                .try_into()
+                .map_err(|_| "text length out of range for Xft".to_owned())?;
+            unsafe {
+                XftDrawStringUtf8(
+                    self.draw,
+                    color,
+                    font,
+                    x_px,
+                    y_px,
+                    text.as_ptr().cast::<c_uchar>(),
+                    len,
+                );
+            }
+            return Ok(());
+        }
+
+        let mut cursor_x = x_px;
+        let mut first = true;
+        for ch in text.chars() {
+            if !first {
+                cursor_x = cursor_x.saturating_add(style.letter_spacing_px);
+            }
+            first = false;
+
+            let mut buf = [0u8; 4];
+            let ch = ch.encode_utf8(&mut buf);
+            let len: c_int = ch
+                .len()
+                .try_into()
+                .map_err(|_| "text length out of range for Xft".to_owned())?;
+            unsafe {
+                XftDrawStringUtf8(
+                    self.draw,
+                    color,
+                    font,
+                    cursor_x,
+                    y_px,
+                    ch.as_ptr().cast::<c_uchar>(),
+                    len,
+                );
+            }
+            cursor_x = cursor_x.saturating_add(self.text_width_px_no_spacing(ch, style)?);
         }
         Ok(())
     }
@@ -301,11 +324,41 @@ impl XftRenderer {
             Err(_) => self.fallback_font,
         }
     }
+
+    fn text_width_px_no_spacing(&self, text: &str, style: TextStyle) -> Result<i32, String> {
+        if text.is_empty() {
+            return Ok(0);
+        }
+        let len: c_int = text
+            .len()
+            .try_into()
+            .map_err(|_| "text length out of range for Xft".to_owned())?;
+        let font = self.font_for(style);
+        let mut extents = XGlyphInfo {
+            _width: 0,
+            _height: 0,
+            _x: 0,
+            _y: 0,
+            x_off: 0,
+            _y_off: 0,
+        };
+        unsafe {
+            XftTextExtentsUtf8(
+                self.display,
+                font,
+                text.as_ptr().cast::<c_uchar>(),
+                len,
+                &mut extents,
+            );
+        }
+        Ok((extents.x_off as i32).max(0))
+    }
 }
 
 fn open_xft_font(display: *mut Display, screen: c_int, key: FontKey) -> Result<*mut XftFont, String> {
     let family = match key.family {
         FontFamily::SansSerif => "Verdana",
+        FontFamily::Serif => "serif",
         FontFamily::Monospace => "monospace",
     };
     let weight = if key.bold { "bold" } else { "regular" };

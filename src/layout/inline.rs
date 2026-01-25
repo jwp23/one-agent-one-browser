@@ -921,6 +921,7 @@ struct Line<'doc> {
     ascent_px: i32,
     descent_px: i32,
     height_px: i32,
+    max_element_height_px: i32,
     explicit_line_height_px: Option<i32>,
 }
 
@@ -929,18 +930,18 @@ impl<'doc> Line<'doc> {
         let ascent_px = base_metrics.ascent_px.max(1);
         let descent_px = base_metrics.descent_px.max(0);
         let text_height_px = ascent_px.saturating_add(descent_px).max(1);
-        let height_px = explicit_line_height_px
-            .unwrap_or(text_height_px)
-            .max(text_height_px)
-            .max(1);
-        Line {
+        let height_px = explicit_line_height_px.unwrap_or(text_height_px).max(1);
+        let mut line = Line {
             fragments: Vec::new(),
             width_px: 0,
             ascent_px,
             descent_px,
             height_px,
+            max_element_height_px: 0,
             explicit_line_height_px,
-        }
+        };
+        line.recompute_height();
+        line
     }
 
     fn push(&mut self, fragment: Fragment<'doc>) {
@@ -955,7 +956,9 @@ impl<'doc> Line<'doc> {
             }
             Fragment::ElementBox(element_box) => {
                 self.width_px = self.width_px.saturating_add(element_box.size.width);
-                self.height_px = self.height_px.max(element_box.size.height.max(1));
+                self.max_element_height_px = self
+                    .max_element_height_px
+                    .max(element_box.size.height.max(1));
             }
         }
         self.recompute_height();
@@ -964,10 +967,11 @@ impl<'doc> Line<'doc> {
 
     fn recompute_height(&mut self) {
         let text_height_px = self.ascent_px.saturating_add(self.descent_px).max(1);
-        self.height_px = self.height_px.max(text_height_px);
-        if let Some(explicit) = self.explicit_line_height_px {
-            self.height_px = self.height_px.max(explicit.max(1));
-        }
+        let base_height_px = self
+            .explicit_line_height_px
+            .unwrap_or(text_height_px)
+            .max(1);
+        self.height_px = base_height_px.max(self.max_element_height_px).max(1);
     }
 
     fn baseline_offset_px(&self) -> i32 {

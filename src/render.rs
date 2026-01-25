@@ -10,6 +10,7 @@ pub struct TextStyle {
     pub underline: bool,
     pub font_family: FontFamily,
     pub font_size_px: i32,
+    pub letter_spacing_px: i32,
 }
 
 impl Default for TextStyle {
@@ -20,6 +21,7 @@ impl Default for TextStyle {
             underline: false,
             font_family: FontFamily::SansSerif,
             font_size_px: 16,
+            letter_spacing_px: 0,
         }
     }
 }
