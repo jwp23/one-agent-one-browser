@@ -220,9 +220,11 @@ impl CairoCanvas {
 
     pub fn recreate(&mut self, drawable: Drawable, width: i32, height: i32) -> Result<(), String> {
         self.destroy();
-        let next = CairoCanvas::new(self.display, drawable, self.visual, width, height)?;
+        let mut next = CairoCanvas::new(self.display, drawable, self.visual, width, height)?;
         self.surface = next.surface;
         self.cr = next.cr;
+        next.surface = std::ptr::null_mut();
+        next.cr = std::ptr::null_mut();
         Ok(())
     }
 
