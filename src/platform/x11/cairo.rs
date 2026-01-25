@@ -15,12 +15,9 @@ pub(super) struct cairo_surface_t {
     _private: [u8; 0],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
-enum cairo_status_t {
-    CAIRO_STATUS_SUCCESS = 0,
-}
+type cairo_status_t = c_int;
+const CAIRO_STATUS_SUCCESS: cairo_status_t = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,7 +188,7 @@ impl CairoCanvas {
             return Err("cairo_xlib_surface_create returned null".to_owned());
         }
         let status = unsafe { cairo_surface_status(surface) };
-        if status != cairo_status_t::CAIRO_STATUS_SUCCESS {
+        if status != CAIRO_STATUS_SUCCESS {
             unsafe { cairo_surface_destroy(surface) };
             return Err(format!("cairo surface error: {}", cairo_status_message(status)));
         }
@@ -202,7 +199,7 @@ impl CairoCanvas {
             return Err("cairo_create returned null".to_owned());
         }
         let status = unsafe { cairo_status(cr) };
-        if status != cairo_status_t::CAIRO_STATUS_SUCCESS {
+        if status != CAIRO_STATUS_SUCCESS {
             unsafe {
                 cairo_destroy(cr);
                 cairo_surface_destroy(surface);
@@ -482,7 +479,7 @@ impl CairoCanvas {
             return Err("cairo_image_surface_create_for_data returned null".to_owned());
         }
         let status = unsafe { cairo_surface_status(surface) };
-        if status != cairo_status_t::CAIRO_STATUS_SUCCESS {
+        if status != CAIRO_STATUS_SUCCESS {
             unsafe { cairo_surface_destroy(surface) };
             return Err(format!("cairo surface error: {}", cairo_status_message(status)));
         }
@@ -506,6 +503,10 @@ impl CairoCanvas {
         opacity: u8,
     ) -> Result<(), String> {
         if self.cr.is_null() {
+            return Ok(());
+        }
+        let status = unsafe { cairo_status(self.cr) };
+        if status != CAIRO_STATUS_SUCCESS {
             return Ok(());
         }
         if width_px <= 0 || height_px <= 0 {
@@ -588,7 +589,7 @@ impl Drop for CairoCanvas {
 fn cairo_status_message(status: cairo_status_t) -> String {
     let ptr = unsafe { cairo_status_to_string(status) };
     if ptr.is_null() {
-        return format!("cairo status {status:?}");
+        return format!("cairo status {status}");
     }
     unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
 }

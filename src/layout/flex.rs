@@ -961,6 +961,24 @@ fn layout_item_box<'doc>(
             paint,
         )?,
         FlexNode::Element(el) => {
+            if super::inline::is_replaced_element(el) {
+                let mut forced_style = item.style;
+                forced_style.margin = crate::geom::Edges::ZERO;
+                forced_style.margin_auto = crate::style::AutoEdges::NONE;
+                forced_style.width_px = Some(border_box.width);
+                let size = super::inline::measure_replaced_element_outer_size(
+                    el,
+                    &forced_style,
+                    border_box.width,
+                )?;
+                let border_height = size.height.max(0);
+                let inset = border
+                    .top
+                    .saturating_add(padding.top)
+                    .saturating_add(padding.bottom)
+                    .saturating_add(border.bottom);
+                border_height.saturating_sub(inset).max(0)
+            } else {
             ancestors.push(el);
             let height = match item.style.display {
                 Display::Table => table::layout_table(engine, el, &item.style, ancestors, content_box, paint)?.height,
@@ -986,6 +1004,7 @@ fn layout_item_box<'doc>(
             };
             ancestors.pop();
             height
+            }
         }
     };
 
@@ -1023,6 +1042,12 @@ fn layout_item_box<'doc>(
             },
             &item.style,
         );
+
+        if let FlexNode::Element(el) = item.node {
+            if super::inline::is_replaced_element(el) {
+                engine.paint_replaced_content(el, content_box)?;
+            }
+        }
     }
 
     if needs_opacity_group {

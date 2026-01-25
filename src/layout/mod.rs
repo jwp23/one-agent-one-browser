@@ -9,9 +9,11 @@ use crate::geom::{Edges, Rect};
 use crate::render::{
     DisplayCommand,
     DisplayList,
+    DrawImage,
     DrawRect,
     DrawRoundedRect,
     DrawRoundedRectBorder,
+    DrawSvg,
     LinkHitRegion,
     TextMeasurer,
     TextStyle,
@@ -82,6 +84,43 @@ impl LayoutEngine<'_> {
         Ok(Some(image))
     }
 
+    fn paint_replaced_content(&mut self, element: &Element, content_box: Rect) -> Result<(), String> {
+        if content_box.width <= 0 || content_box.height <= 0 {
+            return Ok(());
+        }
+
+        match element.name.as_str() {
+            "img" => {
+                if let Some(src) = element.attributes.get("src") {
+                    if let Some(image) = self.load_image(src)? {
+                        self.list.commands.push(DisplayCommand::Image(DrawImage {
+                            x_px: content_box.x,
+                            y_px: content_box.y,
+                            width_px: content_box.width,
+                            height_px: content_box.height,
+                            opacity: 255,
+                            image,
+                        }));
+                    }
+                }
+            }
+            "svg" => {
+                let xml = inline::serialize_element_xml(element);
+                self.list.commands.push(DisplayCommand::Svg(DrawSvg {
+                    x_px: content_box.x,
+                    y_px: content_box.y,
+                    width_px: content_box.width,
+                    height_px: content_box.height,
+                    opacity: 255,
+                    svg_xml: Rc::from(xml),
+                }));
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
     fn layout_document(&mut self, document: &Document) -> Result<(), String> {
         let root = document.render_root();
         let root_style = ComputedStyle::root_defaults();
@@ -138,6 +177,16 @@ impl LayoutEngine<'_> {
         let border = style.border_width;
         let padding = style.padding;
 
+        let replaced_size = if inline::is_replaced_element(element) {
+            Some(inline::measure_replaced_element_outer_size(
+                element,
+                style,
+                containing.width,
+            )?)
+        } else {
+            None
+        };
+
         let margin_left_px = if margin_auto.left { 0 } else { margin.left };
         let margin_right_px = if margin_auto.right { 0 } else { margin.right };
 
@@ -145,14 +194,20 @@ impl LayoutEngine<'_> {
             .width
             .saturating_sub(margin_left_px.saturating_add(margin_right_px))
             .max(0);
-        let mut used_width = self.resolve_used_width(element, style, available_width);
-        if let Some(min_width) = style.min_width_px {
-            used_width = used_width.max(min_width);
-        }
-        if let Some(max_width) = style.max_width_px {
-            used_width = used_width.min(max_width);
-        }
-        used_width = used_width.max(0);
+        let used_width = if let Some(size) = replaced_size {
+            size.width
+                .saturating_sub(margin.left.saturating_add(margin.right))
+                .max(0)
+        } else {
+            let mut width = self.resolve_used_width(element, style, available_width);
+            if let Some(min_width) = style.min_width_px {
+                width = width.max(min_width);
+            }
+            if let Some(max_width) = style.max_width_px {
+                width = width.min(max_width);
+            }
+            width.max(0)
+        };
 
         let mut x = containing.x.saturating_add(margin_left_px);
         let y = cursor_y.saturating_add(margin.top);
@@ -198,14 +253,31 @@ impl LayoutEngine<'_> {
             }
         }
 
-        ancestors.push(element);
-        let content_height = match style.display {
-            Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
-                .height,
-            Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
-            _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+        let content_height = if let Some(size) = replaced_size {
+            let border_height = size
+                .height
+                .saturating_sub(margin.top.saturating_add(margin.bottom))
+                .max(0);
+            border_height
+                .saturating_sub(
+                    border
+                        .top
+                        .saturating_add(padding.top)
+                        .saturating_add(padding.bottom)
+                        .saturating_add(border.bottom),
+                )
+                .max(0)
+        } else {
+            ancestors.push(element);
+            let content_height = match style.display {
+                Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
+                    .height,
+                Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
+                _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+            };
+            ancestors.pop();
+            content_height
         };
-        ancestors.pop();
 
         let mut border_height = border
             .top
@@ -240,6 +312,17 @@ impl LayoutEngine<'_> {
                 },
                 style,
             );
+
+            if replaced_size.is_some() {
+                let content_box = Rect {
+                    x: border_box.x,
+                    y: border_box.y,
+                    width: border_box.width,
+                    height: border_height,
+                }
+                .inset(add_edges(border, padding));
+                self.paint_replaced_content(element, content_box)?;
+            }
         }
 
         if needs_opacity_group {
@@ -290,10 +373,24 @@ impl LayoutEngine<'_> {
         let border = style.border_width;
         let padding = style.padding;
 
+        let replaced_size = if inline::is_replaced_element(element) {
+            Some(inline::measure_replaced_element_outer_size(
+                element,
+                style,
+                containing.width,
+            )?)
+        } else {
+            None
+        };
+
         let mut used_width = if let Some(width) = style.width_px {
             width
         } else if let (Some(left), Some(right)) = (style.left_px, style.right_px) {
             containing.width.saturating_sub(left.saturating_add(right))
+        } else if let Some(size) = replaced_size {
+            size.width
+                .saturating_sub(margin.left.saturating_add(margin.right))
+                .max(0)
         } else {
             containing.width
         };
@@ -361,14 +458,31 @@ impl LayoutEngine<'_> {
             }
         }
 
-        ancestors.push(element);
-        let content_height = match style.display {
-            Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
-                .height,
-            Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
-            _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+        let content_height = if let Some(size) = replaced_size {
+            let border_height = size
+                .height
+                .saturating_sub(margin.top.saturating_add(margin.bottom))
+                .max(0);
+            border_height
+                .saturating_sub(
+                    border
+                        .top
+                        .saturating_add(padding.top)
+                        .saturating_add(padding.bottom)
+                        .saturating_add(border.bottom),
+                )
+                .max(0)
+        } else {
+            ancestors.push(element);
+            let content_height = match style.display {
+                Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
+                    .height,
+                Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
+                _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+            };
+            ancestors.pop();
+            content_height
         };
-        ancestors.pop();
 
         let mut border_height = border
             .top
@@ -403,6 +517,17 @@ impl LayoutEngine<'_> {
                 },
                 style,
             );
+
+            if replaced_size.is_some() {
+                let content_box = Rect {
+                    x: border_box.x,
+                    y: border_box.y,
+                    width: border_box.width,
+                    height: border_height,
+                }
+                .inset(add_edges(border, padding));
+                self.paint_replaced_content(element, content_box)?;
+            }
         }
 
         if needs_opacity_group {

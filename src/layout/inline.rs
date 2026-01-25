@@ -454,7 +454,7 @@ fn parse_svg_viewbox_dimensions(view_box: Option<&str>) -> Option<(f32, f32)> {
     Some((width, height))
 }
 
-fn serialize_element_xml(element: &Element) -> String {
+pub(super) fn serialize_element_xml(element: &Element) -> String {
     let mut out = String::new();
     write_element_xml(element, &mut out);
     out

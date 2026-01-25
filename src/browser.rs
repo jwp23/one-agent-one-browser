@@ -514,12 +514,13 @@ impl UrlLoader {
         let mut slots = Vec::with_capacity(refs.len());
         for reference in refs {
             match reference {
-                StylesheetRef::Inline(css) => slots.push(StylesheetSlot::Inline(css)),
-                StylesheetRef::External(url) => {
+                StylesheetRef::Inline { css, media } => slots.push(StylesheetSlot::Inline { css, media }),
+                StylesheetRef::External { url, media } => {
                     let id = self.pool.fetch_bytes(url.clone())?;
                     slots.push(StylesheetSlot::External {
                         request_id: id,
                         css: None,
+                        media,
                     });
                 }
             }
@@ -537,24 +538,28 @@ impl UrlLoader {
 }
 
 enum StylesheetSlot {
-    Inline(String),
+    Inline {
+        css: String,
+        media: Option<String>,
+    },
     External {
         request_id: crate::net::RequestId,
         css: Option<String>,
+        media: Option<String>,
     },
 }
 
 impl StylesheetSlot {
     fn request_id(&self) -> Option<crate::net::RequestId> {
         match self {
-            StylesheetSlot::Inline(_) => None,
+            StylesheetSlot::Inline { .. } => None,
             StylesheetSlot::External { request_id, .. } => Some(*request_id),
         }
     }
 
     fn set_css(&mut self, css: String) {
         match self {
-            StylesheetSlot::Inline(_) => {}
+            StylesheetSlot::Inline { .. } => {}
             StylesheetSlot::External { css: slot_css, .. } => {
                 *slot_css = Some(css);
             }
@@ -563,7 +568,7 @@ impl StylesheetSlot {
 
     fn is_loaded(&self) -> bool {
         match self {
-            StylesheetSlot::Inline(_) => true,
+            StylesheetSlot::Inline { .. } => true,
             StylesheetSlot::External { css, .. } => css.is_some(),
         }
     }
@@ -573,13 +578,13 @@ fn stylesheet_sources_from_loader(slots: &[StylesheetSlot]) -> Vec<StylesheetSou
     let mut out = Vec::new();
     for slot in slots {
         match slot {
-            StylesheetSlot::Inline(css) => out.push(StylesheetSource {
+            StylesheetSlot::Inline { css, media } => out.push(StylesheetSource {
                 css: css.clone(),
-                media: None,
+                media: media.clone(),
             }),
-            StylesheetSlot::External { css: Some(css), .. } => out.push(StylesheetSource {
+            StylesheetSlot::External { css: Some(css), media, .. } => out.push(StylesheetSource {
                 css: css.clone(),
-                media: None,
+                media: media.clone(),
             }),
             StylesheetSlot::External { css: None, .. } => {}
         }
@@ -588,8 +593,14 @@ fn stylesheet_sources_from_loader(slots: &[StylesheetSlot]) -> Vec<StylesheetSou
 }
 
 enum StylesheetRef {
-    Inline(String),
-    External(String),
+    Inline {
+        css: String,
+        media: Option<String>,
+    },
+    External {
+        url: String,
+        media: Option<String>,
+    },
 }
 
 fn collect_stylesheet_refs(
@@ -605,7 +616,10 @@ fn collect_stylesheet_refs(
                 css.push('\n');
             }
         }
-        out.push(StylesheetRef::Inline(css));
+        out.push(StylesheetRef::Inline {
+            css,
+            media: element.attributes.get("media").map(str::to_owned),
+        });
     }
 
     if is_stylesheet_link(element) {
@@ -621,7 +635,10 @@ fn collect_stylesheet_refs(
                         .as_str()
                         .to_owned()
                 };
-                out.push(StylesheetRef::External(url));
+                out.push(StylesheetRef::External {
+                    url,
+                    media: element.attributes.get("media").map(str::to_owned),
+                });
             }
         }
     }
