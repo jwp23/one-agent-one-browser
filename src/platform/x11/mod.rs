@@ -50,8 +50,19 @@ fn run_window_with_display<A: App>(
     let black_pixel = unsafe { XBlackPixel(display, screen) };
     let white_pixel = unsafe { XWhitePixel(display, screen) };
 
-    let initial_width: c_uint = 1024;
-    let initial_height: c_uint = 768;
+    let initial_width_i32 = options.initial_width_px.unwrap_or(1024);
+    let initial_height_i32 = options.initial_height_px.unwrap_or(768);
+    if initial_width_i32 <= 0 || initial_height_i32 <= 0 {
+        return Err(format!(
+            "Invalid initial window size: {initial_width_i32}x{initial_height_i32}"
+        ));
+    }
+    let initial_width: c_uint = initial_width_i32
+        .try_into()
+        .map_err(|_| format!("Initial width out of range: {initial_width_i32}"))?;
+    let initial_height: c_uint = initial_height_i32
+        .try_into()
+        .map_err(|_| format!("Initial height out of range: {initial_height_i32}"))?;
 
     let window = unsafe {
         XCreateSimpleWindow(

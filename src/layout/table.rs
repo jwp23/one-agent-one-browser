@@ -44,7 +44,13 @@ pub(super) fn layout_table<'doc>(
             if cell.colspan != 1 {
                 continue;
             }
-            let cell_style = engine.styles.compute_style(cell.element, table_style, ancestors);
+            let cell_style = engine.styles.compute_style_in_viewport(
+                cell.element,
+                table_style,
+                ancestors,
+                engine.viewport.width_px,
+                engine.viewport.height_px,
+            );
             let min_width =
                 measure_cell_min_width(engine, cell.element, &cell_style, ancestors, cellpadding)?;
 
@@ -73,7 +79,13 @@ pub(super) fn layout_table<'doc>(
         if y >= engine.viewport.height_px {
             break;
         }
-        let row_style = engine.styles.compute_style(row.element, table_style, ancestors);
+        let row_style = engine.styles.compute_style_in_viewport(
+            row.element,
+            table_style,
+            ancestors,
+            engine.viewport.width_px,
+            engine.viewport.height_px,
+        );
         if row_style.display == Display::None {
             continue;
         }
@@ -84,7 +96,13 @@ pub(super) fn layout_table<'doc>(
         ancestors.push(row.element);
         let mut x = content_box.x;
         for cell in &row.cells {
-            let cell_style = engine.styles.compute_style(cell.element, &row_style, ancestors);
+            let cell_style = engine.styles.compute_style_in_viewport(
+                cell.element,
+                &row_style,
+                ancestors,
+                engine.viewport.width_px,
+                engine.viewport.height_px,
+            );
             if cell_style.display == Display::None {
                 continue;
             }
@@ -332,7 +350,13 @@ fn measure_inline_words<'doc>(
                 }
             }
             Node::Element(el) => {
-                let child_style = engine.styles.compute_style(el, style, ancestors);
+                let child_style = engine.styles.compute_style_in_viewport(
+                    el,
+                    style,
+                    ancestors,
+                    engine.viewport.width_px,
+                    engine.viewport.height_px,
+                );
                 if child_style.display == Display::None {
                     continue;
                 }

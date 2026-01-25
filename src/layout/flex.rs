@@ -9,6 +9,21 @@ use std::rc::Rc;
 
 use super::{inline, table, LayoutEngine};
 
+fn compute_style<'doc>(
+    engine: &LayoutEngine<'_>,
+    element: &'doc Element,
+    parent_style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
+) -> ComputedStyle {
+    engine.styles.compute_style_in_viewport(
+        element,
+        parent_style,
+        ancestors,
+        engine.viewport.width_px,
+        engine.viewport.height_px,
+    )
+}
+
 pub(super) fn layout_flex_row<'doc>(
     engine: &mut LayoutEngine<'_>,
     element: &'doc Element,
@@ -419,7 +434,7 @@ fn collect_items<'doc>(
                 });
             }
             Node::Element(el) => {
-                let child_style = engine.styles.compute_style(el, style, ancestors);
+                let child_style = compute_style(engine, el, style, ancestors);
                 if child_style.display == Display::None {
                     continue;
                 }
@@ -442,12 +457,13 @@ fn layout_positioned_children<'doc>(
     element: &'doc Element,
     container_style: &ComputedStyle,
     ancestors: &mut Vec<&'doc Element>,
-    containing: Rect,
+    _containing: Rect,
     paint: bool,
 ) -> Result<(), String> {
+    let containing = engine.current_positioned_containing_block();
     for child in &element.children {
         let Node::Element(el) = child else { continue };
-        let style = engine.styles.compute_style(el, container_style, ancestors);
+        let style = compute_style(engine, el, container_style, ancestors);
         if style.display == Display::None {
             continue;
         }
@@ -493,7 +509,7 @@ fn measure_item_main_size_row<'doc>(
     Ok(border_width.min(max_width.max(0)))
 }
 
-fn measure_element_max_content_width<'doc>(
+pub(super) fn measure_element_max_content_width<'doc>(
     engine: &LayoutEngine<'_>,
     element: &'doc Element,
     style: &ComputedStyle,
@@ -580,7 +596,7 @@ fn measure_flex_container_max_content_width<'doc>(
                 (width, 0i32, 0i32)
             }
             Node::Element(el) => {
-                let child_style = engine.styles.compute_style(el, style, ancestors);
+                let child_style = compute_style(engine, el, style, ancestors);
                 if child_style.display == Display::None {
                     continue;
                 }
@@ -642,7 +658,7 @@ fn measure_node_max_content_width<'doc>(
     match node {
         Node::Text(text) => measure_text_run_width(engine, text, engine.text_style_for(parent_style)),
         Node::Element(el) => {
-            let style = engine.styles.compute_style(el, parent_style, ancestors);
+            let style = compute_style(engine, el, parent_style, ancestors);
             if style.display == Display::None {
                 return Ok(0);
             }
@@ -673,7 +689,7 @@ fn measure_inline_children_width<'doc>(
                 pending_space = space_after;
             }
             Node::Element(el) => {
-                let style = engine.styles.compute_style(el, parent_style, ancestors);
+                let style = compute_style(engine, el, parent_style, ancestors);
                 if style.display == Display::None {
                     continue;
                 }
@@ -979,6 +995,11 @@ fn layout_item_box<'doc>(
                     .saturating_add(border.bottom);
                 border_height.saturating_sub(inset).max(0)
             } else {
+                let mut pushed_positioning = false;
+                if item.style.position != Position::Static {
+                    engine.push_positioned_containing_block(border_box, border);
+                    pushed_positioning = true;
+                }
             ancestors.push(el);
             let height = match item.style.display {
                 Display::Table => table::layout_table(engine, el, &item.style, ancestors, content_box, paint)?.height,
@@ -1003,6 +1024,9 @@ fn layout_item_box<'doc>(
                 }
             };
             ancestors.pop();
+                if pushed_positioning {
+                    let _ = engine.positioned_containing_blocks.pop();
+                }
             height
             }
         }

@@ -27,6 +27,8 @@ fn main() {
     let options = platform::WindowOptions {
         screenshot_path: args.screenshot_path,
         headless: args.headless,
+        initial_width_px: args.width_px,
+        initial_height_px: args.height_px,
     };
     if let Err(err) = platform::run_window(&title, options, &mut app) {
         eprintln!("{err}");

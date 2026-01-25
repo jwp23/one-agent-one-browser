@@ -18,6 +18,8 @@ fn render_regression_suite() {
         cases_dir.join("inline-svg.html"),
         cases_dir.join("svg-auto-width-flex.html"),
         cases_dir.join("opacity.html"),
+        cases_dir.join("vw-vh.html"),
+        cases_dir.join("unset-position.html"),
         cases_dir.join("display-none.html"),
         cases_dir.join("visibility-hidden.html"),
         cases_dir.join("blog-test.html"),

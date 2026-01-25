@@ -6,7 +6,7 @@ use crate::css::{Specificity, Stylesheet};
 use crate::dom::{Document, Element, Node};
 use crate::geom::{Color, Edges};
 use parse::{
-    parse_css_color, parse_css_length_px, parse_html_length_px,
+    parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -245,9 +245,35 @@ impl StyleComputer {
         parent: &ComputedStyle,
         ancestors: &[&Element],
     ) -> ComputedStyle {
+        self.compute_style_impl(element, parent, ancestors, None)
+    }
+
+    pub fn compute_style_in_viewport(
+        &self,
+        element: &Element,
+        parent: &ComputedStyle,
+        ancestors: &[&Element],
+        viewport_width_px: i32,
+        viewport_height_px: i32,
+    ) -> ComputedStyle {
+        self.compute_style_impl(
+            element,
+            parent,
+            ancestors,
+            Some((viewport_width_px.max(0), viewport_height_px.max(0))),
+        )
+    }
+
+    fn compute_style_impl(
+        &self,
+        element: &Element,
+        parent: &ComputedStyle,
+        ancestors: &[&Element],
+        viewport: Option<(i32, i32)>,
+    ) -> ComputedStyle {
         let display = default_display_for_element(element);
         let style = ComputedStyle::inherit_from(parent, display);
-        let mut builder = StyleBuilder::new(style);
+        let mut builder = StyleBuilder::new(style, viewport);
 
         builder.apply_presentational_hints(element);
         builder.apply_stylesheet(&self.stylesheet, element, ancestors);
@@ -337,6 +363,7 @@ struct Cascaded<T> {
 
 struct StyleBuilder {
     base: ComputedStyle,
+    viewport: Option<(i32, i32)>,
     display: Option<Cascaded<Display>>,
     visibility: Option<Cascaded<Visibility>>,
     position: Option<Cascaded<Position>>,
@@ -376,9 +403,10 @@ struct StyleBuilder {
 }
 
 impl StyleBuilder {
-    fn new(base: ComputedStyle) -> StyleBuilder {
+    fn new(base: ComputedStyle, viewport: Option<(i32, i32)>) -> StyleBuilder {
         StyleBuilder {
             base,
+            viewport,
             display: None,
             visibility: None,
             position: None,
@@ -416,6 +444,14 @@ impl StyleBuilder {
             flex_basis_px: None,
             flex_gap_px: None,
         }
+    }
+
+    fn parse_css_length_px(&self, value: &str) -> Option<i32> {
+        let (viewport_width_px, viewport_height_px) = match self.viewport {
+            Some((width, height)) => (Some(width), Some(height)),
+            None => (None, None),
+        };
+        parse_css_length_px_with_viewport(value, viewport_width_px, viewport_height_px)
     }
 
     fn finish(self) -> ComputedStyle {
@@ -851,7 +887,7 @@ impl StyleBuilder {
             return Some(Some(px));
         }
 
-        if let Some(px) = parse_css_length_px(value) {
+        if let Some(px) = self.parse_css_length_px(value) {
             return Some(Some(px));
         }
 

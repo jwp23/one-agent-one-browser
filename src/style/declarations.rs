@@ -49,30 +49,46 @@ pub(super) fn apply_declaration(
             }
         }
         "top" => {
-            if value.trim().eq_ignore_ascii_case("auto") {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
                 builder.apply_top(None, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_top(Some(px), priority);
             }
         }
         "right" => {
-            if value.trim().eq_ignore_ascii_case("auto") {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
                 builder.apply_right(None, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_right(Some(px), priority);
             }
         }
         "bottom" => {
-            if value.trim().eq_ignore_ascii_case("auto") {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
                 builder.apply_bottom(None, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_bottom(Some(px), priority);
             }
         }
         "left" => {
-            if value.trim().eq_ignore_ascii_case("auto") {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
                 builder.apply_left(None, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_left(Some(px), priority);
             }
         }
@@ -110,7 +126,7 @@ pub(super) fn apply_declaration(
             builder.apply_font_family(family, priority);
         }
         "font-size" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_font_size_px(px, priority);
             }
         }
@@ -154,22 +170,22 @@ pub(super) fn apply_declaration(
             }
         }
         "padding-left" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_padding_component(|e| Edges { left: px, ..e }, priority);
             }
         }
         "padding-right" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_padding_component(|e| Edges { right: px, ..e }, priority);
             }
         }
         "padding-top" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_padding_component(|e| Edges { top: px, ..e }, priority);
             }
         }
         "padding-bottom" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_padding_component(|e| Edges { bottom: px, ..e }, priority);
             }
         }
@@ -236,7 +252,7 @@ pub(super) fn apply_declaration(
         "margin-left" => {
             if value.trim().eq_ignore_ascii_case("auto") {
                 builder.apply_margin_auto_component(|a| AutoEdges { left: true, ..a }, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_margin_component(|e| Edges { left: px, ..e }, priority);
                 builder.apply_margin_auto_component(|a| AutoEdges { left: false, ..a }, priority);
             }
@@ -244,47 +260,64 @@ pub(super) fn apply_declaration(
         "margin-right" => {
             if value.trim().eq_ignore_ascii_case("auto") {
                 builder.apply_margin_auto_component(|a| AutoEdges { right: true, ..a }, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_margin_component(|e| Edges { right: px, ..e }, priority);
                 builder.apply_margin_auto_component(|a| AutoEdges { right: false, ..a }, priority);
             }
         }
         "margin-top" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_margin_component(|e| Edges { top: px, ..e }, priority);
             }
         }
         "margin-bottom" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_margin_component(|e| Edges { bottom: px, ..e }, priority);
             }
         }
         "width" => {
-            if value.trim().eq_ignore_ascii_case("auto") {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
                 builder.apply_width(None, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_width(Some(px), priority);
             }
         }
         "min-width" => {
-            if let Some(px) = parse_css_length_px(value) {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("unset") || value.eq_ignore_ascii_case("initial") {
+                builder.apply_min_width(None, priority);
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_min_width(Some(px), priority);
             }
         }
         "max-width" => {
-            if let Some(px) = parse_css_length_px(value) {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("unset") || value.eq_ignore_ascii_case("initial") {
+                builder.apply_max_width(None, priority);
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_max_width(Some(px), priority);
             }
         }
         "height" => {
-            if value.trim().eq_ignore_ascii_case("auto") {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
                 builder.apply_height(None, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_height(Some(px), priority);
             }
         }
         "min-height" => {
-            if let Some(px) = parse_css_length_px(value) {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("unset") || value.eq_ignore_ascii_case("initial") {
+                builder.apply_min_height(None, priority);
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_min_height(Some(px), priority);
             }
         }
@@ -319,9 +352,13 @@ pub(super) fn apply_declaration(
             }
         }
         "flex-basis" => {
-            if value.trim().eq_ignore_ascii_case("auto") {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
                 builder.apply_flex_basis(None, priority);
-            } else if let Some(px) = parse_css_length_px(value) {
+            } else if let Some(px) = builder.parse_css_length_px(value) {
                 builder.apply_flex_basis(Some(px.max(0)), priority);
             }
         }
@@ -357,7 +394,7 @@ pub(super) fn apply_declaration(
         }
         "gap" => {
             let first = value.split_whitespace().next().unwrap_or("");
-            if let Some(px) = parse_css_length_px(first) {
+            if let Some(px) = builder.parse_css_length_px(first) {
                 builder.apply_flex_gap_px(px.max(0), priority);
             }
         }

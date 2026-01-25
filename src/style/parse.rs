@@ -64,6 +64,14 @@ fn parse_alpha_channel(input: &str) -> Option<u8> {
 }
 
 pub(super) fn parse_css_length_px(value: &str) -> Option<i32> {
+    parse_css_length_px_with_viewport(value, None, None)
+}
+
+pub(super) fn parse_css_length_px_with_viewport(
+    value: &str,
+    viewport_width_px: Option<i32>,
+    viewport_height_px: Option<i32>,
+) -> Option<i32> {
     let value = value.trim();
     if value == "0" {
         return Some(0);
@@ -86,6 +94,14 @@ pub(super) fn parse_css_length_px(value: &str) -> Option<i32> {
         "px" | "" => number,
         "pt" => number * (96.0 / 72.0),
         "rem" | "em" => number * 16.0,
+        "vw" => {
+            let width_px = viewport_width_px?;
+            number * (width_px as f32) / 100.0
+        }
+        "vh" => {
+            let height_px = viewport_height_px?;
+            number * (height_px as f32) / 100.0
+        }
         _ => return None,
     };
     Some(px.round() as i32)

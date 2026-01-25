@@ -200,10 +200,7 @@ impl CairoCanvas {
         }
         let status = unsafe { cairo_status(cr) };
         if status != CAIRO_STATUS_SUCCESS {
-            unsafe {
-                cairo_destroy(cr);
-                cairo_surface_destroy(surface);
-            }
+            unsafe { cairo_surface_destroy(surface) };
             return Err(format!("cairo context error: {}", cairo_status_message(status)));
         }
 
@@ -227,7 +224,10 @@ impl CairoCanvas {
 
     pub fn destroy(&mut self) {
         if !self.cr.is_null() {
-            unsafe { cairo_destroy(self.cr) };
+            let status = unsafe { cairo_status(self.cr) };
+            if status == CAIRO_STATUS_SUCCESS {
+                unsafe { cairo_destroy(self.cr) };
+            }
             self.cr = std::ptr::null_mut();
         }
         if !self.surface.is_null() {
@@ -552,6 +552,15 @@ impl CairoCanvas {
             if opacity != 255 {
                 cairo_push_group(self.cr);
             }
+        }
+
+        let status = unsafe { cairo_status(self.cr) };
+        if status != CAIRO_STATUS_SUCCESS {
+            unsafe {
+                cairo_restore(self.cr);
+                cairo_surface_flush(self.surface);
+            }
+            return Ok(());
         }
 
         let mut render_error: *mut GError = std::ptr::null_mut();

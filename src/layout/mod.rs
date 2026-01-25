@@ -43,6 +43,7 @@ pub fn layout_document(
         image_cache: HashMap::new(),
         list: DisplayList::default(),
         link_regions: Vec::new(),
+        positioned_containing_blocks: Vec::new(),
     };
     engine.layout_document(document)?;
     Ok(LayoutOutput {
@@ -59,9 +60,32 @@ struct LayoutEngine<'a> {
     image_cache: HashMap<String, Rc<Argb32Image>>,
     list: DisplayList,
     link_regions: Vec<LinkHitRegion>,
+    positioned_containing_blocks: Vec<Rect>,
 }
 
 impl LayoutEngine<'_> {
+    fn current_positioned_containing_block(&self) -> Rect {
+        self.positioned_containing_blocks
+            .last()
+            .copied()
+            .unwrap_or(Rect {
+                x: 0,
+                y: 0,
+                width: self.viewport.width_px.max(0),
+                height: self.viewport.height_px.max(0),
+            })
+    }
+
+    fn push_positioned_containing_block(&mut self, border_box: Rect, border: Edges) {
+        let height = if border_box.height > 0 {
+            border_box.height
+        } else {
+            self.viewport.height_px.max(0)
+        };
+        let padding_box = Rect { height, ..border_box }.inset(border);
+        self.positioned_containing_blocks.push(padding_box);
+    }
+
     fn load_image(&mut self, src: &str) -> Result<Option<Rc<Argb32Image>>, String> {
         let src = src.trim();
         if src.is_empty() {
@@ -126,9 +150,13 @@ impl LayoutEngine<'_> {
         let root_style = ComputedStyle::root_defaults();
         let mut ancestors = Vec::new();
 
-        let style = self
-            .styles
-            .compute_style(root, &root_style, &ancestors);
+        let style = self.styles.compute_style_in_viewport(
+            root,
+            &root_style,
+            &ancestors,
+            self.viewport.width_px,
+            self.viewport.height_px,
+        );
 
         let rect = Rect {
             x: 0,
@@ -136,7 +164,16 @@ impl LayoutEngine<'_> {
             width: self.viewport.width_px.max(0),
             height: self.viewport.height_px.max(0),
         };
-        if let Some(color) = resolve_canvas_background(document, self.styles, &root_style, &style) {
+        self.positioned_containing_blocks.clear();
+        self.positioned_containing_blocks.push(rect);
+        if let Some(color) = resolve_canvas_background(
+            document,
+            self.styles,
+            &root_style,
+            &style,
+            self.viewport.width_px,
+            self.viewport.height_px,
+        ) {
             self.list.commands.push(DisplayCommand::Rect(DrawRect {
                 x_px: rect.x,
                 y_px: rect.y,
@@ -268,6 +305,11 @@ impl LayoutEngine<'_> {
                 )
                 .max(0)
         } else {
+            let mut pushed_positioning = false;
+            if style.position != Position::Static {
+                self.push_positioned_containing_block(border_box, border);
+                pushed_positioning = true;
+            }
             ancestors.push(element);
             let content_height = match style.display {
                 Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
@@ -276,6 +318,9 @@ impl LayoutEngine<'_> {
                 _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
             };
             ancestors.pop();
+            if pushed_positioning {
+                let _ = self.positioned_containing_blocks.pop();
+            }
             content_height
         };
 
@@ -392,7 +437,7 @@ impl LayoutEngine<'_> {
                 .saturating_sub(margin.left.saturating_add(margin.right))
                 .max(0)
         } else {
-            containing.width
+            flex::measure_element_max_content_width(self, element, style, ancestors, containing.width)?
         };
         if let Some(min_width) = style.min_width_px {
             used_width = used_width.max(min_width);
@@ -473,6 +518,11 @@ impl LayoutEngine<'_> {
                 )
                 .max(0)
         } else {
+            let mut pushed_positioning = false;
+            if style.position != Position::Static {
+                self.push_positioned_containing_block(border_box, border);
+                pushed_positioning = true;
+            }
             ancestors.push(element);
             let content_height = match style.display {
                 Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
@@ -481,6 +531,9 @@ impl LayoutEngine<'_> {
                 _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
             };
             ancestors.pop();
+            if pushed_positioning {
+                let _ = self.positioned_containing_blocks.pop();
+            }
             content_height
         };
 
@@ -552,7 +605,13 @@ impl LayoutEngine<'_> {
             match child {
                 Node::Text(_) => inline_nodes.push(child),
                 Node::Element(el) => {
-                    let style = self.styles.compute_style(el, parent_style, ancestors);
+                    let style = self.styles.compute_style_in_viewport(
+                        el,
+                        parent_style,
+                        ancestors,
+                        self.viewport.width_px,
+                        self.viewport.height_px,
+                    );
                     if style.display == Display::None {
                         continue;
                     }
@@ -572,11 +631,12 @@ impl LayoutEngine<'_> {
                             inline_nodes.clear();
                         }
 
+                        let containing = self.current_positioned_containing_block();
                         self.layout_positioned_box(
                             el,
                             &style,
                             ancestors,
-                            content_box,
+                            containing,
                             paint,
                         )?;
                         continue;
@@ -761,9 +821,17 @@ fn resolve_canvas_background(
     styles: &StyleComputer,
     root_style: &ComputedStyle,
     body_style: &ComputedStyle,
+    viewport_width_px: i32,
+    viewport_height_px: i32,
 ) -> Option<crate::geom::Color> {
     if let Some(html) = document.find_first_element_by_name("html") {
-        let html_style = styles.compute_style(html, root_style, &[]);
+        let html_style = styles.compute_style_in_viewport(
+            html,
+            root_style,
+            &[],
+            viewport_width_px,
+            viewport_height_px,
+        );
         if html_style.background_color.is_some() {
             return html_style.background_color;
         }

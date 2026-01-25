@@ -166,7 +166,13 @@ fn collect_tokens<'doc>(
             Ok(())
         }
         Node::Element(el) => {
-            let style = engine.styles.compute_style(el, parent_style, ancestors);
+            let style = engine.styles.compute_style_in_viewport(
+                el,
+                parent_style,
+                ancestors,
+                engine.viewport.width_px,
+                engine.viewport.height_px,
+            );
             if style.display == Display::None {
                 return Ok(());
             }
