@@ -1,6 +1,7 @@
 use crate::app::TickResult;
 use crate::dom::Document;
 use crate::render::{DisplayCommand, DisplayList, LinkHitRegion, Painter, Viewport};
+use crate::resources::{NoResources, PageResources, ResourceLoader};
 use crate::style::StyleComputer;
 use crate::url::Url;
 
@@ -137,8 +138,19 @@ impl BrowserApp {
             .as_ref()
             .is_some_and(|cached| cached.viewport == viewport)
         {
+            let resources = match &self.base {
+                Some(PageBase::Url(url)) => Some(PageResources::from_url(url.clone())),
+                Some(PageBase::FileDir(dir)) => Some(PageResources::from_file_dir(dir.clone())),
+                None => None,
+            };
+            let no_resources = NoResources;
+            let resources: &dyn ResourceLoader = resources
+                .as_ref()
+                .map(|resources| resources as &dyn ResourceLoader)
+                .unwrap_or(&no_resources);
+
             let output =
-                crate::layout::layout_document(&self.document, &self.styles, painter, viewport)?;
+                crate::layout::layout_document(&self.document, &self.styles, painter, viewport, resources)?;
             self.cached_layout = Some(CachedLayout {
                 viewport,
                 display_list: output.display_list,
@@ -158,9 +170,44 @@ impl BrowserApp {
                         rect.height_px,
                         rect.color,
                     )?,
+                    DisplayCommand::PushOpacity(opacity) => painter.push_opacity(*opacity)?,
+                    DisplayCommand::PopOpacity(opacity) => painter.pop_opacity(*opacity)?,
+                    DisplayCommand::RoundedRect(rect) => painter.fill_rounded_rect(
+                        rect.x_px,
+                        rect.y_px,
+                        rect.width_px,
+                        rect.height_px,
+                        rect.radius_px,
+                        rect.color,
+                    )?,
+                    DisplayCommand::RoundedRectBorder(rect) => painter.stroke_rounded_rect(
+                        rect.x_px,
+                        rect.y_px,
+                        rect.width_px,
+                        rect.height_px,
+                        rect.radius_px,
+                        rect.border_width_px,
+                        rect.color,
+                    )?,
                     DisplayCommand::Text(text) => {
                         painter.draw_text(text.x_px, text.y_px, &text.text, text.style)?;
                     }
+                    DisplayCommand::Image(image) => painter.draw_image(
+                        image.x_px,
+                        image.y_px,
+                        image.width_px,
+                        image.height_px,
+                        image.image.as_ref(),
+                        image.opacity,
+                    )?,
+                    DisplayCommand::Svg(svg) => painter.draw_svg(
+                        svg.x_px,
+                        svg.y_px,
+                        svg.width_px,
+                        svg.height_px,
+                        svg.svg_xml.as_ref(),
+                        svg.opacity,
+                    )?,
                 }
             }
         }

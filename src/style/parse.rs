@@ -45,7 +45,22 @@ fn parse_rgb_function(value: &str) -> Option<Color> {
     let r = parse_channel(parts[0])?;
     let g = parse_channel(parts[1])?;
     let b = parse_channel(parts[2])?;
-    Some(Color { r, g, b })
+
+    let a = if name == "rgba" {
+        parse_alpha_channel(parts[3])?
+    } else {
+        255
+    };
+
+    Some(Color { r, g, b, a })
+}
+
+fn parse_alpha_channel(input: &str) -> Option<u8> {
+    let number: f32 = input.trim().parse().ok()?;
+    if number <= 1.0 {
+        return Some((number.clamp(0.0, 1.0) * 255.0).round() as u8);
+    }
+    Some(number.round().clamp(0.0, 255.0) as u8)
 }
 
 pub(super) fn parse_css_length_px(value: &str) -> Option<i32> {

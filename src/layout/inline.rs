@@ -1,17 +1,30 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
-use crate::render::{DisplayCommand, DrawRect, DrawText, FontMetricsPx, LinkHitRegion, TextStyle};
+use crate::render::{
+    DisplayCommand, DrawImage, DrawRect, DrawRoundedRect, DrawSvg, DrawText, FontMetricsPx,
+    LinkHitRegion, TextStyle,
+};
 use crate::style::{ComputedStyle, Display, TextAlign, Visibility};
 use std::rc::Rc;
 
 use super::LayoutEngine;
 
 #[derive(Clone, Debug)]
-enum InlineToken {
+enum InlineToken<'doc> {
     Word(String, TextStyle, bool, Option<Rc<str>>),
     Space(TextStyle, bool, Option<Rc<str>>),
     Newline,
-    Box(Size, bool),
+    Spacer(Size),
+    ElementBox(InlineElementBox<'doc>),
+}
+
+#[derive(Clone, Debug)]
+struct InlineElementBox<'doc> {
+    element: &'doc Element,
+    style: ComputedStyle,
+    size: Size,
+    visible: bool,
+    link_href: Option<Rc<str>>,
 }
 
 pub(super) fn layout_inline_nodes<'doc>(
@@ -58,10 +71,11 @@ pub(super) fn layout_inline_nodes_with_link<'doc>(
             link_href.clone(),
             &mut cursor,
             &mut tokens,
-        );
+            content_box.width,
+        )?;
     }
 
-    layout_tokens(engine, &tokens, parent_style, content_box, start_y, paint)
+    layout_tokens(engine, &tokens, parent_style, ancestors, content_box, start_y, paint)
 }
 
 pub(super) fn measure_inline_nodes<'doc>(
@@ -84,7 +98,8 @@ pub(super) fn measure_inline_nodes<'doc>(
             None,
             &mut cursor,
             &mut tokens,
-        );
+            max_width,
+        )?;
     }
 
     measure_tokens(engine, &tokens, parent_style, max_width)
@@ -115,7 +130,7 @@ impl InlineCursor {
         self.pending_space = None;
     }
 
-    fn flush_pending_space(&mut self, out: &mut Vec<InlineToken>) {
+    fn flush_pending_space<'doc>(&mut self, out: &mut Vec<InlineToken<'doc>>) {
         let Some(space) = self.pending_space.take() else {
             return;
         };
@@ -134,8 +149,9 @@ fn collect_tokens<'doc>(
     paint: bool,
     link_href: Option<Rc<str>>,
     cursor: &mut InlineCursor,
-    out: &mut Vec<InlineToken>,
-) {
+    out: &mut Vec<InlineToken<'doc>>,
+    max_width: i32,
+) -> Result<(), String> {
     match node {
         Node::Text(text) => {
             let visible = paint && parent_style.visibility == Visibility::Visible;
@@ -146,27 +162,34 @@ fn collect_tokens<'doc>(
                 link_href,
                 cursor,
                 out,
-            )
+            );
+            Ok(())
         }
         Node::Element(el) => {
             let style = engine.styles.compute_style(el, parent_style, ancestors);
             if style.display == Display::None {
-                return;
+                return Ok(());
             }
 
             if el.name == "br" {
                 out.push(InlineToken::Newline);
                 cursor.clear_pending_space();
-                return;
+                return Ok(());
             }
 
             let link_href = anchor_href(el).or(link_href);
             let paint = paint && style.visibility == Visibility::Visible;
             if is_replaced_element(el) {
                 cursor.flush_pending_space(out);
-                let size = inline_box_size(&style);
-                out.push(InlineToken::Box(size, paint));
-                return;
+                let size = measure_replaced_element_outer_size(el, &style, max_width)?;
+                out.push(InlineToken::ElementBox(InlineElementBox {
+                    element: el,
+                    style,
+                    size,
+                    visible: paint,
+                    link_href,
+                }));
+                return Ok(());
             }
             let display = style.display;
             ancestors.push(el);
@@ -183,17 +206,25 @@ fn collect_tokens<'doc>(
                             link_href.clone(),
                             cursor,
                             out,
-                        );
+                            max_width,
+                        )?;
                     }
                     push_inline_spacing(out, style.margin.right.saturating_add(style.padding.right));
                 }
                 _ => {
                     cursor.flush_pending_space(out);
-                    let size = inline_box_size(&style);
-                    out.push(InlineToken::Box(size, paint));
+                    let size = measure_inline_element_outer_size(engine, el, &style, ancestors, max_width)?;
+                    out.push(InlineToken::ElementBox(InlineElementBox {
+                        element: el,
+                        style,
+                        size,
+                        visible: paint,
+                        link_href,
+                    }));
                 }
             }
             ancestors.pop();
+            Ok(())
         }
     }
 }
@@ -210,45 +241,268 @@ fn anchor_href(element: &Element) -> Option<Rc<str>> {
 }
 
 pub(super) fn is_replaced_element(element: &Element) -> bool {
-    matches!(element.name.as_str(), "img" | "input")
+    matches!(element.name.as_str(), "img" | "input" | "svg")
 }
 
-fn push_inline_spacing(out: &mut Vec<InlineToken>, width: i32) {
+fn push_inline_spacing<'doc>(out: &mut Vec<InlineToken<'doc>>, width: i32) {
     let width = width.max(0);
     if width == 0 {
         return;
     }
-    out.push(InlineToken::Box(
-        Size { width, height: 0 },
-        false,
-    ));
+    out.push(InlineToken::Spacer(Size { width, height: 0 }));
 }
 
-fn inline_box_size(style: &ComputedStyle) -> Size {
-    let width = style
+fn measure_inline_element_outer_size<'doc>(
+    engine: &LayoutEngine<'_>,
+    element: &'doc Element,
+    style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
+    max_width: i32,
+) -> Result<Size, String> {
+    let max_width = max_width.max(0);
+    let margin = style.margin;
+    let available_border_width = max_width
+        .saturating_sub(margin.left.saturating_add(margin.right))
+        .max(0);
+
+    let inset = super::add_edges(style.border_width, style.padding);
+    let horizontal_inset = inset.left.saturating_add(inset.right);
+    let vertical_inset = inset.top.saturating_add(inset.bottom);
+
+    let mut border_width = if let Some(width) = style.width_px {
+        width.max(0)
+    } else {
+        let available_content_width = available_border_width.saturating_sub(horizontal_inset).max(0);
+        let nodes: Vec<&Node> = element.children.iter().collect();
+        let content_size = measure_inline_nodes(engine, &nodes, style, ancestors, available_content_width)?;
+        content_size.width.saturating_add(horizontal_inset)
+    };
+
+    if let Some(min_width) = style.min_width_px {
+        border_width = border_width.max(min_width.max(0));
+    }
+    if let Some(max_width) = style.max_width_px {
+        border_width = border_width.min(max_width.max(0));
+    }
+    border_width = border_width.min(available_border_width).max(0);
+
+    let mut border_height = if let Some(height) = style.height_px {
+        height.max(0)
+    } else {
+        let available_content_width = border_width.saturating_sub(horizontal_inset).max(0);
+        let nodes: Vec<&Node> = element.children.iter().collect();
+        let content_size = measure_inline_nodes(engine, &nodes, style, ancestors, available_content_width)?;
+        content_size.height.saturating_add(vertical_inset)
+    };
+
+    if let Some(min_height) = style.min_height_px {
+        border_height = border_height.max(min_height.max(0));
+    }
+
+    Ok(Size {
+        width: margin
+            .left
+            .saturating_add(border_width)
+            .saturating_add(margin.right),
+        height: margin
+            .top
+            .saturating_add(border_height)
+            .saturating_add(margin.bottom),
+    })
+}
+
+pub(super) fn measure_replaced_element_outer_size(
+    element: &Element,
+    style: &ComputedStyle,
+    max_width: i32,
+) -> Result<Size, String> {
+    let max_width = max_width.max(0);
+    let margin = style.margin;
+    let available_border_width = max_width
+        .saturating_sub(margin.left.saturating_add(margin.right))
+        .max(0);
+
+    let inset = super::add_edges(style.border_width, style.padding);
+    let horizontal_inset = inset.left.saturating_add(inset.right);
+    let vertical_inset = inset.top.saturating_add(inset.bottom);
+
+    let mut content_width = style
         .width_px
-        .unwrap_or(0)
-        .saturating_add(style.margin.left)
-        .saturating_add(style.margin.right)
-        .saturating_add(style.padding.left)
-        .saturating_add(style.padding.right);
-    let height = style
+        .map(|width| width.max(0).saturating_sub(horizontal_inset).max(0));
+    let mut content_height = style
         .height_px
-        .unwrap_or(0)
-        .saturating_add(style.margin.top)
-        .saturating_add(style.margin.bottom)
-        .saturating_add(style.padding.top)
-        .saturating_add(style.padding.bottom);
-    Size { width, height }
+        .map(|height| height.max(0).saturating_sub(vertical_inset).max(0));
+
+    let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(element);
+    let ratio = intrinsic_aspect_ratio(element, intrinsic_width, intrinsic_height);
+
+    match (content_width, content_height) {
+        (Some(_), Some(_)) => {}
+        (Some(width), None) => {
+            if let Some(ratio) = ratio {
+                content_height = Some(((width as f32) / ratio).round() as i32);
+            } else {
+                content_height = intrinsic_height;
+            }
+        }
+        (None, Some(height)) => {
+            if let Some(ratio) = ratio {
+                content_width = Some(((height as f32) * ratio).round() as i32);
+            } else {
+                content_width = intrinsic_width;
+            }
+        }
+        (None, None) => {
+            content_width = intrinsic_width;
+            content_height = intrinsic_height;
+        }
+    }
+
+    let mut border_width = content_width.unwrap_or(0).max(0).saturating_add(horizontal_inset);
+    let mut border_height = content_height.unwrap_or(0).max(0).saturating_add(vertical_inset);
+
+    if let Some(min_width) = style.min_width_px {
+        border_width = border_width.max(min_width.max(0));
+    }
+    if let Some(max_width) = style.max_width_px {
+        border_width = border_width.min(max_width.max(0));
+    }
+    border_width = border_width.min(available_border_width).max(0);
+
+    if let Some(min_height) = style.min_height_px {
+        border_height = border_height.max(min_height.max(0));
+    }
+
+    Ok(Size {
+        width: margin
+            .left
+            .saturating_add(border_width)
+            .saturating_add(margin.right),
+        height: margin
+            .top
+            .saturating_add(border_height)
+            .saturating_add(margin.bottom),
+    })
 }
 
-fn push_text(
+fn intrinsic_dimensions(element: &Element) -> (Option<i32>, Option<i32>) {
+    if element.name == "svg" {
+        if let Some((w, h)) = parse_svg_viewbox_dimensions(element.attributes.get("viewbox")) {
+            return (Some(w.round() as i32), Some(h.round() as i32));
+        }
+    }
+
+    let width = element
+        .attributes
+        .get("width")
+        .and_then(|value| parse_number(value))
+        .and_then(|value| i32::try_from(value.round() as i64).ok())
+        .filter(|value| *value > 0);
+    let height = element
+        .attributes
+        .get("height")
+        .and_then(|value| parse_number(value))
+        .and_then(|value| i32::try_from(value.round() as i64).ok())
+        .filter(|value| *value > 0);
+    (width, height)
+}
+
+fn intrinsic_aspect_ratio(
+    element: &Element,
+    intrinsic_width: Option<i32>,
+    intrinsic_height: Option<i32>,
+) -> Option<f32> {
+    if element.name == "svg" {
+        if let Some((w, h)) = parse_svg_viewbox_dimensions(element.attributes.get("viewbox")) {
+            if h > 0.0 {
+                return Some(w / h);
+            }
+        }
+    }
+
+    let w = intrinsic_width? as f32;
+    let h = intrinsic_height? as f32;
+    if h <= 0.0 {
+        return None;
+    }
+    Some(w / h)
+}
+
+fn parse_number(value: &str) -> Option<f32> {
+    value.trim().parse::<f32>().ok()
+}
+
+fn parse_svg_viewbox_dimensions(view_box: Option<&str>) -> Option<(f32, f32)> {
+    let view_box = view_box?.trim();
+    if view_box.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = view_box
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() != 4 {
+        return None;
+    }
+
+    let width = parse_number(parts[2])?;
+    let height = parse_number(parts[3])?;
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some((width, height))
+}
+
+fn serialize_element_xml(element: &Element) -> String {
+    let mut out = String::new();
+    write_element_xml(element, &mut out);
+    out
+}
+
+fn write_element_xml(element: &Element, out: &mut String) {
+    out.push('<');
+    out.push_str(&element.name);
+
+    for (name, value) in element.attributes.to_serialized_pairs() {
+        out.push(' ');
+        out.push_str(&name);
+        out.push_str("=\"");
+        write_xml_escaped(&value, out, true);
+        out.push('"');
+    }
+
+    out.push('>');
+    for child in &element.children {
+        match child {
+            Node::Text(text) => write_xml_escaped(text, out, false),
+            Node::Element(child) => write_element_xml(child, out),
+        }
+    }
+    out.push_str("</");
+    out.push_str(&element.name);
+    out.push('>');
+}
+
+fn write_xml_escaped(value: &str, out: &mut String, for_attribute: bool) {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' if for_attribute => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
+fn push_text<'doc>(
     text: &str,
     style: TextStyle,
     visible: bool,
     link_href: Option<Rc<str>>,
     cursor: &mut InlineCursor,
-    out: &mut Vec<InlineToken>,
+    out: &mut Vec<InlineToken<'doc>>,
 ) {
     let mut iter = text.chars().peekable();
     while let Some(ch) = iter.next() {
@@ -272,15 +526,16 @@ fn push_text(
     }
 }
 
-fn layout_tokens(
+fn layout_tokens<'doc>(
     engine: &mut LayoutEngine<'_>,
-    tokens: &[InlineToken],
+    tokens: &[InlineToken<'doc>],
     parent_style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
     content_box: Rect,
     start_y: i32,
     paint: bool,
 ) -> Result<i32, String> {
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line<'doc>> = Vec::new();
     let base_style = engine.text_style_for(parent_style);
     let base_metrics = engine.measurer.font_metrics_px(base_style);
     let mut line = Line::new(parent_style.line_height_px, base_metrics);
@@ -338,16 +593,20 @@ fn layout_tokens(
                 ));
                 x_px = x_px.saturating_add(word_width_px);
             }
-            InlineToken::Box(size, visible) => {
-                if x_px != 0 && x_px.saturating_add(size.width) > content_box.width {
+            InlineToken::Spacer(size) => {
+                line.push(Fragment::Spacer(*size));
+                x_px = x_px.saturating_add(size.width);
+            }
+            InlineToken::ElementBox(b) => {
+                if x_px != 0 && x_px.saturating_add(b.size.width) > content_box.width {
                     lines.push(std::mem::replace(
                         &mut line,
                         Line::new(parent_style.line_height_px, base_metrics),
                     ));
                     x_px = 0;
                 }
-                line.push(Fragment::Box(*size, *visible));
-                x_px = x_px.saturating_add(size.width);
+                line.push(Fragment::ElementBox(b.clone()));
+                x_px = x_px.saturating_add(b.size.width);
             }
         }
     }
@@ -393,20 +652,146 @@ fn layout_tokens(
                     }
                     x_px = x_px.saturating_add(width);
                 }
-                Fragment::Box(size, visible) => {
-                    if paint && visible {
-                        // draw backgrounds for inline boxes if they have one.
-                        if let Some(color) = parent_style.background_color {
-                            engine.list.commands.push(DisplayCommand::Rect(DrawRect {
-                                x_px,
-                                y_px,
-                                width_px: size.width,
-                                height_px: size.height,
-                                color,
-                            }));
+                Fragment::Spacer(size) => {
+                    x_px = x_px.saturating_add(size.width);
+                }
+                Fragment::ElementBox(element_box) => {
+                    let border_width = element_box
+                        .size
+                        .width
+                        .saturating_sub(
+                            element_box
+                                .style
+                                .margin
+                                .left
+                                .saturating_add(element_box.style.margin.right),
+                        )
+                        .max(0);
+                    let border_height = element_box
+                        .size
+                        .height
+                        .saturating_sub(
+                            element_box
+                                .style
+                                .margin
+                                .top
+                                .saturating_add(element_box.style.margin.bottom),
+                        )
+                        .max(0);
+                    let border_box = Rect {
+                        x: x_px.saturating_add(element_box.style.margin.left),
+                        y: y_px.saturating_add(element_box.style.margin.top),
+                        width: border_width,
+                        height: border_height,
+                    };
+
+                    let mut element_paint = paint && element_box.visible;
+                    if element_paint && element_box.style.opacity == 0 {
+                        element_paint = false;
+                    }
+                    let opacity = element_box.style.opacity;
+                    let needs_opacity_group = element_paint && opacity < 255;
+                    if needs_opacity_group {
+                        engine.list.commands.push(DisplayCommand::PushOpacity(opacity));
+                    }
+
+                    if element_paint {
+                        if let Some(color) = element_box.style.background_color {
+                            if element_box.style.border_radius_px > 0 {
+                                engine
+                                    .list
+                                    .commands
+                                    .push(DisplayCommand::RoundedRect(DrawRoundedRect {
+                                        x_px: border_box.x,
+                                        y_px: border_box.y,
+                                        width_px: border_box.width,
+                                        height_px: border_box.height,
+                                        radius_px: element_box.style.border_radius_px,
+                                        color,
+                                    }));
+                            } else {
+                                engine.list.commands.push(DisplayCommand::Rect(DrawRect {
+                                    x_px: border_box.x,
+                                    y_px: border_box.y,
+                                    width_px: border_box.width,
+                                    height_px: border_box.height,
+                                    color,
+                                }));
+                            }
+                        }
+
+                        engine.paint_border(border_box, &element_box.style);
+
+                        if is_replaced_element(element_box.element) {
+                            let content_box = border_box.inset(super::add_edges(
+                                element_box.style.border_width,
+                                element_box.style.padding,
+                            ));
+
+                            if element_box.element.name == "img" {
+                                if let Some(src) = element_box.element.attributes.get("src") {
+                                    if let Some(image) = engine.load_image(src)? {
+                                        if content_box.width > 0 && content_box.height > 0 {
+                                            engine.list.commands.push(DisplayCommand::Image(
+                                                DrawImage {
+                                                    x_px: content_box.x,
+                                                    y_px: content_box.y,
+                                                    width_px: content_box.width,
+                                                    height_px: content_box.height,
+                                                    opacity: 255,
+                                                    image,
+                                                },
+                                            ));
+                                        }
+                                    }
+                                }
+                            } else if element_box.element.name == "svg" {
+                                if content_box.width > 0 && content_box.height > 0 {
+                                    let xml = serialize_element_xml(element_box.element);
+                                    engine.list.commands.push(DisplayCommand::Svg(DrawSvg {
+                                        x_px: content_box.x,
+                                        y_px: content_box.y,
+                                        width_px: content_box.width,
+                                        height_px: content_box.height,
+                                        opacity: 255,
+                                        svg_xml: Rc::from(xml),
+                                    }));
+                                }
+                            }
+                        }
+
+                        if let Some(href) = element_box.link_href.clone() {
+                            engine.link_regions.push(LinkHitRegion {
+                                href,
+                                x_px: border_box.x,
+                                y_px: border_box.y,
+                                width_px: border_box.width,
+                                height_px: border_box.height,
+                            });
                         }
                     }
-                    x_px = x_px.saturating_add(size.width);
+
+                    if !is_replaced_element(element_box.element) {
+                        let content_box = border_box.inset(super::add_edges(
+                            element_box.style.border_width,
+                            element_box.style.padding,
+                        ));
+                        ancestors.push(element_box.element);
+                        engine.layout_flow_children(
+                            &element_box.element.children,
+                            &element_box.style,
+                            ancestors,
+                            content_box,
+                            element_paint,
+                        )?;
+                        ancestors.pop();
+                    }
+
+                    if needs_opacity_group {
+                        engine.list.commands.push(DisplayCommand::PopOpacity(opacity));
+                    }
+
+                    x_px = x_px.saturating_add(element_box.size.width);
                 }
             }
         }
@@ -417,14 +802,14 @@ fn layout_tokens(
     Ok(y_px.saturating_sub(start_y).max(0))
 }
 
-fn measure_tokens(
+fn measure_tokens<'doc>(
     engine: &LayoutEngine<'_>,
-    tokens: &[InlineToken],
+    tokens: &[InlineToken<'doc>],
     parent_style: &ComputedStyle,
     max_width: i32,
 ) -> Result<Size, String> {
     let max_width = max_width.max(0);
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line<'doc>> = Vec::new();
     let base_style = engine.text_style_for(parent_style);
     let base_metrics = engine.measurer.font_metrics_px(base_style);
     let mut line = Line::new(parent_style.line_height_px, base_metrics);
@@ -482,16 +867,20 @@ fn measure_tokens(
                 ));
                 x_px = x_px.saturating_add(word_width_px);
             }
-            InlineToken::Box(size, visible) => {
-                if x_px != 0 && x_px.saturating_add(size.width) > max_width {
+            InlineToken::Spacer(size) => {
+                line.push(Fragment::Spacer(*size));
+                x_px = x_px.saturating_add(size.width);
+            }
+            InlineToken::ElementBox(b) => {
+                if x_px != 0 && x_px.saturating_add(b.size.width) > max_width {
                     lines.push(std::mem::replace(
                         &mut line,
                         Line::new(parent_style.line_height_px, base_metrics),
                     ));
                     x_px = 0;
                 }
-                line.push(Fragment::Box(*size, *visible));
-                x_px = x_px.saturating_add(size.width);
+                line.push(Fragment::ElementBox(b.clone()));
+                x_px = x_px.saturating_add(b.size.width);
             }
         }
     }
@@ -514,13 +903,14 @@ fn measure_tokens(
 }
 
 #[derive(Clone, Debug)]
-enum Fragment {
+enum Fragment<'doc> {
     Text(String, TextStyle, i32, FontMetricsPx, bool, Option<Rc<str>>),
-    Box(Size, bool),
+    Spacer(Size),
+    ElementBox(InlineElementBox<'doc>),
 }
 
-struct Line {
-    fragments: Vec<Fragment>,
+struct Line<'doc> {
+    fragments: Vec<Fragment<'doc>>,
     width_px: i32,
     ascent_px: i32,
     descent_px: i32,
@@ -528,8 +918,8 @@ struct Line {
     explicit_line_height_px: Option<i32>,
 }
 
-impl Line {
-    fn new(explicit_line_height_px: Option<i32>, base_metrics: FontMetricsPx) -> Line {
+impl<'doc> Line<'doc> {
+    fn new(explicit_line_height_px: Option<i32>, base_metrics: FontMetricsPx) -> Line<'doc> {
         let ascent_px = base_metrics.ascent_px.max(1);
         let descent_px = base_metrics.descent_px.max(0);
         let text_height_px = ascent_px.saturating_add(descent_px).max(1);
@@ -547,16 +937,19 @@ impl Line {
         }
     }
 
-    fn push(&mut self, fragment: Fragment) {
+    fn push(&mut self, fragment: Fragment<'doc>) {
         match &fragment {
             Fragment::Text(_, _, width, metrics, _, _) => {
                 self.width_px = self.width_px.saturating_add(*width);
                 self.ascent_px = self.ascent_px.max(metrics.ascent_px.max(1));
                 self.descent_px = self.descent_px.max(metrics.descent_px.max(0));
             }
-            Fragment::Box(size, _) => {
+            Fragment::Spacer(size) => {
                 self.width_px = self.width_px.saturating_add(size.width);
-                self.height_px = self.height_px.max(size.height.max(1));
+            }
+            Fragment::ElementBox(element_box) => {
+                self.width_px = self.width_px.saturating_add(element_box.size.width);
+                self.height_px = self.height_px.max(element_box.size.height.max(1));
             }
         }
         self.recompute_height();

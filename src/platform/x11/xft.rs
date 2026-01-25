@@ -246,13 +246,16 @@ impl XftRenderer {
     }
 
     fn ensure_color(&mut self, color: Color) -> Result<*const XftColor, String> {
-        let key = (u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b);
+        let key = (u32::from(color.r) << 24)
+            | (u32::from(color.g) << 16)
+            | (u32::from(color.b) << 8)
+            | u32::from(color.a);
         if !self.color_cache.contains_key(&key) {
             let render = XRenderColor {
                 red: (c_ushort::from(color.r) << 8) | c_ushort::from(color.r),
                 green: (c_ushort::from(color.g) << 8) | c_ushort::from(color.g),
                 blue: (c_ushort::from(color.b) << 8) | c_ushort::from(color.b),
-                alpha: 0xffff,
+                alpha: (c_ushort::from(color.a) << 8) | c_ushort::from(color.a),
             };
             let mut xft_color = XftColor {
                 pixel: 0,
@@ -315,4 +318,3 @@ fn open_xft_font(display: *mut Display, screen: c_int, key: FontKey) -> Result<*
     }
     Ok(font)
 }
-

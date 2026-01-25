@@ -1,8 +1,9 @@
 use crate::geom::Color;
-use crate::image::RgbImage;
+use crate::image::{Argb32Image, RgbImage};
 use crate::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
 use core::ffi::{c_int, c_uint, c_ulong};
 
+use super::cairo::CairoCanvas;
 use super::xft::XftRenderer;
 use super::xlib::{self, Colormap, Display, Drawable, GC, Pixmap, Visual, Window, ALL_PLANES, IMAGE_FORMAT_Z_PIXMAP};
 
@@ -18,6 +19,8 @@ pub struct X11Painter {
     white_pixel: c_ulong,
     visual_masks: (c_ulong, c_ulong, c_ulong),
     xft: XftRenderer,
+    cairo: CairoCanvas,
+    opacity_depth: usize,
 }
 
 impl X11Painter {
@@ -37,6 +40,13 @@ impl X11Painter {
         screen: c_int,
     ) -> Result<Self, String> {
         let xft = XftRenderer::new(display, visual, colormap, screen, back_buffer)?;
+        let cairo = CairoCanvas::new(
+            display,
+            back_buffer as Drawable,
+            visual,
+            back_buffer_width as i32,
+            back_buffer_height as i32,
+        )?;
         Ok(Self {
             display,
             window,
@@ -49,6 +59,8 @@ impl X11Painter {
             white_pixel,
             visual_masks,
             xft,
+            cairo,
+            opacity_depth: 0,
         })
     }
 
@@ -84,6 +96,8 @@ impl X11Painter {
         }
 
         self.xft.recreate_draw(new_back_buffer as Drawable)?;
+        self.cairo
+            .recreate(new_back_buffer as Drawable, width_i32, height_i32)?;
 
         unsafe {
             xlib::XFreePixmap(self.display, self.back_buffer);
@@ -97,6 +111,7 @@ impl X11Painter {
 
     pub fn destroy_xft_resources(&mut self) {
         self.xft.destroy();
+        self.cairo.destroy();
     }
 
     pub fn back_buffer(&self) -> Pixmap {
@@ -210,6 +225,24 @@ impl Painter for X11Painter {
         )
     }
 
+    fn push_opacity(&mut self, opacity: u8) -> Result<(), String> {
+        if opacity >= 255 {
+            return Ok(());
+        }
+        self.opacity_depth = self.opacity_depth.saturating_add(1);
+        self.cairo.push_group();
+        Ok(())
+    }
+
+    fn pop_opacity(&mut self, opacity: u8) -> Result<(), String> {
+        if self.opacity_depth == 0 {
+            return Err("opacity stack underflow".to_owned());
+        }
+        self.opacity_depth -= 1;
+        self.cairo.pop_group_with_alpha(opacity);
+        Ok(())
+    }
+
     fn fill_rect(
         &mut self,
         x_px: i32,
@@ -219,6 +252,11 @@ impl Painter for X11Painter {
         color: Color,
     ) -> Result<(), String> {
         if width_px <= 0 || height_px <= 0 {
+            return Ok(());
+        }
+
+        if self.opacity_depth > 0 || color.a != 255 {
+            self.cairo.fill_rect(x_px, y_px, width_px, height_px, color);
             return Ok(());
         }
 
@@ -236,6 +274,42 @@ impl Painter for X11Painter {
         Ok(())
     }
 
+    fn fill_rounded_rect(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        radius_px: i32,
+        color: Color,
+    ) -> Result<(), String> {
+        self.cairo
+            .fill_rounded_rect(x_px, y_px, width_px, height_px, radius_px, color);
+        Ok(())
+    }
+
+    fn stroke_rounded_rect(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        radius_px: i32,
+        border_width_px: i32,
+        color: Color,
+    ) -> Result<(), String> {
+        self.cairo.stroke_rounded_rect(
+            x_px,
+            y_px,
+            width_px,
+            height_px,
+            radius_px,
+            border_width_px,
+            color,
+        );
+        Ok(())
+    }
+
     fn draw_text(
         &mut self,
         x_px: i32,
@@ -243,7 +317,11 @@ impl Painter for X11Painter {
         text: &str,
         style: TextStyle,
     ) -> Result<(), String> {
-        self.xft.draw_text(x_px, y_px, text, style)?;
+        if self.opacity_depth == 0 {
+            self.xft.draw_text(x_px, y_px, text, style)?;
+        } else {
+            self.cairo.draw_text(x_px, y_px, text, style)?;
+        }
 
         if style.underline {
             let width_px = self.text_width_px(text, style)?;
@@ -256,6 +334,59 @@ impl Painter for X11Painter {
             )?;
         }
         Ok(())
+    }
+
+    fn draw_image(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        image: &Argb32Image,
+        opacity: u8,
+    ) -> Result<(), String> {
+        if width_px <= 0 || height_px <= 0 {
+            return Ok(());
+        }
+        if opacity == 0 {
+            return Ok(());
+        }
+        if image.width == 0 || image.height == 0 {
+            return Ok(());
+        }
+
+        let mut data = image.data.clone();
+        let surface = self.cairo.create_argb32_surface_for_data(
+            &mut data,
+            image.width as i32,
+            image.height as i32,
+            image.row_stride_bytes() as i32,
+        )?;
+        self.cairo.draw_image_surface(
+            x_px,
+            y_px,
+            width_px,
+            height_px,
+            surface,
+            image.width as i32,
+            image.height as i32,
+            opacity,
+        );
+        self.cairo.destroy_surface(surface);
+        Ok(())
+    }
+
+    fn draw_svg(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        svg_xml: &str,
+        opacity: u8,
+    ) -> Result<(), String> {
+        self.cairo
+            .draw_svg(x_px, y_px, width_px, height_px, svg_xml, opacity)
     }
 
     fn flush(&mut self) -> Result<(), String> {
@@ -322,4 +453,3 @@ fn pack_channel_u8(value: u8, mask: c_ulong) -> c_ulong {
     let scaled = (u64::from(value) * max + 127) / 255;
     ((scaled << shift) & mask_u64) as c_ulong
 }
-

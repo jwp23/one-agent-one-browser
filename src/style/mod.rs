@@ -13,6 +13,7 @@ use parse::{
 pub enum Display {
     Block,
     Inline,
+    InlineBlock,
     Flex,
     Table,
     TableRow,
@@ -45,6 +46,12 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BorderStyle {
+    None,
+    Solid,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +90,7 @@ pub struct ComputedStyle {
     pub right_px: Option<i32>,
     pub bottom_px: Option<i32>,
     pub left_px: Option<i32>,
+    pub opacity: u8,
     pub color: Color,
     pub background_color: Option<Color>,
     pub font_family: FontFamily,
@@ -93,6 +101,10 @@ pub struct ComputedStyle {
     pub line_height_px: Option<i32>,
     pub margin: Edges,
     pub margin_auto: AutoEdges,
+    pub border_width: Edges,
+    pub border_style: BorderStyle,
+    pub border_color: Color,
+    pub border_radius_px: i32,
     pub padding: Edges,
     pub width_px: Option<i32>,
     pub min_width_px: Option<i32>,
@@ -119,6 +131,7 @@ impl ComputedStyle {
             right_px: None,
             bottom_px: None,
             left_px: None,
+            opacity: 255,
             color: Color::BLACK,
             background_color: None,
             font_family: FontFamily::SansSerif,
@@ -129,6 +142,10 @@ impl ComputedStyle {
             line_height_px: None,
             margin: Edges::ZERO,
             margin_auto: AutoEdges::NONE,
+            border_width: Edges::ZERO,
+            border_style: BorderStyle::None,
+            border_color: Color::BLACK,
+            border_radius_px: 0,
             padding: Edges::ZERO,
             width_px: None,
             min_width_px: None,
@@ -155,6 +172,7 @@ impl ComputedStyle {
             right_px: None,
             bottom_px: None,
             left_px: None,
+            opacity: 255,
             color: parent.color,
             background_color: None,
             font_family: parent.font_family,
@@ -165,6 +183,10 @@ impl ComputedStyle {
             line_height_px: parent.line_height_px,
             margin: Edges::ZERO,
             margin_auto: AutoEdges::NONE,
+            border_width: Edges::ZERO,
+            border_style: BorderStyle::None,
+            border_color: parent.color,
+            border_radius_px: 0,
             padding: Edges::ZERO,
             width_px: None,
             min_width_px: None,
@@ -277,6 +299,7 @@ fn default_display_for_element(element: &Element) -> Display {
     match element.name.as_str() {
         "html" | "body" | "div" | "p" | "center" | "header" | "main" | "footer" | "nav"
         | "ul" | "ol" | "li" | "h1" | "h2" | "h3" | "blockquote" | "pre" => Display::Block,
+        "img" | "svg" | "button" | "input" => Display::InlineBlock,
         "br" => Display::Inline,
         _ => Display::Inline,
     }
@@ -321,6 +344,7 @@ struct StyleBuilder {
     right_px: Option<Cascaded<Option<i32>>>,
     bottom_px: Option<Cascaded<Option<i32>>>,
     left_px: Option<Cascaded<Option<i32>>>,
+    opacity: Option<Cascaded<u8>>,
     color: Option<Cascaded<Color>>,
     background_color: Option<Cascaded<Option<Color>>>,
     font_family: Option<Cascaded<FontFamily>>,
@@ -331,6 +355,10 @@ struct StyleBuilder {
     line_height_px: Option<Cascaded<Option<i32>>>,
     margin: Option<Cascaded<Edges>>,
     margin_auto: Option<Cascaded<AutoEdges>>,
+    border_width: Option<Cascaded<Edges>>,
+    border_style: Option<Cascaded<BorderStyle>>,
+    border_color: Option<Cascaded<Color>>,
+    border_radius_px: Option<Cascaded<i32>>,
     padding: Option<Cascaded<Edges>>,
     width_px: Option<Cascaded<Option<i32>>>,
     min_width_px: Option<Cascaded<Option<i32>>>,
@@ -358,6 +386,7 @@ impl StyleBuilder {
             right_px: None,
             bottom_px: None,
             left_px: None,
+            opacity: None,
             color: None,
             background_color: None,
             font_family: None,
@@ -368,6 +397,10 @@ impl StyleBuilder {
             line_height_px: None,
             margin: None,
             margin_auto: None,
+            border_width: None,
+            border_style: None,
+            border_color: None,
+            border_radius_px: None,
             padding: None,
             width_px: None,
             min_width_px: None,
@@ -406,6 +439,7 @@ impl StyleBuilder {
                 .map(|v| v.value)
                 .unwrap_or(self.base.bottom_px),
             left_px: self.left_px.map(|v| v.value).unwrap_or(self.base.left_px),
+            opacity: self.opacity.map(|v| v.value).unwrap_or(self.base.opacity),
             color: self.color.map(|v| v.value).unwrap_or(self.base.color),
             background_color: self
                 .background_color
@@ -437,6 +471,22 @@ impl StyleBuilder {
                 .margin_auto
                 .map(|v| v.value)
                 .unwrap_or(self.base.margin_auto),
+            border_width: self
+                .border_width
+                .map(|v| v.value)
+                .unwrap_or(self.base.border_width),
+            border_style: self
+                .border_style
+                .map(|v| v.value)
+                .unwrap_or(self.base.border_style),
+            border_color: self
+                .border_color
+                .map(|v| v.value)
+                .unwrap_or(self.base.border_color),
+            border_radius_px: self
+                .border_radius_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.border_radius_px),
             padding: self.padding.map(|v| v.value).unwrap_or(self.base.padding),
             width_px: self.width_px.map(|v| v.value).unwrap_or(self.base.width_px),
             min_width_px: self
@@ -619,6 +669,10 @@ impl StyleBuilder {
         apply_cascade(&mut self.left_px, value, priority);
     }
 
+    fn apply_opacity(&mut self, value: u8, priority: CascadePriority) {
+        apply_cascade(&mut self.opacity, value, priority);
+    }
+
     fn apply_color(&mut self, value: Color, priority: CascadePriority) {
         apply_cascade(&mut self.color, value, priority);
     }
@@ -657,6 +711,22 @@ impl StyleBuilder {
 
     fn apply_margin_auto(&mut self, value: AutoEdges, priority: CascadePriority) {
         apply_cascade(&mut self.margin_auto, value, priority);
+    }
+
+    fn apply_border_width(&mut self, value: Edges, priority: CascadePriority) {
+        apply_cascade(&mut self.border_width, value, priority);
+    }
+
+    fn apply_border_style(&mut self, value: BorderStyle, priority: CascadePriority) {
+        apply_cascade(&mut self.border_style, value, priority);
+    }
+
+    fn apply_border_color(&mut self, value: Color, priority: CascadePriority) {
+        apply_cascade(&mut self.border_color, value, priority);
+    }
+
+    fn apply_border_radius_px(&mut self, value: i32, priority: CascadePriority) {
+        apply_cascade(&mut self.border_radius_px, value, priority);
     }
 
     fn apply_padding(&mut self, value: Edges, priority: CascadePriority) {
@@ -745,6 +815,18 @@ impl StyleBuilder {
             .map(|v| v.value)
             .unwrap_or(self.base.padding);
         self.apply_padding(update(current), priority);
+    }
+
+    fn apply_border_width_component<F>(&mut self, update: F, priority: CascadePriority)
+    where
+        F: FnOnce(Edges) -> Edges,
+    {
+        let current = self
+            .border_width
+            .as_ref()
+            .map(|v| v.value)
+            .unwrap_or(self.base.border_width);
+        self.apply_border_width(update(current), priority);
     }
 
     fn current_font_size_px(&self) -> i32 {

@@ -51,6 +51,21 @@ impl Attributes {
     pub fn has_class(&self, class: &str) -> bool {
         self.classes.iter().any(|c| c == class)
     }
+
+    pub fn to_serialized_pairs(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Some(id) = &self.id {
+            out.push(("id".to_owned(), id.clone()));
+        }
+        if !self.classes.is_empty() {
+            out.push(("class".to_owned(), self.classes.join(" ")));
+        }
+        if let Some(style) = &self.style {
+            out.push(("style".to_owned(), style.clone()));
+        }
+        out.extend(self.others.iter().cloned());
+        out
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

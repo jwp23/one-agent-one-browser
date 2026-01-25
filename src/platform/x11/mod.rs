@@ -1,3 +1,4 @@
+mod cairo;
 mod painter;
 mod xft;
 mod xlib;

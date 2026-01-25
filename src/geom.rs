@@ -3,14 +3,21 @@ pub struct Color {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+    pub a: u8,
 }
 
 impl Color {
-    pub const BLACK: Color = Color { r: 0, g: 0, b: 0 };
+    pub const BLACK: Color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
     pub const WHITE: Color = Color {
         r: 255,
         g: 255,
         b: 255,
+        a: 255,
     };
 
     pub fn from_css_hex(input: &str) -> Option<Color> {
@@ -20,14 +27,14 @@ impl Color {
                 let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
                 let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
                 let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                Some(Color { r, g, b })
+                Some(Color { r, g, b, a: 255 })
             }
             3 => {
                 let bytes = hex.as_bytes();
                 let r = parse_hex_nibble(bytes[0])? * 17;
                 let g = parse_hex_nibble(bytes[1])? * 17;
                 let b = parse_hex_nibble(bytes[2])? * 17;
-                Some(Color { r, g, b })
+                Some(Color { r, g, b, a: 255 })
             }
             _ => None,
         }

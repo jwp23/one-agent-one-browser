@@ -5,8 +5,8 @@ use super::parse::{
     parse_css_length_px,
 };
 use super::{
-    AutoEdges, CascadePriority, Display, FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap,
-    FontFamily, Position, StyleBuilder, TextAlign, Visibility,
+    AutoEdges, BorderStyle, CascadePriority, Display, FlexAlignItems, FlexDirection,
+    FlexJustifyContent, FlexWrap, FontFamily, Position, StyleBuilder, TextAlign, Visibility,
 };
 
 pub(super) fn apply_declaration(
@@ -23,6 +23,8 @@ pub(super) fn apply_declaration(
                 builder.apply_display(Display::Block, priority);
             } else if value.eq_ignore_ascii_case("inline") {
                 builder.apply_display(Display::Inline, priority);
+            } else if value.eq_ignore_ascii_case("inline-block") {
+                builder.apply_display(Display::InlineBlock, priority);
             } else if value.eq_ignore_ascii_case("flex") {
                 builder.apply_display(Display::Flex, priority);
             }
@@ -92,6 +94,11 @@ pub(super) fn apply_declaration(
                 builder.apply_background_color(Some(color), priority);
             } else if value.eq_ignore_ascii_case("transparent") {
                 builder.apply_background_color(None, priority);
+            }
+        }
+        "opacity" => {
+            if let Some(opacity) = parse_css_opacity_u8(value) {
+                builder.apply_opacity(opacity, priority);
             }
         }
         "font-family" => {
@@ -166,6 +173,60 @@ pub(super) fn apply_declaration(
                 builder.apply_padding_component(|e| Edges { bottom: px, ..e }, priority);
             }
         }
+        "border" => {
+            if let Some(border) = parse_border_shorthand(value) {
+                if let Some(width) = border.width_px {
+                    builder.apply_border_width(all_edges(width), priority);
+                }
+                if let Some(style) = border.style {
+                    builder.apply_border_style(style, priority);
+                }
+                if let Some(color) = border.color {
+                    builder.apply_border_color(color, priority);
+                }
+            }
+        }
+        "border-width" => {
+            if let Some(edges) = parse_css_box_edges(value) {
+                builder.apply_border_width(edges, priority);
+            }
+        }
+        "border-style" => {
+            let style = match value.trim().to_ascii_lowercase().as_str() {
+                "none" => Some(BorderStyle::None),
+                "solid" => Some(BorderStyle::Solid),
+                _ => None,
+            };
+            if let Some(style) = style {
+                builder.apply_border_style(style, priority);
+            }
+        }
+        "border-color" => {
+            if let Some(color) = value
+                .split_whitespace()
+                .find_map(parse_css_color)
+            {
+                builder.apply_border_color(color, priority);
+            }
+        }
+        "border-bottom" => {
+            if let Some(border) = parse_border_shorthand(value) {
+                if let Some(width) = border.width_px {
+                    builder.apply_border_width_component(|e| Edges { bottom: width, ..e }, priority);
+                }
+                if let Some(style) = border.style {
+                    builder.apply_border_style(style, priority);
+                }
+                if let Some(color) = border.color {
+                    builder.apply_border_color(color, priority);
+                }
+            }
+        }
+        "border-radius" => {
+            if let Some(px) = parse_css_border_radius_px(value) {
+                builder.apply_border_radius_px(px.max(0), priority);
+            }
+        }
         "margin" => {
             if let Some((edges, auto)) = parse_css_box_edges_with_auto(value) {
                 builder.apply_margin(edges, priority);
@@ -199,7 +260,9 @@ pub(super) fn apply_declaration(
             }
         }
         "width" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if value.trim().eq_ignore_ascii_case("auto") {
+                builder.apply_width(None, priority);
+            } else if let Some(px) = parse_css_length_px(value) {
                 builder.apply_width(Some(px), priority);
             }
         }
@@ -214,7 +277,9 @@ pub(super) fn apply_declaration(
             }
         }
         "height" => {
-            if let Some(px) = parse_css_length_px(value) {
+            if value.trim().eq_ignore_ascii_case("auto") {
+                builder.apply_height(None, priority);
+            } else if let Some(px) = parse_css_length_px(value) {
                 builder.apply_height(Some(px), priority);
             }
         }
@@ -300,3 +365,88 @@ pub(super) fn apply_declaration(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ParsedBorder {
+    width_px: Option<i32>,
+    style: Option<BorderStyle>,
+    color: Option<crate::geom::Color>,
+}
+
+fn parse_border_shorthand(value: &str) -> Option<ParsedBorder> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let mut width_px = None;
+    let mut style = None;
+    let mut color = None;
+
+    for token in value.split_whitespace() {
+        if width_px.is_none() {
+            if let Some(px) = parse_css_length_px(token) {
+                width_px = Some(px.max(0));
+                continue;
+            }
+        }
+
+        if style.is_none() {
+            let parsed = match token.to_ascii_lowercase().as_str() {
+                "none" => Some(BorderStyle::None),
+                "solid" => Some(BorderStyle::Solid),
+                _ => None,
+            };
+            if parsed.is_some() {
+                style = parsed;
+                continue;
+            }
+        }
+
+        if color.is_none() {
+            if let Some(parsed) = parse_css_color(token) {
+                color = Some(parsed);
+                continue;
+            }
+        }
+    }
+
+    if width_px.is_none() && style.is_none() && color.is_none() {
+        return None;
+    }
+
+    Some(ParsedBorder {
+        width_px,
+        style,
+        color,
+    })
+}
+
+fn all_edges(px: i32) -> Edges {
+    let px = px.max(0);
+    Edges {
+        top: px,
+        right: px,
+        bottom: px,
+        left: px,
+    }
+}
+
+fn parse_css_border_radius_px(value: &str) -> Option<i32> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let first = value.split('/').next().unwrap_or(value);
+    let first = first.split_whitespace().next().unwrap_or(first);
+    parse_css_length_px(first)
+}
+
+fn parse_css_opacity_u8(value: &str) -> Option<u8> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let number: f32 = value.parse().ok()?;
+    Some((number.clamp(0.0, 1.0) * 255.0).round() as u8)
+}

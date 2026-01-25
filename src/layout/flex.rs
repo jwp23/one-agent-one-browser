@@ -1,5 +1,6 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
+use crate::render::DrawRoundedRect;
 use crate::style::{
     ComputedStyle, Display, FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, Position,
     Visibility,
@@ -509,11 +510,12 @@ fn measure_element_max_content_width<'doc>(
     }
 
     if super::inline::is_replaced_element(element) {
-        let width = style.width_px.unwrap_or(0);
-        let width = width
-            .saturating_add(style.padding.left)
-            .saturating_add(style.padding.right);
-        return Ok(width.max(0).min(max_width));
+        let size = super::inline::measure_replaced_element_outer_size(element, style, max_width)?;
+        let border_width = size
+            .width
+            .saturating_sub(style.margin.left.saturating_add(style.margin.right))
+            .max(0);
+        return Ok(border_width.min(max_width.max(0)));
     }
 
     let is_block = super::is_flow_block(style, element);
@@ -536,6 +538,8 @@ fn measure_element_max_content_width<'doc>(
     ancestors.pop();
 
     width_px = width_px
+        .saturating_add(style.border_width.left)
+        .saturating_add(style.border_width.right)
         .saturating_add(style.padding.left)
         .saturating_add(style.padding.right);
 
@@ -620,6 +624,8 @@ fn measure_flex_container_max_content_width<'doc>(
     ancestors.pop();
 
     let total = primary
+        .saturating_add(style.border_width.left)
+        .saturating_add(style.border_width.right)
         .saturating_add(style.padding.left)
         .saturating_add(style.padding.right);
 
@@ -672,7 +678,10 @@ fn measure_inline_children_width<'doc>(
                     continue;
                 }
                 let width = if super::inline::is_replaced_element(el) {
-                    style.width_px.unwrap_or(0)
+                    let size = super::inline::measure_replaced_element_outer_size(el, &style, max_width)?;
+                    size.width
+                        .saturating_sub(style.margin.left.saturating_add(style.margin.right))
+                        .max(0)
                 } else if super::is_flow_block(&style, el) {
                     measure_element_max_content_width(engine, el, &style, ancestors, max_width)?
                 } else {
@@ -898,25 +907,48 @@ fn layout_item_box<'doc>(
     }
 
     let mut background_index = None;
-    let paint = paint && item.style.visibility == Visibility::Visible;
+    let mut paint = paint && item.style.visibility == Visibility::Visible;
+    if paint && item.style.opacity == 0 {
+        paint = false;
+    }
+    let opacity = item.style.opacity;
+    let needs_opacity_group = paint && opacity < 255;
+    if needs_opacity_group {
+        engine.list.commands.push(crate::render::DisplayCommand::PushOpacity(opacity));
+    }
 
     if paint {
         if let Some(color) = item.style.background_color {
             background_index = Some(engine.list.commands.len());
-            engine.list.commands.push(crate::render::DisplayCommand::Rect(
-                crate::render::DrawRect {
-                    x_px: border_box.x,
-                    y_px: border_box.y,
-                    width_px: border_box.width,
-                    height_px: 0,
-                    color,
-                },
-            ));
+            if item.style.border_radius_px > 0 {
+                engine
+                    .list
+                    .commands
+                    .push(crate::render::DisplayCommand::RoundedRect(DrawRoundedRect {
+                        x_px: border_box.x,
+                        y_px: border_box.y,
+                        width_px: border_box.width,
+                        height_px: 0,
+                        radius_px: item.style.border_radius_px,
+                        color,
+                    }));
+            } else {
+                engine.list.commands.push(crate::render::DisplayCommand::Rect(
+                    crate::render::DrawRect {
+                        x_px: border_box.x,
+                        y_px: border_box.y,
+                        width_px: border_box.width,
+                        height_px: 0,
+                        color,
+                    },
+                ));
+            }
         }
     }
 
+    let border = item.style.border_width;
     let padding = item.style.padding;
-    let content_box = border_box.inset(padding);
+    let content_box = border_box.inset(super::add_edges(border, padding));
 
     let content_height = match item.node {
         FlexNode::Text(node) => inline::layout_inline_nodes(
@@ -957,10 +989,12 @@ fn layout_item_box<'doc>(
         }
     };
 
-    let mut border_height = padding
+    let mut border_height = border
         .top
+        .saturating_add(padding.top)
         .saturating_add(content_height)
         .saturating_add(padding.bottom)
+        .saturating_add(border.bottom)
         .max(0);
     if let Some(height) = item.style.height_px {
         border_height = border_height.max(height.max(0));
@@ -970,9 +1004,29 @@ fn layout_item_box<'doc>(
     }
 
     if let Some(index) = background_index {
-        if let Some(crate::render::DisplayCommand::Rect(rect)) = engine.list.commands.get_mut(index) {
-            rect.height_px = border_height;
+        if let Some(cmd) = engine.list.commands.get_mut(index) {
+            match cmd {
+                crate::render::DisplayCommand::Rect(rect) => rect.height_px = border_height,
+                crate::render::DisplayCommand::RoundedRect(rect) => rect.height_px = border_height,
+                _ => {}
+            }
         }
+    }
+
+    if paint {
+        engine.paint_border(
+            Rect {
+                x: border_box.x,
+                y: border_box.y,
+                width: border_box.width,
+                height: border_height,
+            },
+            &item.style,
+        );
+    }
+
+    if needs_opacity_group {
+        engine.list.commands.push(crate::render::DisplayCommand::PopOpacity(opacity));
     }
 
     Ok(border_height)

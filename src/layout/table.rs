@@ -88,7 +88,15 @@ pub(super) fn layout_table<'doc>(
             if cell_style.display == Display::None {
                 continue;
             }
-            let cell_paint = row_paint && cell_style.visibility == Visibility::Visible;
+            let mut cell_paint = row_paint && cell_style.visibility == Visibility::Visible;
+            if cell_paint && cell_style.opacity == 0 {
+                cell_paint = false;
+            }
+            let opacity = cell_style.opacity;
+            let needs_opacity_group = cell_paint && opacity < 255;
+            if needs_opacity_group {
+                engine.list.commands.push(DisplayCommand::PushOpacity(opacity));
+            }
 
             let span_width = cell_span_width(&col_widths, cell.col_index, cell.colspan, cellspacing);
 
@@ -141,6 +149,10 @@ pub(super) fn layout_table<'doc>(
                 if let Some(DisplayCommand::Rect(rect)) = engine.list.commands.get_mut(index) {
                     rect.height_px = cell_height;
                 }
+            }
+
+            if needs_opacity_group {
+                engine.list.commands.push(DisplayCommand::PopOpacity(opacity));
             }
 
             row_height = row_height.max(cell_height);

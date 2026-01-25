@@ -1,4 +1,5 @@
 use crate::geom::Color;
+use crate::image::Argb32Image;
 use crate::style::FontFamily;
 use std::rc::Rc;
 
@@ -51,6 +52,27 @@ pub struct DrawRect {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawRoundedRect {
+    pub x_px: i32,
+    pub y_px: i32,
+    pub width_px: i32,
+    pub height_px: i32,
+    pub radius_px: i32,
+    pub color: Color,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawRoundedRectBorder {
+    pub x_px: i32,
+    pub y_px: i32,
+    pub width_px: i32,
+    pub height_px: i32,
+    pub radius_px: i32,
+    pub border_width_px: i32,
+    pub color: Color,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawText {
     pub x_px: i32,
     pub y_px: i32,
@@ -59,9 +81,35 @@ pub struct DrawText {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawImage {
+    pub x_px: i32,
+    pub y_px: i32,
+    pub width_px: i32,
+    pub height_px: i32,
+    pub opacity: u8,
+    pub image: Rc<Argb32Image>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawSvg {
+    pub x_px: i32,
+    pub y_px: i32,
+    pub width_px: i32,
+    pub height_px: i32,
+    pub opacity: u8,
+    pub svg_xml: Rc<str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DisplayCommand {
     Rect(DrawRect),
+    RoundedRect(DrawRoundedRect),
+    RoundedRectBorder(DrawRoundedRectBorder),
     Text(DrawText),
+    Image(DrawImage),
+    Svg(DrawSvg),
+    PushOpacity(u8),
+    PopOpacity(u8),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -96,6 +144,8 @@ pub trait TextMeasurer {
 
 pub trait Painter: TextMeasurer {
     fn clear(&mut self) -> Result<(), String>;
+    fn push_opacity(&mut self, opacity: u8) -> Result<(), String>;
+    fn pop_opacity(&mut self, opacity: u8) -> Result<(), String>;
     fn fill_rect(
         &mut self,
         x_px: i32,
@@ -104,7 +154,44 @@ pub trait Painter: TextMeasurer {
         height_px: i32,
         color: Color,
     ) -> Result<(), String>;
+    fn fill_rounded_rect(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        radius_px: i32,
+        color: Color,
+    ) -> Result<(), String>;
+    fn stroke_rounded_rect(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        radius_px: i32,
+        border_width_px: i32,
+        color: Color,
+    ) -> Result<(), String>;
     fn draw_text(&mut self, x_px: i32, y_px: i32, text: &str, style: TextStyle)
         -> Result<(), String>;
+    fn draw_image(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        image: &Argb32Image,
+        opacity: u8,
+    ) -> Result<(), String>;
+    fn draw_svg(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        svg_xml: &str,
+        opacity: u8,
+    ) -> Result<(), String>;
     fn flush(&mut self) -> Result<(), String>;
 }

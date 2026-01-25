@@ -2,18 +2,24 @@ mod inline;
 mod flex;
 mod table;
 
+use crate::image::Argb32Image;
+use crate::resources::ResourceLoader;
 use crate::dom::{Document, Element, Node};
 use crate::geom::{Edges, Rect};
 use crate::render::{
     DisplayCommand,
     DisplayList,
     DrawRect,
+    DrawRoundedRect,
+    DrawRoundedRectBorder,
     LinkHitRegion,
     TextMeasurer,
     TextStyle,
     Viewport,
 };
 use crate::style::{AutoEdges, ComputedStyle, Display, Position, StyleComputer, TextAlign, Visibility};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 pub struct LayoutOutput {
     pub display_list: DisplayList,
@@ -25,11 +31,14 @@ pub fn layout_document(
     styles: &StyleComputer,
     measurer: &dyn TextMeasurer,
     viewport: Viewport,
+    resources: &dyn ResourceLoader,
 ) -> Result<LayoutOutput, String> {
     let mut engine = LayoutEngine {
         styles,
         measurer,
         viewport,
+        resources,
+        image_cache: HashMap::new(),
         list: DisplayList::default(),
         link_regions: Vec::new(),
     };
@@ -44,11 +53,35 @@ struct LayoutEngine<'a> {
     styles: &'a StyleComputer,
     measurer: &'a dyn TextMeasurer,
     viewport: Viewport,
+    resources: &'a dyn ResourceLoader,
+    image_cache: HashMap<String, Rc<Argb32Image>>,
     list: DisplayList,
     link_regions: Vec<LinkHitRegion>,
 }
 
 impl LayoutEngine<'_> {
+    fn load_image(&mut self, src: &str) -> Result<Option<Rc<Argb32Image>>, String> {
+        let src = src.trim();
+        if src.is_empty() {
+            return Ok(None);
+        }
+        if let Some(existing) = self.image_cache.get(src) {
+            return Ok(Some(existing.clone()));
+        }
+
+        let Some(bytes) = self.resources.load_bytes(src)? else {
+            return Ok(None);
+        };
+        let decoded = match crate::image::decode_image(&bytes) {
+            Ok(image) => image,
+            Err(_) => return Ok(None),
+        };
+
+        let image = Rc::new(decoded);
+        self.image_cache.insert(src.to_owned(), image.clone());
+        Ok(Some(image))
+    }
+
     fn layout_document(&mut self, document: &Document) -> Result<(), String> {
         let root = document.render_root();
         let root_style = ComputedStyle::root_defaults();
@@ -91,9 +124,18 @@ impl LayoutEngine<'_> {
             return Ok(());
         }
 
-        let paint = paint && style.visibility == Visibility::Visible;
+        let mut paint = paint && style.visibility == Visibility::Visible;
+        if paint && style.opacity == 0 {
+            paint = false;
+        }
+        let opacity = style.opacity;
+        let needs_opacity_group = paint && opacity < 255;
+        if needs_opacity_group {
+            self.list.commands.push(DisplayCommand::PushOpacity(opacity));
+        }
         let margin = style.margin;
         let margin_auto = style.margin_auto;
+        let border = style.border_width;
         let padding = style.padding;
 
         let margin_left_px = if margin_auto.left { 0 } else { margin.left };
@@ -127,19 +169,32 @@ impl LayoutEngine<'_> {
             width: used_width,
             height: 0,
         };
-        let content_box = border_box.inset(padding);
+        let content_box = border_box.inset(add_edges(border, padding));
 
         let mut background_index = None;
         if paint {
             if let Some(color) = style.background_color {
                 background_index = Some(self.list.commands.len());
-                self.list.commands.push(DisplayCommand::Rect(DrawRect {
-                    x_px: border_box.x,
-                    y_px: border_box.y,
-                    width_px: border_box.width,
-                    height_px: 0,
-                    color,
-                }));
+                if style.border_radius_px > 0 {
+                    self.list
+                        .commands
+                        .push(DisplayCommand::RoundedRect(DrawRoundedRect {
+                            x_px: border_box.x,
+                            y_px: border_box.y,
+                            width_px: border_box.width,
+                            height_px: 0,
+                            radius_px: style.border_radius_px,
+                            color,
+                        }));
+                } else {
+                    self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                        x_px: border_box.x,
+                        y_px: border_box.y,
+                        width_px: border_box.width,
+                        height_px: 0,
+                        color,
+                    }));
+                }
             }
         }
 
@@ -152,10 +207,12 @@ impl LayoutEngine<'_> {
         };
         ancestors.pop();
 
-        let mut border_height = padding
+        let mut border_height = border
             .top
+            .saturating_add(padding.top)
             .saturating_add(content_height)
-            .saturating_add(padding.bottom);
+            .saturating_add(padding.bottom)
+            .saturating_add(border.bottom);
         if let Some(height) = style.height_px {
             border_height = border_height.max(height);
         }
@@ -164,9 +221,29 @@ impl LayoutEngine<'_> {
         }
 
         if let Some(index) = background_index {
-            if let Some(DisplayCommand::Rect(rect)) = self.list.commands.get_mut(index) {
-                rect.height_px = border_height;
+            if let Some(cmd) = self.list.commands.get_mut(index) {
+                match cmd {
+                    DisplayCommand::Rect(rect) => rect.height_px = border_height,
+                    DisplayCommand::RoundedRect(rect) => rect.height_px = border_height,
+                    _ => {}
+                }
             }
+        }
+
+        if paint {
+            self.paint_border(
+                Rect {
+                    x: border_box.x,
+                    y: border_box.y,
+                    width: border_box.width,
+                    height: border_height,
+                },
+                style,
+            );
+        }
+
+        if needs_opacity_group {
+            self.list.commands.push(DisplayCommand::PopOpacity(opacity));
         }
 
         *cursor_y = y
@@ -188,7 +265,15 @@ impl LayoutEngine<'_> {
             return Ok(());
         }
 
-        let paint = paint && style.visibility == Visibility::Visible;
+        let mut paint = paint && style.visibility == Visibility::Visible;
+        if paint && style.opacity == 0 {
+            paint = false;
+        }
+        let opacity = style.opacity;
+        let needs_opacity_group = paint && opacity < 255;
+        if needs_opacity_group {
+            self.list.commands.push(DisplayCommand::PushOpacity(opacity));
+        }
 
         let containing = match style.position {
             Position::Fixed => Rect {
@@ -202,6 +287,7 @@ impl LayoutEngine<'_> {
 
         let margin = style.margin;
         let margin_auto = style.margin_auto;
+        let border = style.border_width;
         let padding = style.padding;
 
         let mut used_width = if let Some(width) = style.width_px {
@@ -246,19 +332,32 @@ impl LayoutEngine<'_> {
             width: used_width,
             height: 0,
         };
-        let content_box = border_box.inset(padding);
+        let content_box = border_box.inset(add_edges(border, padding));
 
         let mut background_index = None;
         if paint {
             if let Some(color) = style.background_color {
                 background_index = Some(self.list.commands.len());
-                self.list.commands.push(DisplayCommand::Rect(DrawRect {
-                    x_px: border_box.x,
-                    y_px: border_box.y,
-                    width_px: border_box.width,
-                    height_px: 0,
-                    color,
-                }));
+                if style.border_radius_px > 0 {
+                    self.list
+                        .commands
+                        .push(DisplayCommand::RoundedRect(DrawRoundedRect {
+                            x_px: border_box.x,
+                            y_px: border_box.y,
+                            width_px: border_box.width,
+                            height_px: 0,
+                            radius_px: style.border_radius_px,
+                            color,
+                        }));
+                } else {
+                    self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                        x_px: border_box.x,
+                        y_px: border_box.y,
+                        width_px: border_box.width,
+                        height_px: 0,
+                        color,
+                    }));
+                }
             }
         }
 
@@ -271,10 +370,12 @@ impl LayoutEngine<'_> {
         };
         ancestors.pop();
 
-        let mut border_height = padding
+        let mut border_height = border
             .top
+            .saturating_add(padding.top)
             .saturating_add(content_height)
-            .saturating_add(padding.bottom);
+            .saturating_add(padding.bottom)
+            .saturating_add(border.bottom);
         if let Some(height) = style.height_px {
             border_height = border_height.max(height);
         }
@@ -283,9 +384,29 @@ impl LayoutEngine<'_> {
         }
 
         if let Some(index) = background_index {
-            if let Some(DisplayCommand::Rect(rect)) = self.list.commands.get_mut(index) {
-                rect.height_px = border_height;
+            if let Some(cmd) = self.list.commands.get_mut(index) {
+                match cmd {
+                    DisplayCommand::Rect(rect) => rect.height_px = border_height,
+                    DisplayCommand::RoundedRect(rect) => rect.height_px = border_height,
+                    _ => {}
+                }
             }
+        }
+
+        if paint {
+            self.paint_border(
+                Rect {
+                    x: border_box.x,
+                    y: border_box.y,
+                    width: border_box.width,
+                    height: border_height,
+                },
+                style,
+            );
+        }
+
+        if needs_opacity_group {
+            self.list.commands.push(DisplayCommand::PopOpacity(opacity));
         }
 
         Ok(())
@@ -422,6 +543,92 @@ impl LayoutEngine<'_> {
             font_size_px: style.font_size_px,
         }
     }
+
+    fn paint_border(&mut self, border_box: Rect, style: &ComputedStyle) {
+        if style.border_style != crate::style::BorderStyle::Solid {
+            return;
+        }
+
+        let color = style.border_color;
+        let border = style.border_width;
+        if border.top <= 0 && border.right <= 0 && border.bottom <= 0 && border.left <= 0 {
+            return;
+        }
+
+        if border.top == border.right
+            && border.top == border.bottom
+            && border.top == border.left
+            && border.top > 0
+        {
+            self.list.commands.push(DisplayCommand::RoundedRectBorder(
+                DrawRoundedRectBorder {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px: border_box.height,
+                    radius_px: style.border_radius_px,
+                    border_width_px: border.top,
+                    color,
+                },
+            ));
+            return;
+        }
+
+        if border.top > 0 {
+            self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                x_px: border_box.x,
+                y_px: border_box.y,
+                width_px: border_box.width,
+                height_px: border.top,
+                color,
+            }));
+        }
+        if border.bottom > 0 {
+            self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                x_px: border_box.x,
+                y_px: border_box.bottom().saturating_sub(border.bottom),
+                width_px: border_box.width,
+                height_px: border.bottom,
+                color,
+            }));
+        }
+
+        let middle_height = border_box
+            .height
+            .saturating_sub(border.top.saturating_add(border.bottom))
+            .max(0);
+        if middle_height <= 0 {
+            return;
+        }
+
+        if border.left > 0 {
+            self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                x_px: border_box.x,
+                y_px: border_box.y.saturating_add(border.top),
+                width_px: border.left,
+                height_px: middle_height,
+                color,
+            }));
+        }
+        if border.right > 0 {
+            self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                x_px: border_box.right().saturating_sub(border.right),
+                y_px: border_box.y.saturating_add(border.top),
+                width_px: border.right,
+                height_px: middle_height,
+                color,
+            }));
+        }
+    }
+}
+
+fn add_edges(a: Edges, b: Edges) -> Edges {
+    Edges {
+        top: a.top.saturating_add(b.top),
+        right: a.right.saturating_add(b.right),
+        bottom: a.bottom.saturating_add(b.bottom),
+        left: a.left.saturating_add(b.left),
+    }
 }
 
 fn resolve_canvas_background(
@@ -443,7 +650,7 @@ fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
     match style.display {
         Display::Block | Display::Flex | Display::Table => true,
         Display::TableRow | Display::TableCell => true,
-        Display::Inline => {
+        Display::Inline | Display::InlineBlock => {
             if matches!(element.name.as_str(), "div" | "p" | "table") {
                 return true;
             }
@@ -565,7 +772,9 @@ mod tests {
             height_px: 200,
         };
         let styles = crate::style::StyleComputer::from_document(&doc);
-        let output = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
+        let output =
+            layout_document(&doc, &styles, &FixedMeasurer, viewport, &crate::resources::NoResources)
+                .unwrap();
         assert!(output
             .display_list
             .commands
@@ -581,7 +790,9 @@ mod tests {
             height_px: 200,
         };
         let styles = crate::style::StyleComputer::from_document(&doc);
-        let output = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
+        let output =
+            layout_document(&doc, &styles, &FixedMeasurer, viewport, &crate::resources::NoResources)
+                .unwrap();
         assert!(output
             .link_regions
             .iter()
@@ -598,7 +809,9 @@ mod tests {
             height_px: 200,
         };
         let styles = crate::style::StyleComputer::from_document(&doc);
-        let output = layout_document(&doc, &styles, &FixedMeasurer, viewport).unwrap();
+        let output =
+            layout_document(&doc, &styles, &FixedMeasurer, viewport, &crate::resources::NoResources)
+                .unwrap();
         assert!(output
             .link_regions
             .iter()

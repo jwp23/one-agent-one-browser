@@ -1,6 +1,7 @@
 use one_agent_one_browser::app::App;
 use one_agent_one_browser::browser::BrowserApp;
 use one_agent_one_browser::geom::Color;
+use one_agent_one_browser::image::Argb32Image;
 use one_agent_one_browser::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
 
 struct NoopPainter;
@@ -23,6 +24,14 @@ impl Painter for NoopPainter {
         Ok(())
     }
 
+    fn push_opacity(&mut self, _opacity: u8) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn pop_opacity(&mut self, _opacity: u8) -> Result<(), String> {
+        Ok(())
+    }
+
     fn fill_rect(
         &mut self,
         _x_px: i32,
@@ -34,12 +43,61 @@ impl Painter for NoopPainter {
         Ok(())
     }
 
+    fn fill_rounded_rect(
+        &mut self,
+        _x_px: i32,
+        _y_px: i32,
+        _width_px: i32,
+        _height_px: i32,
+        _radius_px: i32,
+        _color: Color,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn stroke_rounded_rect(
+        &mut self,
+        _x_px: i32,
+        _y_px: i32,
+        _width_px: i32,
+        _height_px: i32,
+        _radius_px: i32,
+        _border_width_px: i32,
+        _color: Color,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     fn draw_text(
         &mut self,
         _x_px: i32,
         _y_px: i32,
         _text: &str,
         _style: TextStyle,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn draw_image(
+        &mut self,
+        _x_px: i32,
+        _y_px: i32,
+        _width_px: i32,
+        _height_px: i32,
+        _image: &Argb32Image,
+        _opacity: u8,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn draw_svg(
+        &mut self,
+        _x_px: i32,
+        _y_px: i32,
+        _width_px: i32,
+        _height_px: i32,
+        _svg_xml: &str,
+        _opacity: u8,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -89,4 +147,3 @@ fn unique_id() -> u128 {
         .unwrap_or_default()
         .as_nanos()
 }
-

@@ -12,5 +12,6 @@ pub mod net;
 pub mod png;
 pub mod platform;
 pub mod render;
+pub mod resources;
 pub mod style;
 pub mod url;
