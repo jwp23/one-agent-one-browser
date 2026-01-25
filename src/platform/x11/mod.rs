@@ -13,6 +13,10 @@ use std::time::Duration;
 use painter::X11Painter;
 use xlib::*;
 
+// Avoid starving rendering when the X server generates events faster than we can drain them
+// (e.g. during drag-resize). Rendering at least once per tick keeps the window responsive.
+const MAX_X11_EVENTS_PER_TICK: usize = 512;
+
 pub fn run_window<A: App>(title: &str, options: WindowOptions, app: &mut A) -> Result<(), String> {
     let display = unsafe { XOpenDisplay(std::ptr::null()) };
     if display.is_null() {
@@ -145,7 +149,8 @@ fn run_window_with_display<A: App>(
         let mut should_exit = false;
 
         loop {
-            while unsafe { XPending(display) } > 0 {
+            let mut processed_events = 0usize;
+            while unsafe { XPending(display) } > 0 && processed_events < MAX_X11_EVENTS_PER_TICK {
                 let mut event = XEvent { inner: [0; 24] };
                 unsafe {
                     XNextEvent(display, &mut event);
@@ -195,6 +200,7 @@ fn run_window_with_display<A: App>(
                     }
                     _ => {}
                 }
+                processed_events += 1;
             }
 
             if should_exit {
