@@ -209,7 +209,7 @@ fn anchor_href(element: &Element) -> Option<Rc<str>> {
     Some(Rc::from(href))
 }
 
-fn is_replaced_element(element: &Element) -> bool {
+pub(super) fn is_replaced_element(element: &Element) -> bool {
     matches!(element.name.as_str(), "img" | "input")
 }
 

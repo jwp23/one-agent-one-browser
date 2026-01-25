@@ -49,6 +49,26 @@ impl<'a> Parser<'a> {
                                 attributes,
                                 children: Vec::new(),
                             }));
+                        continue;
+                    }
+
+                    if is_raw_text_element(&name) {
+                        stack.push(Element {
+                            name: name.clone(),
+                            attributes,
+                            children: Vec::new(),
+                        });
+
+                        let text = self.consume_raw_text_until_end_tag(&name);
+                        if !text.is_empty() {
+                            stack
+                                .last_mut()
+                                .expect("raw text element exists on stack")
+                                .children
+                                .push(Node::Text(text));
+                        }
+                        self.close_element(&mut stack, &name);
+                        continue;
                     } else {
                         stack.push(Element {
                             name,
@@ -188,6 +208,45 @@ impl<'a> Parser<'a> {
     fn starts_with(&self, s: &str) -> bool {
         self.input[self.cursor..].starts_with(s)
     }
+
+    fn consume_raw_text_until_end_tag(&mut self, tag_name: &str) -> String {
+        let start = self.cursor;
+        let bytes = self.input.as_bytes();
+        let name = tag_name.as_bytes();
+
+        let mut i = self.cursor;
+        while i + 2 + name.len() <= bytes.len() {
+            if bytes[i] != b'<' || bytes[i + 1] != b'/' {
+                i += 1;
+                continue;
+            }
+
+            let mut matches = true;
+            for (j, &expected) in name.iter().enumerate() {
+                let actual = bytes[i + 2 + j];
+                if actual.to_ascii_lowercase() != expected {
+                    matches = false;
+                    break;
+                }
+            }
+            if !matches {
+                i += 1;
+                continue;
+            }
+
+            let text = self.input[start..i].to_owned();
+
+            if let Some(end) = self.input[i..].find('>') {
+                self.cursor = i + end + 1;
+            } else {
+                self.cursor = self.input.len();
+            }
+            return text;
+        }
+
+        self.cursor = self.input.len();
+        self.input[start..].to_owned()
+    }
 }
 
 enum Fragment {
@@ -235,6 +294,10 @@ fn is_void_element(name: &str) -> bool {
             | "track"
             | "wbr"
     )
+}
+
+fn is_raw_text_element(name: &str) -> bool {
+    matches!(name, "style" | "script")
 }
 
 fn parse_attributes(mut input: &str) -> Attributes {
@@ -397,5 +460,12 @@ mod tests {
             p.children,
             vec![Node::Text("< & > ' '".to_owned())]
         );
+    }
+
+    #[test]
+    fn parses_style_text_without_consuming_following_body() {
+        let doc = parse_document("<head><style>/* <tag> */ body{}</style></head><body><p>ok</p></body>");
+        assert!(doc.find_first_element_by_name("body").is_some());
+        assert!(doc.find_first_element_by_name("p").is_some());
     }
 }

@@ -13,7 +13,7 @@ use crate::render::{
     TextStyle,
     Viewport,
 };
-use crate::style::{AutoEdges, ComputedStyle, Display, StyleComputer, TextAlign, Visibility};
+use crate::style::{AutoEdges, ComputedStyle, Display, Position, StyleComputer, TextAlign, Visibility};
 
 pub struct LayoutOutput {
     pub display_list: DisplayList,
@@ -152,8 +152,14 @@ impl LayoutEngine<'_> {
         };
         ancestors.pop();
 
-        let mut border_height = padding.top.saturating_add(content_height).saturating_add(padding.bottom);
-        if let Some(min_height) = style.height_px {
+        let mut border_height = padding
+            .top
+            .saturating_add(content_height)
+            .saturating_add(padding.bottom);
+        if let Some(height) = style.height_px {
+            border_height = border_height.max(height);
+        }
+        if let Some(min_height) = style.min_height_px {
             border_height = border_height.max(min_height);
         }
 
@@ -166,6 +172,121 @@ impl LayoutEngine<'_> {
         *cursor_y = y
             .saturating_add(border_height)
             .saturating_add(margin.bottom);
+
+        Ok(())
+    }
+
+    fn layout_positioned_box<'doc>(
+        &mut self,
+        element: &'doc Element,
+        style: &ComputedStyle,
+        ancestors: &mut Vec<&'doc Element>,
+        containing: Rect,
+        paint: bool,
+    ) -> Result<(), String> {
+        if style.display == Display::None {
+            return Ok(());
+        }
+
+        let paint = paint && style.visibility == Visibility::Visible;
+
+        let containing = match style.position {
+            Position::Fixed => Rect {
+                x: 0,
+                y: 0,
+                width: self.viewport.width_px.max(0),
+                height: self.viewport.height_px.max(0),
+            },
+            _ => containing,
+        };
+
+        let margin = style.margin;
+        let margin_auto = style.margin_auto;
+        let padding = style.padding;
+
+        let mut used_width = if let Some(width) = style.width_px {
+            width
+        } else if let (Some(left), Some(right)) = (style.left_px, style.right_px) {
+            containing.width.saturating_sub(left.saturating_add(right))
+        } else {
+            containing.width
+        };
+        if let Some(min_width) = style.min_width_px {
+            used_width = used_width.max(min_width);
+        }
+        if let Some(max_width) = style.max_width_px {
+            used_width = used_width.min(max_width);
+        }
+        used_width = used_width.max(0);
+
+        let mut x = if let Some(left) = style.left_px {
+            containing.x.saturating_add(left)
+        } else if let Some(right) = style.right_px {
+            containing
+                .right()
+                .saturating_sub(used_width)
+                .saturating_sub(right)
+        } else {
+            containing.x
+        };
+        let y = if let Some(top) = style.top_px {
+            containing.y.saturating_add(top)
+        } else {
+            containing.y
+        };
+
+        if !margin_auto.left {
+            x = x.saturating_add(margin.left);
+        }
+        let y = y.saturating_add(margin.top);
+
+        let border_box = Rect {
+            x,
+            y,
+            width: used_width,
+            height: 0,
+        };
+        let content_box = border_box.inset(padding);
+
+        let mut background_index = None;
+        if paint {
+            if let Some(color) = style.background_color {
+                background_index = Some(self.list.commands.len());
+                self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px: 0,
+                    color,
+                }));
+            }
+        }
+
+        ancestors.push(element);
+        let content_height = match style.display {
+            Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
+                .height,
+            Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
+            _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+        };
+        ancestors.pop();
+
+        let mut border_height = padding
+            .top
+            .saturating_add(content_height)
+            .saturating_add(padding.bottom);
+        if let Some(height) = style.height_px {
+            border_height = border_height.max(height);
+        }
+        if let Some(min_height) = style.min_height_px {
+            border_height = border_height.max(min_height);
+        }
+
+        if let Some(index) = background_index {
+            if let Some(DisplayCommand::Rect(rect)) = self.list.commands.get_mut(index) {
+                rect.height_px = border_height;
+            }
+        }
 
         Ok(())
     }
@@ -187,6 +308,31 @@ impl LayoutEngine<'_> {
                 Node::Element(el) => {
                     let style = self.styles.compute_style(el, parent_style, ancestors);
                     if style.display == Display::None {
+                        continue;
+                    }
+
+                    if matches!(style.position, Position::Absolute | Position::Fixed) {
+                        if !inline_nodes.is_empty() {
+                            let height = inline::layout_inline_nodes(
+                                self,
+                                &inline_nodes,
+                                parent_style,
+                                ancestors,
+                                content_box,
+                                cursor_y,
+                                paint,
+                            )?;
+                            cursor_y = cursor_y.saturating_add(height);
+                            inline_nodes.clear();
+                        }
+
+                        self.layout_positioned_box(
+                            el,
+                            &style,
+                            ancestors,
+                            content_box,
+                            paint,
+                        )?;
                         continue;
                     }
 
@@ -297,7 +443,44 @@ fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
     match style.display {
         Display::Block | Display::Flex | Display::Table => true,
         Display::TableRow | Display::TableCell => true,
-        Display::Inline => matches!(element.name.as_str(), "div" | "p" | "table"),
+        Display::Inline => {
+            if matches!(element.name.as_str(), "div" | "p" | "table") {
+                return true;
+            }
+
+            if element.name != "span" {
+                return false;
+            }
+
+            element.children.iter().any(|child| {
+                let Node::Element(el) = child else {
+                    return false;
+                };
+                matches!(
+                    el.name.as_str(),
+                    "html"
+                        | "body"
+                        | "div"
+                        | "p"
+                        | "center"
+                        | "header"
+                        | "main"
+                        | "footer"
+                        | "nav"
+                        | "ul"
+                        | "ol"
+                        | "li"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "blockquote"
+                        | "pre"
+                        | "table"
+                        | "tr"
+                        | "td"
+                )
+            })
+        }
         Display::None => false,
     }
 }

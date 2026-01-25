@@ -59,6 +59,7 @@ pub struct CompoundSelector {
     pub classes: Vec<String>,
     pub attributes: Vec<AttributeSelector>,
     pub pseudo_classes: Vec<PseudoClass>,
+    pub unsupported: bool,
 }
 
 impl CompoundSelector {
@@ -341,11 +342,29 @@ fn parse_compound_selector(mut input: &str) -> CompoundSelector {
                 input = rest;
             }
             ':' => {
-                let (name, rest) = split_simple_name(chars.as_str());
+                let mut rest = chars.as_str();
+                let is_pseudo_element = rest.starts_with(':');
+                if is_pseudo_element {
+                    rest = rest.strip_prefix(':').unwrap_or(rest);
+                }
+
+                let (name, after_name) = split_pseudo_name(rest);
+                if name.is_empty()
+                    || is_pseudo_element
+                    || after_name.starts_with('(')
+                    || matches!(name, "before" | "after")
+                {
+                    selector.unsupported = true;
+                    break;
+                }
+
                 if let Some(pseudo) = parse_pseudo_class(name) {
                     selector.pseudo_classes.push(pseudo);
+                    input = after_name;
+                } else {
+                    selector.unsupported = true;
+                    break;
                 }
-                input = rest;
             }
             '[' => {
                 let (attr, rest) = split_until(input, ']');
@@ -366,6 +385,13 @@ fn parse_compound_selector(mut input: &str) -> CompoundSelector {
 fn split_simple_name(input: &str) -> (&str, &str) {
     let end = input
         .find(|ch: char| matches!(ch, '.' | '#' | ':' | '['))
+        .unwrap_or(input.len());
+    (input[..end].trim(), &input[end..])
+}
+
+fn split_pseudo_name(input: &str) -> (&str, &str) {
+    let end = input
+        .find(|ch: char| matches!(ch, '.' | '#' | ':' | '[' | '('))
         .unwrap_or(input.len());
     (input[..end].trim(), &input[end..])
 }
@@ -641,5 +667,22 @@ mod tests {
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].name, "padding");
         assert_eq!(decls[0].value, "2px");
+    }
+
+    #[test]
+    fn marks_unsupported_pseudo_selectors_as_unsupported() {
+        let sheet = Stylesheet::parse(".cg:disabled { color: #000000; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let selector = &sheet.rules[0].selectors[0];
+        assert_eq!(selector.parts.len(), 1);
+        assert!(selector.parts[0].unsupported);
+    }
+
+    #[test]
+    fn marks_pseudo_elements_as_unsupported() {
+        let sheet = Stylesheet::parse(".x::before { color: #000000; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let selector = &sheet.rules[0].selectors[0];
+        assert!(selector.parts[0].unsupported);
     }
 }

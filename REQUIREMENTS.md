@@ -7,4 +7,5 @@
 - No source code file should be larger than 1000 lines of code, refactor as needed (use `cloc --by-file src` to verify)
 - Modularize your code like a professional software developer
 - When applicable, our implementation should conform with existing standards available in `vendor/*`
+- Write small/short developer/debugging tools/binaries as needed, document them, and leave them for future use.
 - If you have to change the baseline for our regression-tests, really ensure you're correctly updating the baselines, and the new behaviour is what we want

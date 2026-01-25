@@ -2,6 +2,7 @@ pub mod app;
 pub mod browser;
 pub mod cli;
 pub mod css;
+pub mod css_media;
 pub mod dom;
 pub mod geom;
 pub mod html;

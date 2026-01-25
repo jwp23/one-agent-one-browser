@@ -1,6 +1,13 @@
-use crate::css::{PseudoClass, Rule, Selector, Specificity, Stylesheet};
+mod declarations;
+mod parse;
+mod selectors;
+
+use crate::css::{Specificity, Stylesheet};
 use crate::dom::{Document, Element, Node};
 use crate::geom::{Color, Edges};
+use parse::{
+    parse_css_color, parse_css_length_px, parse_html_length_px,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Display {
@@ -19,6 +26,14 @@ pub enum Visibility {
     Hidden,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Position {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FontFamily {
     SansSerif,
@@ -33,8 +48,22 @@ pub enum TextAlign {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlexDirection {
+    Row,
+    Column,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlexWrap {
+    NoWrap,
+    Wrap,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlexJustifyContent {
     Start,
+    Center,
+    End,
     SpaceBetween,
 }
 
@@ -42,12 +71,18 @@ pub enum FlexJustifyContent {
 pub enum FlexAlignItems {
     Start,
     Center,
+    End,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComputedStyle {
     pub display: Display,
     pub visibility: Visibility,
+    pub position: Position,
+    pub top_px: Option<i32>,
+    pub right_px: Option<i32>,
+    pub bottom_px: Option<i32>,
+    pub left_px: Option<i32>,
     pub color: Color,
     pub background_color: Option<Color>,
     pub font_family: FontFamily,
@@ -63,8 +98,14 @@ pub struct ComputedStyle {
     pub min_width_px: Option<i32>,
     pub max_width_px: Option<i32>,
     pub height_px: Option<i32>,
+    pub min_height_px: Option<i32>,
     pub flex_justify_content: FlexJustifyContent,
     pub flex_align_items: FlexAlignItems,
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: FlexWrap,
+    pub flex_grow: i32,
+    pub flex_shrink: i32,
+    pub flex_basis_px: Option<i32>,
     pub flex_gap_px: i32,
 }
 
@@ -73,6 +114,11 @@ impl ComputedStyle {
         ComputedStyle {
             display: Display::Block,
             visibility: Visibility::Visible,
+            position: Position::Static,
+            top_px: None,
+            right_px: None,
+            bottom_px: None,
+            left_px: None,
             color: Color::BLACK,
             background_color: None,
             font_family: FontFamily::SansSerif,
@@ -88,8 +134,14 @@ impl ComputedStyle {
             min_width_px: None,
             max_width_px: None,
             height_px: None,
+            min_height_px: None,
             flex_justify_content: FlexJustifyContent::Start,
             flex_align_items: FlexAlignItems::Start,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::NoWrap,
+            flex_grow: 0,
+            flex_shrink: 1,
+            flex_basis_px: None,
             flex_gap_px: 0,
         }
     }
@@ -98,6 +150,11 @@ impl ComputedStyle {
         ComputedStyle {
             display,
             visibility: Visibility::Visible,
+            position: Position::Static,
+            top_px: None,
+            right_px: None,
+            bottom_px: None,
+            left_px: None,
             color: parent.color,
             background_color: None,
             font_family: parent.font_family,
@@ -113,8 +170,14 @@ impl ComputedStyle {
             min_width_px: None,
             max_width_px: None,
             height_px: None,
+            min_height_px: None,
             flex_justify_content: FlexJustifyContent::Start,
             flex_align_items: FlexAlignItems::Start,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::NoWrap,
+            flex_grow: 0,
+            flex_shrink: 1,
+            flex_basis_px: None,
             flex_gap_px: 0,
         }
     }
@@ -253,6 +316,11 @@ struct StyleBuilder {
     base: ComputedStyle,
     display: Option<Cascaded<Display>>,
     visibility: Option<Cascaded<Visibility>>,
+    position: Option<Cascaded<Position>>,
+    top_px: Option<Cascaded<Option<i32>>>,
+    right_px: Option<Cascaded<Option<i32>>>,
+    bottom_px: Option<Cascaded<Option<i32>>>,
+    left_px: Option<Cascaded<Option<i32>>>,
     color: Option<Cascaded<Color>>,
     background_color: Option<Cascaded<Option<Color>>>,
     font_family: Option<Cascaded<FontFamily>>,
@@ -268,8 +336,14 @@ struct StyleBuilder {
     min_width_px: Option<Cascaded<Option<i32>>>,
     max_width_px: Option<Cascaded<Option<i32>>>,
     height_px: Option<Cascaded<Option<i32>>>,
+    min_height_px: Option<Cascaded<Option<i32>>>,
     flex_justify_content: Option<Cascaded<FlexJustifyContent>>,
     flex_align_items: Option<Cascaded<FlexAlignItems>>,
+    flex_direction: Option<Cascaded<FlexDirection>>,
+    flex_wrap: Option<Cascaded<FlexWrap>>,
+    flex_grow: Option<Cascaded<i32>>,
+    flex_shrink: Option<Cascaded<i32>>,
+    flex_basis_px: Option<Cascaded<Option<i32>>>,
     flex_gap_px: Option<Cascaded<i32>>,
 }
 
@@ -279,6 +353,11 @@ impl StyleBuilder {
             base,
             display: None,
             visibility: None,
+            position: None,
+            top_px: None,
+            right_px: None,
+            bottom_px: None,
+            left_px: None,
             color: None,
             background_color: None,
             font_family: None,
@@ -294,8 +373,14 @@ impl StyleBuilder {
             min_width_px: None,
             max_width_px: None,
             height_px: None,
+            min_height_px: None,
             flex_justify_content: None,
             flex_align_items: None,
+            flex_direction: None,
+            flex_wrap: None,
+            flex_grow: None,
+            flex_shrink: None,
+            flex_basis_px: None,
             flex_gap_px: None,
         }
     }
@@ -307,6 +392,20 @@ impl StyleBuilder {
                 .visibility
                 .map(|v| v.value)
                 .unwrap_or(self.base.visibility),
+            position: self
+                .position
+                .map(|v| v.value)
+                .unwrap_or(self.base.position),
+            top_px: self.top_px.map(|v| v.value).unwrap_or(self.base.top_px),
+            right_px: self
+                .right_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.right_px),
+            bottom_px: self
+                .bottom_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.bottom_px),
+            left_px: self.left_px.map(|v| v.value).unwrap_or(self.base.left_px),
             color: self.color.map(|v| v.value).unwrap_or(self.base.color),
             background_color: self
                 .background_color
@@ -352,6 +451,10 @@ impl StyleBuilder {
                 .height_px
                 .map(|v| v.value)
                 .unwrap_or(self.base.height_px),
+            min_height_px: self
+                .min_height_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.min_height_px),
             flex_justify_content: self
                 .flex_justify_content
                 .map(|v| v.value)
@@ -360,6 +463,26 @@ impl StyleBuilder {
                 .flex_align_items
                 .map(|v| v.value)
                 .unwrap_or(self.base.flex_align_items),
+            flex_direction: self
+                .flex_direction
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_direction),
+            flex_wrap: self
+                .flex_wrap
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_wrap),
+            flex_grow: self
+                .flex_grow
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_grow),
+            flex_shrink: self
+                .flex_shrink
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_shrink),
+            flex_basis_px: self
+                .flex_basis_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.flex_basis_px),
             flex_gap_px: self
                 .flex_gap_px
                 .map(|v| v.value)
@@ -435,7 +558,7 @@ impl StyleBuilder {
 
     fn apply_stylesheet(&mut self, sheet: &Stylesheet, element: &Element, ancestors: &[&Element]) {
         for rule in &sheet.rules {
-            let Some((specificity, order)) = match_rule(rule, element, ancestors) else {
+            let Some((specificity, order)) = selectors::match_rule(rule, element, ancestors) else {
                 continue;
             };
             let priority = CascadePriority {
@@ -443,7 +566,7 @@ impl StyleBuilder {
                 order,
             };
             for decl in &rule.declarations {
-                self.apply_declaration(&decl.name, &decl.value, priority);
+                declarations::apply_declaration(self, &decl.name, &decl.value, priority);
             }
         }
     }
@@ -464,231 +587,7 @@ impl StyleBuilder {
         };
 
         for decl in crate::css::parse_inline_declarations(style_attr) {
-            self.apply_declaration(&decl.name, &decl.value, priority);
-        }
-    }
-
-    fn apply_declaration(&mut self, name: &str, value: &str, priority: CascadePriority) {
-        match name {
-            "display" => {
-                if value.eq_ignore_ascii_case("none") {
-                    self.apply_display(Display::None, priority);
-                } else if value.eq_ignore_ascii_case("block") {
-                    self.apply_display(Display::Block, priority);
-                } else if value.eq_ignore_ascii_case("inline") {
-                    self.apply_display(Display::Inline, priority);
-                } else if value.eq_ignore_ascii_case("flex") {
-                    self.apply_display(Display::Flex, priority);
-                }
-            }
-            "visibility" => {
-                if value.eq_ignore_ascii_case("hidden") {
-                    self.apply_visibility(Visibility::Hidden, priority);
-                } else if value.eq_ignore_ascii_case("visible") {
-                    self.apply_visibility(Visibility::Visible, priority);
-                }
-            }
-            "color" => {
-                if let Some(color) = parse_css_color(value) {
-                    self.apply_color(color, priority);
-                }
-            }
-            "background-color" => {
-                if let Some(color) = parse_css_color(value) {
-                    self.apply_background_color(Some(color), priority);
-                } else if value.eq_ignore_ascii_case("transparent") {
-                    self.apply_background_color(None, priority);
-                }
-            }
-            "background" => {
-                let token = value.split_whitespace().next().unwrap_or("").trim();
-                if let Some(color) = parse_css_color(token) {
-                    self.apply_background_color(Some(color), priority);
-                } else if token.eq_ignore_ascii_case("transparent") {
-                    self.apply_background_color(None, priority);
-                }
-            }
-            "font-family" => {
-                let family = if value.to_ascii_lowercase().contains("monospace") {
-                    FontFamily::Monospace
-                } else {
-                    FontFamily::SansSerif
-                };
-                self.apply_font_family(family, priority);
-            }
-            "font-size" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_font_size_px(px, priority);
-                }
-            }
-            "font-weight" => {
-                if value.eq_ignore_ascii_case("bold") {
-                    self.apply_bold(true, priority);
-                } else if value.eq_ignore_ascii_case("normal") {
-                    self.apply_bold(false, priority);
-                } else if let Ok(weight) = value.trim().parse::<u16>() {
-                    self.apply_bold(weight >= 600, priority);
-                }
-            }
-            "text-decoration" => {
-                if value.eq_ignore_ascii_case("underline") {
-                    self.apply_underline(true, priority);
-                } else if value.eq_ignore_ascii_case("none") {
-                    self.apply_underline(false, priority);
-                }
-            }
-            "text-align" => {
-                let align = match value.trim().to_ascii_lowercase().as_str() {
-                    "left" => Some(TextAlign::Left),
-                    "center" => Some(TextAlign::Center),
-                    "right" => Some(TextAlign::Right),
-                    _ => None,
-                };
-                if let Some(align) = align {
-                    self.apply_text_align(align, priority);
-                }
-            }
-            "line-height" => {
-                if let Some(px) = self.parse_css_line_height_px(value) {
-                    self.apply_line_height_px(px, priority);
-                } else if value.eq_ignore_ascii_case("normal") {
-                    self.apply_line_height_px(None, priority);
-                }
-            }
-            "padding" => {
-                if let Some(edges) = parse_css_box_edges(value) {
-                    self.apply_padding(edges, priority);
-                }
-            }
-            "padding-left" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_padding_component(|e| Edges {
-                        left: px,
-                        ..e
-                    }, priority);
-                }
-            }
-            "padding-right" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_padding_component(|e| Edges {
-                        right: px,
-                        ..e
-                    }, priority);
-                }
-            }
-            "padding-top" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_padding_component(|e| Edges {
-                        top: px,
-                        ..e
-                    }, priority);
-                }
-            }
-            "padding-bottom" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_padding_component(|e| Edges {
-                        bottom: px,
-                        ..e
-                    }, priority);
-                }
-            }
-            "margin" => {
-                if let Some((edges, auto)) = parse_css_box_edges_with_auto(value) {
-                    self.apply_margin(edges, priority);
-                    self.apply_margin_auto(auto, priority);
-                }
-            }
-            "margin-left" => {
-                if value.trim().eq_ignore_ascii_case("auto") {
-                    self.apply_margin_auto_component(|a| AutoEdges { left: true, ..a }, priority);
-                } else if let Some(px) = parse_css_length_px(value) {
-                    self.apply_margin_component(
-                        |e| Edges { left: px, ..e },
-                        priority,
-                    );
-                    self.apply_margin_auto_component(
-                        |a| AutoEdges { left: false, ..a },
-                        priority,
-                    );
-                }
-            }
-            "margin-right" => {
-                if value.trim().eq_ignore_ascii_case("auto") {
-                    self.apply_margin_auto_component(|a| AutoEdges { right: true, ..a }, priority);
-                } else if let Some(px) = parse_css_length_px(value) {
-                    self.apply_margin_component(
-                        |e| Edges { right: px, ..e },
-                        priority,
-                    );
-                    self.apply_margin_auto_component(
-                        |a| AutoEdges { right: false, ..a },
-                        priority,
-                    );
-                }
-            }
-            "margin-top" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_margin_component(|e| Edges {
-                        top: px,
-                        ..e
-                    }, priority);
-                }
-            }
-            "margin-bottom" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_margin_component(|e| Edges {
-                        bottom: px,
-                        ..e
-                    }, priority);
-                }
-            }
-            "width" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_width(Some(px), priority);
-                }
-            }
-            "min-width" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_min_width(Some(px), priority);
-                }
-            }
-            "max-width" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_max_width(Some(px), priority);
-                }
-            }
-            "height" => {
-                if let Some(px) = parse_css_length_px(value) {
-                    self.apply_height(Some(px), priority);
-                }
-            }
-            "justify-content" => {
-                let justify = match value.trim().to_ascii_lowercase().as_str() {
-                    "space-between" => Some(FlexJustifyContent::SpaceBetween),
-                    "flex-start" | "start" => Some(FlexJustifyContent::Start),
-                    _ => None,
-                };
-                if let Some(justify) = justify {
-                    self.apply_flex_justify_content(justify, priority);
-                }
-            }
-            "align-items" => {
-                let align = match value.trim().to_ascii_lowercase().as_str() {
-                    "center" => Some(FlexAlignItems::Center),
-                    "flex-start" | "start" => Some(FlexAlignItems::Start),
-                    _ => None,
-                };
-                if let Some(align) = align {
-                    self.apply_flex_align_items(align, priority);
-                }
-            }
-            "gap" => {
-                let first = value.split_whitespace().next().unwrap_or("");
-                if let Some(px) = parse_css_length_px(first) {
-                    self.apply_flex_gap_px(px.max(0), priority);
-                }
-            }
-            _ => {}
+            declarations::apply_declaration(self, &decl.name, &decl.value, priority);
         }
     }
 
@@ -698,6 +597,26 @@ impl StyleBuilder {
 
     fn apply_visibility(&mut self, value: Visibility, priority: CascadePriority) {
         apply_cascade(&mut self.visibility, value, priority);
+    }
+
+    fn apply_position(&mut self, value: Position, priority: CascadePriority) {
+        apply_cascade(&mut self.position, value, priority);
+    }
+
+    fn apply_top(&mut self, value: Option<i32>, priority: CascadePriority) {
+        apply_cascade(&mut self.top_px, value, priority);
+    }
+
+    fn apply_right(&mut self, value: Option<i32>, priority: CascadePriority) {
+        apply_cascade(&mut self.right_px, value, priority);
+    }
+
+    fn apply_bottom(&mut self, value: Option<i32>, priority: CascadePriority) {
+        apply_cascade(&mut self.bottom_px, value, priority);
+    }
+
+    fn apply_left(&mut self, value: Option<i32>, priority: CascadePriority) {
+        apply_cascade(&mut self.left_px, value, priority);
     }
 
     fn apply_color(&mut self, value: Color, priority: CascadePriority) {
@@ -760,12 +679,36 @@ impl StyleBuilder {
         apply_cascade(&mut self.height_px, value, priority);
     }
 
+    fn apply_min_height(&mut self, value: Option<i32>, priority: CascadePriority) {
+        apply_cascade(&mut self.min_height_px, value, priority);
+    }
+
     fn apply_flex_justify_content(&mut self, value: FlexJustifyContent, priority: CascadePriority) {
         apply_cascade(&mut self.flex_justify_content, value, priority);
     }
 
     fn apply_flex_align_items(&mut self, value: FlexAlignItems, priority: CascadePriority) {
         apply_cascade(&mut self.flex_align_items, value, priority);
+    }
+
+    fn apply_flex_direction(&mut self, value: FlexDirection, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_direction, value, priority);
+    }
+
+    fn apply_flex_wrap(&mut self, value: FlexWrap, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_wrap, value, priority);
+    }
+
+    fn apply_flex_grow(&mut self, value: i32, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_grow, value, priority);
+    }
+
+    fn apply_flex_shrink(&mut self, value: i32, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_shrink, value, priority);
+    }
+
+    fn apply_flex_basis(&mut self, value: Option<i32>, priority: CascadePriority) {
+        apply_cascade(&mut self.flex_basis_px, value, priority);
     }
 
     fn apply_flex_gap_px(&mut self, value: i32, priority: CascadePriority) {
@@ -842,229 +785,6 @@ fn apply_cascade<T: Copy>(slot: &mut Option<Cascaded<T>>, value: T, priority: Ca
     if should_set {
         *slot = Some(Cascaded { value, priority });
     }
-}
-
-fn match_rule(rule: &Rule, element: &Element, ancestors: &[&Element]) -> Option<(Specificity, u32)> {
-    let mut best: Option<Specificity> = None;
-    for selector in &rule.selectors {
-        if selector_matches(selector, element, ancestors) {
-            let spec = selector.specificity();
-            best = Some(best.map_or(spec, |b| b.max(spec)));
-        }
-    }
-    best.map(|spec| (spec, rule.order))
-}
-
-fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Element]) -> bool {
-    if selector.parts.is_empty() {
-        return false;
-    }
-
-    if !compound_matches(&selector.parts[selector.parts.len() - 1], element) {
-        return false;
-    }
-
-    let mut ancestor_index = ancestors.len();
-    for part in selector.parts[..selector.parts.len() - 1].iter().rev() {
-        let mut matched = false;
-        while ancestor_index > 0 {
-            ancestor_index -= 1;
-            if compound_matches(part, ancestors[ancestor_index]) {
-                matched = true;
-                break;
-            }
-        }
-        if !matched {
-            return false;
-        }
-    }
-
-    true
-}
-
-fn compound_matches(selector: &crate::css::CompoundSelector, element: &Element) -> bool {
-    if let Some(tag) = selector.tag.as_deref() {
-        if element.name != tag {
-            return false;
-        }
-    }
-
-    if let Some(id) = selector.id.as_deref() {
-        if element.attributes.id.as_deref() != Some(id) {
-            return false;
-        }
-    }
-
-    for class in &selector.classes {
-        if !element.attributes.has_class(class) {
-            return false;
-        }
-    }
-
-    for attr in &selector.attributes {
-        let Some(value) = element.attributes.get(&attr.name) else {
-            return false;
-        };
-        if let Some(expected) = attr.value.as_deref() {
-            if value != expected {
-                return false;
-            }
-        }
-    }
-
-    for pseudo in &selector.pseudo_classes {
-        if !pseudo_matches(*pseudo, element) {
-            return false;
-        }
-    }
-
-    true
-}
-
-fn pseudo_matches(pseudo: PseudoClass, element: &Element) -> bool {
-    match pseudo {
-        PseudoClass::Link => element.name == "a" && element.attributes.get("href").is_some(),
-        PseudoClass::Visited => false,
-        PseudoClass::Hover => false,
-    }
-}
-
-fn parse_css_color(value: &str) -> Option<Color> {
-    let value = value.trim();
-    if let Some(color) = Color::from_css_hex(value) {
-        return Some(color);
-    }
-    match value.to_ascii_lowercase().as_str() {
-        "black" => Some(Color::BLACK),
-        "white" => Some(Color::WHITE),
-        _ => None,
-    }
-}
-
-fn parse_css_length_px(value: &str) -> Option<i32> {
-    let value = value.trim();
-    if value == "0" {
-        return Some(0);
-    }
-
-    let mut end = 0usize;
-    for (idx, ch) in value.char_indices() {
-        if !(ch.is_ascii_digit() || ch == '.' || ch == '-') {
-            break;
-        }
-        end = idx + ch.len_utf8();
-    }
-    if end == 0 {
-        return None;
-    }
-
-    let number: f32 = value[..end].parse().ok()?;
-    let unit = value[end..].trim().to_ascii_lowercase();
-    let px = match unit.as_str() {
-        "px" | "" => number,
-        "pt" => number * (96.0 / 72.0),
-        "rem" | "em" => number * 16.0,
-        _ => return None,
-    };
-    Some(px.round() as i32)
-}
-
-fn parse_css_box_edges(value: &str) -> Option<Edges> {
-    let lengths: Vec<i32> = value
-        .split_whitespace()
-        .filter_map(parse_css_length_px)
-        .collect();
-
-    match lengths.as_slice() {
-        [] => None,
-        [all] => Some(Edges {
-            top: *all,
-            right: *all,
-            bottom: *all,
-            left: *all,
-        }),
-        [vertical, horizontal] => Some(Edges {
-            top: *vertical,
-            right: *horizontal,
-            bottom: *vertical,
-            left: *horizontal,
-        }),
-        [top, horizontal, bottom] => Some(Edges {
-            top: *top,
-            right: *horizontal,
-            bottom: *bottom,
-            left: *horizontal,
-        }),
-        [top, right, bottom, left] => Some(Edges {
-            top: *top,
-            right: *right,
-            bottom: *bottom,
-            left: *left,
-        }),
-        _ => None,
-    }
-}
-
-fn parse_css_box_edges_with_auto(value: &str) -> Option<(Edges, AutoEdges)> {
-    #[derive(Clone, Copy, Debug)]
-    enum Token {
-        Px(i32),
-        Auto,
-    }
-
-    let tokens: Vec<Token> = value
-        .split_whitespace()
-        .filter_map(|part| {
-            if part.eq_ignore_ascii_case("auto") {
-                return Some(Token::Auto);
-            }
-            parse_css_length_px(part).map(Token::Px)
-        })
-        .collect();
-
-    fn to_px(token: Token) -> i32 {
-        match token {
-            Token::Px(px) => px,
-            Token::Auto => 0,
-        }
-    }
-
-    fn to_auto(token: Token) -> bool {
-        matches!(token, Token::Auto)
-    }
-
-    let (top, right, bottom, left) = match tokens.as_slice() {
-        [] => return None,
-        [all] => (*all, *all, *all, *all),
-        [vertical, horizontal] => (*vertical, *horizontal, *vertical, *horizontal),
-        [top, horizontal, bottom] => (*top, *horizontal, *bottom, *horizontal),
-        [top, right, bottom, left] => (*top, *right, *bottom, *left),
-        _ => return None,
-    };
-
-    let edges = Edges {
-        top: to_px(top),
-        right: to_px(right),
-        bottom: to_px(bottom),
-        left: to_px(left),
-    };
-    let auto = AutoEdges {
-        top: to_auto(top),
-        right: to_auto(right),
-        bottom: to_auto(bottom),
-        left: to_auto(left),
-    };
-
-    Some((edges, auto))
-}
-
-fn parse_html_length_px(value: &str) -> Option<i32> {
-    let value = value.trim();
-    if value.ends_with('%') {
-        return None;
-    }
-
-    parse_css_length_px(value).or_else(|| value.parse::<i32>().ok())
 }
 
 #[cfg(test)]

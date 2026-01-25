@@ -8,6 +8,8 @@ pub struct BrowserApp {
     title: String,
     document: Document,
     styles: StyleComputer,
+    style_sources: Vec<StylesheetSource>,
+    styles_viewport: Option<Viewport>,
     cached_layout: Option<CachedLayout>,
     url_loader: Option<UrlLoader>,
     base: Option<PageBase>,
@@ -58,6 +60,8 @@ impl BrowserApp {
             title,
             document: loading_document,
             styles,
+            style_sources: Vec::new(),
+            styles_viewport: None,
             cached_layout: None,
             url_loader: Some(loader),
             base: Some(PageBase::Url(base_url)),
@@ -89,7 +93,9 @@ impl BrowserApp {
                 loader.html_loaded = true;
 
                 self.document = document;
-                self.styles = StyleComputer::from_css(&combined_stylesheet_text(&loader.stylesheets));
+                self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
+                self.styles = StyleComputer::from_css("");
+                self.styles_viewport = None;
                 self.cached_layout = None;
                 needs_redraw = true;
                 continue;
@@ -108,7 +114,9 @@ impl BrowserApp {
                 .map_err(|err| format!("Failed to fetch {}: {err}", event.url))?;
             let css = String::from_utf8_lossy(&bytes).into_owned();
             slot.set_css(css);
-            self.styles = StyleComputer::from_css(&combined_stylesheet_text(&loader.stylesheets));
+            self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
+            self.styles = StyleComputer::from_css("");
+            self.styles_viewport = None;
             self.cached_layout = None;
             needs_redraw = true;
         }
@@ -123,6 +131,7 @@ impl BrowserApp {
     }
 
     pub fn render(&mut self, painter: &mut dyn Painter, viewport: Viewport) -> Result<(), String> {
+        self.ensure_styles_for_viewport(viewport)?;
         if !self
             .cached_layout
             .as_ref()
@@ -230,6 +239,8 @@ impl BrowserApp {
         self.base = Some(PageBase::Url(url.clone()));
         self.document = crate::html::parse_document("<p>Loading...</p>");
         self.styles = StyleComputer::from_css("");
+        self.style_sources = Vec::new();
+        self.styles_viewport = None;
         self.cached_layout = None;
         self.url_loader = Some(UrlLoader::new(url)?);
         Ok(())
@@ -249,14 +260,38 @@ impl BrowserApp {
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let document = crate::html::parse_document(&source);
         let resource_base = ResourceBase::FileDir(base_dir.clone());
-        let css = collect_page_stylesheets(&document, Some(&resource_base))?;
+        let style_sources = collect_page_stylesheet_sources(&document, Some(&resource_base))?;
 
         self.title = title;
         self.document = document;
-        self.styles = StyleComputer::from_css(&css);
+        self.styles = StyleComputer::from_css("");
+        self.style_sources = style_sources;
+        self.styles_viewport = None;
         self.cached_layout = None;
         self.url_loader = None;
         self.base = Some(PageBase::FileDir(base_dir));
+        Ok(())
+    }
+
+    fn ensure_styles_for_viewport(&mut self, viewport: Viewport) -> Result<(), String> {
+        if self.styles_viewport == Some(viewport) {
+            return Ok(());
+        }
+
+        let mut css = String::new();
+        for source in &self.style_sources {
+            if let Some(media) = source.media.as_deref() {
+                if !crate::css_media::media_query_matches(media, viewport) {
+                    continue;
+                }
+            }
+            css.push_str(&source.css);
+            css.push('\n');
+        }
+
+        self.styles = StyleComputer::from_css(&css);
+        self.styles_viewport = Some(viewport);
+        self.cached_layout = None;
         Ok(())
     }
 }
@@ -280,12 +315,14 @@ impl BrowserApp {
         document: Document,
         base: Option<ResourceBase>,
     ) -> Result<Self, String> {
-        let css = collect_page_stylesheets(&document, base.as_ref())?;
-        let styles = StyleComputer::from_css(&css);
+        let style_sources = collect_page_stylesheet_sources(&document, base.as_ref())?;
+        let styles = StyleComputer::from_css("");
         Ok(Self {
             title: title.to_owned(),
             document,
             styles,
+            style_sources,
+            styles_viewport: None,
             cached_layout: None,
             url_loader: None,
             base: None,
@@ -293,38 +330,54 @@ impl BrowserApp {
     }
 }
 
-fn collect_page_stylesheets(document: &Document, base: Option<&ResourceBase>) -> Result<String, String> {
-    let mut out = String::new();
-    collect_page_stylesheets_from_element(&document.root, base, &mut out)?;
+#[derive(Clone, Debug)]
+struct StylesheetSource {
+    css: String,
+    media: Option<String>,
+}
+
+fn collect_page_stylesheet_sources(
+    document: &Document,
+    base: Option<&ResourceBase>,
+) -> Result<Vec<StylesheetSource>, String> {
+    let mut out = Vec::new();
+    collect_page_stylesheet_sources_from_element(&document.root, base, &mut out)?;
     Ok(out)
 }
 
-fn collect_page_stylesheets_from_element(
+fn collect_page_stylesheet_sources_from_element(
     element: &crate::dom::Element,
     base: Option<&ResourceBase>,
-    out: &mut String,
+    out: &mut Vec<StylesheetSource>,
 ) -> Result<(), String> {
     if element.name == "style" {
+        let mut css = String::new();
         for child in &element.children {
             if let crate::dom::Node::Text(text) = child {
-                out.push_str(text);
-                out.push('\n');
+                css.push_str(text);
+                css.push('\n');
             }
         }
+        out.push(StylesheetSource {
+            css,
+            media: element.attributes.get("media").map(str::to_owned),
+        });
     }
 
     if is_stylesheet_link(element) {
         if let Some(href) = element.attributes.get("href") {
             if let Some(css) = load_stylesheet_text(href, base)? {
-                out.push_str(&css);
-                out.push('\n');
+                out.push(StylesheetSource {
+                    css,
+                    media: element.attributes.get("media").map(str::to_owned),
+                });
             }
         }
     }
 
     for child in &element.children {
         if let crate::dom::Node::Element(el) = child {
-            collect_page_stylesheets_from_element(el, base, out)?;
+            collect_page_stylesheet_sources_from_element(el, base, out)?;
         }
     }
 
@@ -469,20 +522,19 @@ impl StylesheetSlot {
     }
 }
 
-fn combined_stylesheet_text(slots: &[StylesheetSlot]) -> String {
-    let mut out = String::new();
+fn stylesheet_sources_from_loader(slots: &[StylesheetSlot]) -> Vec<StylesheetSource> {
+    let mut out = Vec::new();
     for slot in slots {
         match slot {
-            StylesheetSlot::Inline(css) => {
-                out.push_str(css);
-                out.push('\n');
-            }
-            StylesheetSlot::External { css, .. } => {
-                if let Some(css) = css {
-                    out.push_str(css);
-                    out.push('\n');
-                }
-            }
+            StylesheetSlot::Inline(css) => out.push(StylesheetSource {
+                css: css.clone(),
+                media: None,
+            }),
+            StylesheetSlot::External { css: Some(css), .. } => out.push(StylesheetSource {
+                css: css.clone(),
+                media: None,
+            }),
+            StylesheetSlot::External { css: None, .. } => {}
         }
     }
     out
