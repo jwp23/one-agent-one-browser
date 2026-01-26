@@ -101,7 +101,7 @@ impl LayoutEngine<'_> {
         let Some(bytes) = self.resources.load_bytes(src)? else {
             return Ok(None);
         };
-        let decoded = match crate::image::decode_image(&bytes) {
+        let decoded = match crate::image::decode_image(bytes.as_ref()) {
             Ok(image) => image,
             Err(_) => return Ok(None),
         };

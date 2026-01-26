@@ -1,3 +1,11 @@
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static PARSE_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
@@ -5,8 +13,20 @@ pub struct Stylesheet {
 
 impl Stylesheet {
     pub fn parse(source: &str) -> Stylesheet {
+        #[cfg(test)]
+        PARSE_CALLS.with(|count| count.set(count.get().saturating_add(1)));
         Parser::new(source).parse_stylesheet()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_stylesheet_parse_call_count() {
+    PARSE_CALLS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn stylesheet_parse_call_count() -> usize {
+    PARSE_CALLS.with(|count| count.get())
 }
 
 #[derive(Clone, Debug)]

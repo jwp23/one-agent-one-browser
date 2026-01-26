@@ -26,6 +26,7 @@ const CURLOPT_USERAGENT: CURLoption = 10018;
 const CURLOPT_ACCEPT_ENCODING: CURLoption = 10102;
 const CURLOPT_TIMEOUT_MS: CURLoption = 155;
 const CURLOPT_CONNECTTIMEOUT_MS: CURLoption = 156;
+const CURLOPT_NOSIGNAL: CURLoption = 99;
 
 const CURLINFO_RESPONSE_CODE: CURLINFO = 0x200002;
 
@@ -83,6 +84,7 @@ pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, String> {
     setopt_long(handle, CURLOPT_FAILONERROR, 1)?;
     setopt_long(handle, CURLOPT_TIMEOUT_MS, 15_000)?;
     setopt_long(handle, CURLOPT_CONNECTTIMEOUT_MS, 5_000)?;
+    setopt_long(handle, CURLOPT_NOSIGNAL, 1)?;
     setopt_ptr(handle, CURLOPT_USERAGENT, user_agent.as_ptr())?;
     setopt_ptr(handle, CURLOPT_ACCEPT_ENCODING, accept_encoding.as_ptr())?;
 

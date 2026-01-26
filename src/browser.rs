@@ -1,9 +1,14 @@
 use crate::app::TickResult;
+use crate::css::Stylesheet;
 use crate::dom::Document;
 use crate::render::{DisplayCommand, DisplayList, LinkHitRegion, Painter, Viewport};
-use crate::resources::{NoResources, PageResources, ResourceLoader};
+use crate::resources::{NoResources, ResourceLoader, ResourceManager};
 use crate::style::StyleComputer;
 use crate::url::Url;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+const STYLES_DEBOUNCE: Duration = Duration::from_millis(80);
 
 pub struct BrowserApp {
     title: String,
@@ -14,6 +19,9 @@ pub struct BrowserApp {
     cached_layout: Option<CachedLayout>,
     url_loader: Option<UrlLoader>,
     base: Option<PageBase>,
+    resources: Option<ResourceManager>,
+    styles_dirty: bool,
+    last_stylesheet_change: Option<Instant>,
 }
 
 struct CachedLayout {
@@ -43,7 +51,8 @@ impl BrowserApp {
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let resource_base = ResourceBase::FileDir(base_dir.clone());
         let mut app = Self::from_html_with_base(&title, &source, Some(resource_base))?;
-        app.base = Some(PageBase::FileDir(base_dir));
+        app.base = Some(PageBase::FileDir(base_dir.clone()));
+        app.resources = Some(ResourceManager::from_file_dir(base_dir));
         Ok(app)
     }
 
@@ -55,7 +64,7 @@ impl BrowserApp {
         let base_url = Url::parse(url)?;
         let title = base_url.as_str().to_owned();
         let loading_document = crate::html::parse_document("<p>Loading...</p>");
-        let styles = StyleComputer::from_css("");
+        let styles = StyleComputer::empty();
         let loader = UrlLoader::new(base_url.clone())?;
         Ok(Self {
             title,
@@ -65,7 +74,10 @@ impl BrowserApp {
             styles_viewport: None,
             cached_layout: None,
             url_loader: Some(loader),
-            base: Some(PageBase::Url(base_url)),
+            base: Some(PageBase::Url(base_url.clone())),
+            resources: Some(ResourceManager::from_url(base_url)),
+            styles_dirty: false,
+            last_stylesheet_change: None,
         })
     }
 
@@ -74,56 +86,77 @@ impl BrowserApp {
     }
 
     pub fn tick(&mut self) -> Result<TickResult, String> {
-        let Some(mut loader) = self.url_loader.take() else {
-            return Ok(TickResult {
-                needs_redraw: false,
-                ready_for_screenshot: true,
-            });
-        };
-
         let mut needs_redraw = false;
-        while let Some(event) = loader.pool.try_recv() {
-            if event.id == loader.html_request_id && !loader.html_loaded {
-                let bytes = event.result.map_err(|err| {
-                    format!("Failed to fetch {}: {err}", loader.base_url.as_str())
-                })?;
-                let html_source = String::from_utf8_lossy(&bytes).into_owned();
-                let document = crate::html::parse_document(&html_source);
+        let mut ready_for_screenshot = true;
 
-                loader.stylesheets = loader.fetch_stylesheets(&document)?;
-                loader.html_loaded = true;
+        if let Some(mut loader) = self.url_loader.take() {
+            while let Some(event) = loader.pool.try_recv() {
+                if event.id == loader.html_request_id && !loader.html_loaded {
+                    let bytes = event.result.map_err(|err| {
+                        format!("Failed to fetch {}: {err}", loader.base_url.as_str())
+                    })?;
+                    let html_source = String::from_utf8_lossy(&bytes).into_owned();
+                    let document = crate::html::parse_document(&html_source);
 
-                self.document = document;
+                    loader.stylesheets = loader.fetch_stylesheets(&document)?;
+                    loader.html_loaded = true;
+
+                    self.document = document;
+                    self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
+                    self.styles = StyleComputer::empty();
+                    self.styles_viewport = None;
+                    self.cached_layout = None;
+                    needs_redraw = true;
+                    continue;
+                }
+
+                let slot = loader
+                    .stylesheets
+                    .iter_mut()
+                    .find(|slot| slot.request_id() == Some(event.id));
+                let Some(slot) = slot else {
+                    continue;
+                };
+
+                let bytes = event
+                    .result
+                    .map_err(|err| format!("Failed to fetch {}: {err}", event.url))?;
+                let css = String::from_utf8_lossy(&bytes).into_owned();
+                slot.set_stylesheet(Arc::new(Stylesheet::parse(&css)));
                 self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
-                self.styles = StyleComputer::from_css("");
+                self.styles = StyleComputer::empty();
                 self.styles_viewport = None;
                 self.cached_layout = None;
-                needs_redraw = true;
-                continue;
+                self.styles_dirty = true;
+                self.last_stylesheet_change = Some(Instant::now());
             }
 
-            let slot = loader
-                .stylesheets
-                .iter_mut()
-                .find(|slot| slot.request_id() == Some(event.id));
-            let Some(slot) = slot else {
-                continue;
-            };
-
-            let bytes = event
-                .result
-                .map_err(|err| format!("Failed to fetch {}: {err}", event.url))?;
-            let css = String::from_utf8_lossy(&bytes).into_owned();
-            slot.set_css(css);
-            self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
-            self.styles = StyleComputer::from_css("");
-            self.styles_viewport = None;
-            self.cached_layout = None;
-            needs_redraw = true;
+            ready_for_screenshot = loader.ready_for_screenshot();
+            self.url_loader = if ready_for_screenshot { None } else { Some(loader) };
         }
 
-        let ready_for_screenshot = loader.ready_for_screenshot();
-        self.url_loader = if ready_for_screenshot { None } else { Some(loader) };
+        if self.styles_dirty {
+            let should_redraw = ready_for_screenshot
+                || self
+                    .last_stylesheet_change
+                    .is_some_and(|instant| instant.elapsed() >= STYLES_DEBOUNCE);
+            if should_redraw {
+                needs_redraw = true;
+            }
+        }
+
+        if let Some(resources) = &self.resources {
+            let tick = resources.tick();
+            if tick.new_successes > 0 {
+                self.cached_layout = None;
+                needs_redraw = true;
+            }
+        }
+
+        if needs_redraw {
+            self.styles_dirty = false;
+            self.last_stylesheet_change = None;
+        }
 
         Ok(TickResult {
             needs_redraw,
@@ -138,13 +171,9 @@ impl BrowserApp {
             .as_ref()
             .is_some_and(|cached| cached.viewport == viewport)
         {
-            let resources = match &self.base {
-                Some(PageBase::Url(url)) => Some(PageResources::from_url(url.clone())),
-                Some(PageBase::FileDir(dir)) => Some(PageResources::from_file_dir(dir.clone())),
-                None => None,
-            };
             let no_resources = NoResources;
-            let resources: &dyn ResourceLoader = resources
+            let resources: &dyn ResourceLoader = self
+                .resources
                 .as_ref()
                 .map(|resources| resources as &dyn ResourceLoader)
                 .unwrap_or(&no_resources);
@@ -351,12 +380,15 @@ impl BrowserApp {
     fn begin_url_navigation(&mut self, url: Url) -> Result<(), String> {
         self.title = url.as_str().to_owned();
         self.base = Some(PageBase::Url(url.clone()));
+        self.resources = Some(ResourceManager::from_url(url.clone()));
         self.document = crate::html::parse_document("<p>Loading...</p>");
-        self.styles = StyleComputer::from_css("");
+        self.styles = StyleComputer::empty();
         self.style_sources = Vec::new();
         self.styles_viewport = None;
         self.cached_layout = None;
         self.url_loader = Some(UrlLoader::new(url)?);
+        self.styles_dirty = false;
+        self.last_stylesheet_change = None;
         Ok(())
     }
 
@@ -378,12 +410,19 @@ impl BrowserApp {
 
         self.title = title;
         self.document = document;
-        self.styles = StyleComputer::from_css("");
+        self.styles = StyleComputer::empty();
         self.style_sources = style_sources;
         self.styles_viewport = None;
         self.cached_layout = None;
         self.url_loader = None;
         self.base = Some(PageBase::FileDir(base_dir));
+        self.resources = match &self.base {
+            Some(PageBase::Url(url)) => Some(ResourceManager::from_url(url.clone())),
+            Some(PageBase::FileDir(dir)) => Some(ResourceManager::from_file_dir(dir.clone())),
+            None => None,
+        };
+        self.styles_dirty = false;
+        self.last_stylesheet_change = None;
         Ok(())
     }
 
@@ -392,18 +431,17 @@ impl BrowserApp {
             return Ok(());
         }
 
-        let mut css = String::new();
+        let mut stylesheets = Vec::new();
         for source in &self.style_sources {
             if let Some(media) = source.media.as_deref() {
                 if !crate::css_media::media_query_matches(media, viewport) {
                     continue;
                 }
             }
-            css.push_str(&source.css);
-            css.push('\n');
+            stylesheets.push(source.stylesheet.clone());
         }
 
-        self.styles = StyleComputer::from_css(&css);
+        self.styles = StyleComputer::from_stylesheets(stylesheets);
         self.styles_viewport = Some(viewport);
         self.cached_layout = None;
         Ok(())
@@ -430,7 +468,7 @@ impl BrowserApp {
         base: Option<ResourceBase>,
     ) -> Result<Self, String> {
         let style_sources = collect_page_stylesheet_sources(&document, base.as_ref())?;
-        let styles = StyleComputer::from_css("");
+        let styles = StyleComputer::empty();
         Ok(Self {
             title: title.to_owned(),
             document,
@@ -440,13 +478,16 @@ impl BrowserApp {
             cached_layout: None,
             url_loader: None,
             base: None,
+            resources: None,
+            styles_dirty: false,
+            last_stylesheet_change: None,
         })
     }
 }
 
 #[derive(Clone, Debug)]
 struct StylesheetSource {
-    css: String,
+    stylesheet: Arc<Stylesheet>,
     media: Option<String>,
 }
 
@@ -473,7 +514,7 @@ fn collect_page_stylesheet_sources_from_element(
             }
         }
         out.push(StylesheetSource {
-            css,
+            stylesheet: Arc::new(Stylesheet::parse(&css)),
             media: element.attributes.get("media").map(str::to_owned),
         });
     }
@@ -482,7 +523,7 @@ fn collect_page_stylesheet_sources_from_element(
         if let Some(href) = element.attributes.get("href") {
             if let Some(css) = load_stylesheet_text(href, base)? {
                 out.push(StylesheetSource {
-                    css,
+                    stylesheet: Arc::new(Stylesheet::parse(&css)),
                     media: element.attributes.get("media").map(str::to_owned),
                 });
             }
@@ -581,12 +622,15 @@ impl UrlLoader {
         let mut slots = Vec::with_capacity(refs.len());
         for reference in refs {
             match reference {
-                StylesheetRef::Inline { css, media } => slots.push(StylesheetSlot::Inline { css, media }),
+                StylesheetRef::Inline { css, media } => slots.push(StylesheetSlot::Inline {
+                    stylesheet: Arc::new(Stylesheet::parse(&css)),
+                    media,
+                }),
                 StylesheetRef::External { url, media } => {
                     let id = self.pool.fetch_bytes(url.clone())?;
                     slots.push(StylesheetSlot::External {
                         request_id: id,
-                        css: None,
+                        stylesheet: None,
                         media,
                     });
                 }
@@ -606,12 +650,12 @@ impl UrlLoader {
 
 enum StylesheetSlot {
     Inline {
-        css: String,
+        stylesheet: Arc<Stylesheet>,
         media: Option<String>,
     },
     External {
         request_id: crate::net::RequestId,
-        css: Option<String>,
+        stylesheet: Option<Arc<Stylesheet>>,
         media: Option<String>,
     },
 }
@@ -624,11 +668,14 @@ impl StylesheetSlot {
         }
     }
 
-    fn set_css(&mut self, css: String) {
+    fn set_stylesheet(&mut self, stylesheet: Arc<Stylesheet>) {
         match self {
             StylesheetSlot::Inline { .. } => {}
-            StylesheetSlot::External { css: slot_css, .. } => {
-                *slot_css = Some(css);
+            StylesheetSlot::External {
+                stylesheet: slot_sheet,
+                ..
+            } => {
+                *slot_sheet = Some(stylesheet);
             }
         }
     }
@@ -636,7 +683,7 @@ impl StylesheetSlot {
     fn is_loaded(&self) -> bool {
         match self {
             StylesheetSlot::Inline { .. } => true,
-            StylesheetSlot::External { css, .. } => css.is_some(),
+            StylesheetSlot::External { stylesheet, .. } => stylesheet.is_some(),
         }
     }
 }
@@ -645,15 +692,21 @@ fn stylesheet_sources_from_loader(slots: &[StylesheetSlot]) -> Vec<StylesheetSou
     let mut out = Vec::new();
     for slot in slots {
         match slot {
-            StylesheetSlot::Inline { css, media } => out.push(StylesheetSource {
-                css: css.clone(),
+            StylesheetSlot::Inline { stylesheet, media } => out.push(StylesheetSource {
+                stylesheet: stylesheet.clone(),
                 media: media.clone(),
             }),
-            StylesheetSlot::External { css: Some(css), media, .. } => out.push(StylesheetSource {
-                css: css.clone(),
+            StylesheetSlot::External {
+                stylesheet: Some(stylesheet),
+                media,
+                ..
+            } => out.push(StylesheetSource {
+                stylesheet: stylesheet.clone(),
                 media: media.clone(),
             }),
-            StylesheetSlot::External { css: None, .. } => {}
+            StylesheetSlot::External {
+                stylesheet: None, ..
+            } => {}
         }
     }
     out
@@ -730,5 +783,33 @@ impl crate::app::App for BrowserApp {
 
     fn mouse_down(&mut self, x_px: i32, y_px: i32, viewport: Viewport) -> Result<TickResult, String> {
         BrowserApp::mouse_down(self, x_px, y_px, viewport)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stylesheets_are_parsed_once_and_reused_across_viewports() {
+        crate::css::reset_stylesheet_parse_call_count();
+        let html = "<style>body { margin: 0; }</style><style>p { color: #123456; }</style><p>t</p>";
+
+        let mut app = BrowserApp::from_html("test", html).unwrap();
+        let parsed = crate::css::stylesheet_parse_call_count();
+        assert_eq!(parsed, 2);
+
+        app.ensure_styles_for_viewport(Viewport {
+            width_px: 320,
+            height_px: 200,
+        })
+        .unwrap();
+        app.ensure_styles_for_viewport(Viewport {
+            width_px: 480,
+            height_px: 200,
+        })
+        .unwrap();
+
+        assert_eq!(crate::css::stylesheet_parse_call_count(), parsed);
     }
 }

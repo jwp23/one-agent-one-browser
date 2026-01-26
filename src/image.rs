@@ -68,7 +68,17 @@ pub fn decode_image(data: &[u8]) -> Result<Argb32Image, String> {
     if looks_like_webp(data) {
         return decode_webp_argb32(data);
     }
+    if looks_like_png(data) {
+        return decode_png_argb32(data);
+    }
+    if looks_like_jpeg(data) {
+        return decode_jpeg_argb32(data);
+    }
     Err("Unsupported image format".to_owned())
+}
+
+pub fn looks_like_supported_image(data: &[u8]) -> bool {
+    looks_like_webp(data) || looks_like_png(data) || looks_like_jpeg(data)
 }
 
 fn looks_like_webp(data: &[u8]) -> bool {
@@ -76,6 +86,254 @@ fn looks_like_webp(data: &[u8]) -> bool {
         return false;
     }
     &data[..4] == b"RIFF" && &data[8..12] == b"WEBP"
+}
+
+fn looks_like_png(data: &[u8]) -> bool {
+    const SIG: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    data.len() >= SIG.len() && data[..SIG.len()] == SIG
+}
+
+fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    use core::ffi::{c_int, c_void};
+
+    #[repr(C)]
+    struct PngImage {
+        opaque: *mut c_void,
+        version: u32,
+        width: u32,
+        height: u32,
+        format: u32,
+        flags: u32,
+        colormap_entries: u32,
+        warning_or_error: u32,
+        message: [u8; 64],
+    }
+
+    const PNG_IMAGE_VERSION: u32 = 1;
+    const PNG_FORMAT_RGBA: u32 = 0x03;
+
+    #[link(name = "png16")]
+    unsafe extern "C" {
+        fn png_image_begin_read_from_memory(
+            image: *mut PngImage,
+            memory: *const c_void,
+            size: usize,
+        ) -> c_int;
+        fn png_image_finish_read(
+            image: *mut PngImage,
+            background: *const c_void,
+            buffer: *mut c_void,
+            row_stride: c_int,
+            colormap: *const c_void,
+        ) -> c_int;
+        fn png_image_free(image: *mut PngImage);
+    }
+
+    struct PngImageGuard {
+        image: PngImage,
+    }
+
+    impl Drop for PngImageGuard {
+        fn drop(&mut self) {
+            unsafe { png_image_free(&mut self.image) };
+        }
+    }
+
+    fn error_message(prefix: &str, image: &PngImage) -> String {
+        let end = image
+            .message
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(image.message.len());
+        let message = std::str::from_utf8(&image.message[..end]).unwrap_or("").trim();
+        if message.is_empty() {
+            prefix.to_owned()
+        } else {
+            format!("{prefix}: {message}")
+        }
+    }
+
+    let mut guard = PngImageGuard {
+        image: PngImage {
+            opaque: std::ptr::null_mut(),
+            version: PNG_IMAGE_VERSION,
+            width: 0,
+            height: 0,
+            format: 0,
+            flags: 0,
+            colormap_entries: 0,
+            warning_or_error: 0,
+            message: [0u8; 64],
+        },
+    };
+
+    let ok = unsafe {
+        png_image_begin_read_from_memory(
+            &mut guard.image,
+            data.as_ptr().cast::<c_void>(),
+            data.len(),
+        )
+    };
+    if ok == 0 {
+        return Err(error_message("png_image_begin_read_from_memory failed", &guard.image));
+    }
+
+    let width = guard.image.width;
+    let height = guard.image.height;
+    if width == 0 || height == 0 {
+        return Err("Invalid PNG dimensions".to_owned());
+    }
+
+    guard.image.format = PNG_FORMAT_RGBA;
+
+    let len = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "PNG image size overflow".to_owned())? as usize;
+
+    let mut rgba = vec![0u8; len];
+    let ok = unsafe {
+        png_image_finish_read(
+            &mut guard.image,
+            std::ptr::null(),
+            rgba.as_mut_ptr().cast::<c_void>(),
+            0,
+            std::ptr::null(),
+        )
+    };
+    if ok == 0 {
+        return Err(error_message("png_image_finish_read failed", &guard.image));
+    }
+
+    let argb32 = premultiply_rgba_to_bgra(&rgba);
+    Argb32Image::new(width, height, argb32)
+}
+
+fn looks_like_jpeg(data: &[u8]) -> bool {
+    data.len() >= 2 && data[0] == 0xff && data[1] == 0xd8
+}
+
+fn decode_jpeg_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    use core::ffi::{c_char, c_int, c_ulong, c_void};
+
+    type TjHandle = *mut c_void;
+
+    const TJPF_BGRA: c_int = 8;
+
+    #[link(name = "turbojpeg")]
+    unsafe extern "C" {
+        fn tjInitDecompress() -> TjHandle;
+        fn tjDestroy(handle: TjHandle) -> c_int;
+        fn tjGetErrorStr2(handle: TjHandle) -> *const c_char;
+        fn tjDecompressHeader3(
+            handle: TjHandle,
+            jpeg_buf: *const u8,
+            jpeg_size: c_ulong,
+            width: *mut c_int,
+            height: *mut c_int,
+            jpeg_subsamp: *mut c_int,
+            jpeg_colorspace: *mut c_int,
+        ) -> c_int;
+        fn tjDecompress2(
+            handle: TjHandle,
+            jpeg_buf: *const u8,
+            jpeg_size: c_ulong,
+            dst_buf: *mut u8,
+            width: c_int,
+            pitch: c_int,
+            height: c_int,
+            pixel_format: c_int,
+            flags: c_int,
+        ) -> c_int;
+    }
+
+    struct TjGuard(TjHandle);
+
+    impl Drop for TjGuard {
+        fn drop(&mut self) {
+            if self.0.is_null() {
+                return;
+            }
+            unsafe {
+                let _ = tjDestroy(self.0);
+            }
+        }
+    }
+
+    fn tj_error(handle: TjHandle, prefix: &str) -> String {
+        let ptr = unsafe { tjGetErrorStr2(handle) };
+        if ptr.is_null() {
+            return prefix.to_owned();
+        }
+        let message = unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if message.is_empty() {
+            prefix.to_owned()
+        } else {
+            format!("{prefix}: {message}")
+        }
+    }
+
+    let handle = unsafe { tjInitDecompress() };
+    if handle.is_null() {
+        return Err("tjInitDecompress failed".to_owned());
+    }
+    let _guard = TjGuard(handle);
+
+    let mut width: c_int = 0;
+    let mut height: c_int = 0;
+    let mut subsamp: c_int = 0;
+    let mut colorspace: c_int = 0;
+    let rc = unsafe {
+        tjDecompressHeader3(
+            handle,
+            data.as_ptr(),
+            data.len() as c_ulong,
+            &mut width,
+            &mut height,
+            &mut subsamp,
+            &mut colorspace,
+        )
+    };
+    if rc != 0 {
+        return Err(tj_error(handle, "tjDecompressHeader3 failed"));
+    }
+    if width <= 0 || height <= 0 {
+        return Err(format!("Invalid JPEG dimensions: {width}x{height}"));
+    }
+
+    let width_u32: u32 = width
+        .try_into()
+        .map_err(|_| format!("Invalid JPEG width: {width}"))?;
+    let height_u32: u32 = height
+        .try_into()
+        .map_err(|_| format!("Invalid JPEG height: {height}"))?;
+
+    let len = width_u32
+        .checked_mul(height_u32)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "JPEG image size overflow".to_owned())? as usize;
+
+    let mut bgra = vec![0u8; len];
+    let rc = unsafe {
+        tjDecompress2(
+            handle,
+            data.as_ptr(),
+            data.len() as c_ulong,
+            bgra.as_mut_ptr(),
+            width,
+            0,
+            height,
+            TJPF_BGRA,
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(tj_error(handle, "tjDecompress2 failed"));
+    }
+
+    Argb32Image::new(width_u32, height_u32, bgra)
 }
 
 fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
@@ -124,9 +382,12 @@ fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
         .ok_or_else(|| "WebP image size overflow".to_owned())? as usize;
 
     let rgba = unsafe { std::slice::from_raw_parts(buf.0, len) };
-    let mut argb32 = vec![0u8; len];
+    Argb32Image::new(width_u32, height_u32, premultiply_rgba_to_bgra(rgba))
+}
 
-    for (src, dst) in rgba.chunks_exact(4).zip(argb32.chunks_exact_mut(4)) {
+fn premultiply_rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
+    let mut out = vec![0u8; rgba.len()];
+    for (src, dst) in rgba.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
         let r = src[0] as u16;
         let g = src[1] as u16;
         let b = src[2] as u16;
@@ -143,6 +404,5 @@ fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
         dst[2] = premul(r);
         dst[3] = a8;
     }
-
-    Argb32Image::new(width_u32, height_u32, argb32)
+    out
 }
