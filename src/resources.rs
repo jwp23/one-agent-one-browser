@@ -1,3 +1,4 @@
+use crate::debug;
 use crate::net;
 use crate::url::Url;
 use std::cell::RefCell;
@@ -69,19 +70,48 @@ impl ResourceManager {
 
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
-            Err(_) => {
+            Err(err) => {
+                if debug::enabled(debug::Target::Res, debug::Level::Warn) {
+                    let path_display = path.display().to_string();
+                    let path_display = debug::shorten(&path_display, 64);
+                    let err = err.to_string();
+                    let err = debug::shorten(&err, 48);
+                    debug::log(
+                        debug::Target::Res,
+                        debug::Level::Warn,
+                        format_args!("file! path={path_display} err={err}"),
+                    );
+                }
                 state.cache_fail.insert(key);
                 return None;
             }
         };
 
         if !crate::image::looks_like_supported_image(&bytes) {
+            if debug::enabled(debug::Target::Res, debug::Level::Warn) {
+                let path_display = path.display().to_string();
+                let path_display = debug::shorten(&path_display, 64);
+                debug::log(
+                    debug::Target::Res,
+                    debug::Level::Warn,
+                    format_args!("file! path={path_display} err=unsupported_image"),
+                );
+            }
             state.cache_fail.insert(key);
             return None;
         }
 
         let bytes = Arc::new(bytes);
         state.cache_ok.insert(key, Arc::clone(&bytes));
+        if debug::enabled(debug::Target::Res, debug::Level::Debug) {
+            let path_display = path.display().to_string();
+            let path_display = debug::shorten(&path_display, 64);
+            debug::log(
+                debug::Target::Res,
+                debug::Level::Debug,
+                format_args!("file+ path={path_display} ok bytes={}", bytes.len()),
+            );
+        }
         Some(bytes)
     }
 
@@ -138,7 +168,7 @@ struct ResourceState {
 impl ResourceState {
     fn new() -> Self {
         Self {
-            pool: net::FetchPool::new(8),
+            pool: net::FetchPool::new(8).with_label("res"),
             pending: HashMap::new(),
             cache_ok: HashMap::new(),
             cache_fail: HashSet::new(),
@@ -160,10 +190,36 @@ impl ResourceState {
                         self.cache_ok.insert(key, Arc::new(bytes));
                         new_successes = new_successes.saturating_add(1);
                     } else {
+                        if debug::enabled(debug::Target::Res, debug::Level::Warn) {
+                            let url = match &key {
+                                ResolvedReference::Url(url) => debug::shorten(url, 64),
+                                ResolvedReference::File(_) => debug::shorten("", 64),
+                            };
+                            debug::log(
+                                debug::Target::Res,
+                                debug::Level::Warn,
+                                format_args!(
+                                    "url! id={} url={url} err=unsupported_image",
+                                    event.id.as_u64()
+                                ),
+                            );
+                        }
                         self.cache_fail.insert(key);
                     }
                 }
-                Err(_) => {
+                Err(err) => {
+                    if debug::enabled(debug::Target::Res, debug::Level::Warn) {
+                        let url = match &key {
+                            ResolvedReference::Url(url) => debug::shorten(url, 64),
+                            ResolvedReference::File(_) => debug::shorten("", 64),
+                        };
+                        let err = debug::shorten(&err, 48);
+                        debug::log(
+                            debug::Target::Res,
+                            debug::Level::Warn,
+                            format_args!("url! id={} url={url} err={err}", event.id.as_u64()),
+                        );
+                    }
                     self.cache_fail.insert(key);
                 }
             }

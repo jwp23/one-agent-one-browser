@@ -1,3 +1,4 @@
+use crate::debug;
 use std::sync::{mpsc, Arc, Mutex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -20,6 +21,7 @@ pub struct FetchPool {
     job_tx: mpsc::Sender<Job>,
     event_rx: mpsc::Receiver<FetchEvent>,
     next_id: u64,
+    label: &'static str,
 }
 
 impl FetchPool {
@@ -39,20 +41,83 @@ impl FetchPool {
             job_tx,
             event_rx,
             next_id: 1,
+            label: "pool",
         }
+    }
+
+    pub fn with_label(mut self, label: &'static str) -> FetchPool {
+        self.label = label;
+        self
     }
 
     pub fn fetch_bytes(&mut self, url: String) -> Result<RequestId, String> {
         let id = RequestId(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
-        self.job_tx
-            .send(Job::Fetch { id, url })
-            .map_err(|_| "Failed to enqueue fetch: pool is shut down".to_owned())?;
+        let url_for_log = debug::enabled(debug::Target::Net, debug::Level::Debug)
+            .then(|| debug::shorten(&url, 64).into_owned());
+
+        let job = Job::Fetch { id, url };
+        if let Err(err) = self.job_tx.send(job) {
+            let url = match err.0 {
+                Job::Fetch { url, .. } => url,
+            };
+            if debug::enabled(debug::Target::Net, debug::Level::Error) {
+                let url = debug::shorten(&url, 64);
+                debug::log(
+                    debug::Target::Net,
+                    debug::Level::Error,
+                    format_args!("req! p={} id={} url={url} err=pool_down", self.label, id.as_u64()),
+                );
+            }
+            return Err("Failed to enqueue fetch: pool is shut down".to_owned());
+        }
+
+        if let Some(url) = url_for_log {
+            debug::log(
+                debug::Target::Net,
+                debug::Level::Debug,
+                format_args!("req+ p={} id={} url={url}", self.label, id.as_u64()),
+            );
+        }
         Ok(id)
     }
 
     pub fn try_recv(&mut self) -> Option<FetchEvent> {
-        self.event_rx.try_recv().ok()
+        let event = self.event_rx.try_recv().ok()?;
+        if debug::enabled(debug::Target::Net, debug::Level::Warn) {
+            if let Err(err) = &event.result {
+                let url = debug::shorten(&event.url, 64);
+                let err = debug::shorten(err, 48);
+                debug::log(
+                    debug::Target::Net,
+                    debug::Level::Warn,
+                    format_args!(
+                        "req- p={} id={} url={url} err={err}",
+                        self.label,
+                        event.id.as_u64()
+                    ),
+                );
+                return Some(event);
+            }
+        }
+
+        if debug::enabled(debug::Target::Net, debug::Level::Debug) {
+            if let Ok(bytes) = &event.result {
+                let url = debug::shorten(&event.url, 64);
+                debug::log(
+                    debug::Target::Net,
+                    debug::Level::Debug,
+                    format_args!(
+                        "req- p={} id={} url={url} ok bytes={}",
+                        self.label,
+                        event.id.as_u64(),
+                        bytes.len()
+                    ),
+                );
+            }
+        }
+
+        Some(event)
     }
 }
 
@@ -80,4 +145,3 @@ fn worker_loop(shared_rx: Arc<Mutex<mpsc::Receiver<Job>>>, event_tx: mpsc::Sende
         }
     }
 }
-

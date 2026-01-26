@@ -1,5 +1,6 @@
 use crate::app::TickResult;
 use crate::css::Stylesheet;
+use crate::debug;
 use crate::dom::Document;
 use crate::render::{DisplayCommand, DisplayList, LinkHitRegion, Painter, Viewport};
 use crate::resources::{NoResources, ResourceLoader, ResourceManager};
@@ -9,8 +10,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod render_helpers;
+mod url_loader;
 
 use self::render_helpers::{clip_rect_to_viewport, fill_linear_gradient_rect_clipped};
+use self::url_loader::{stylesheet_sources_from_loader, StylesheetSlot, UrlLoader};
 
 const STYLES_DEBOUNCE: Duration = Duration::from_millis(80);
 
@@ -47,6 +50,15 @@ impl BrowserApp {
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
         let source = std::fs::read_to_string(path)
             .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+        if debug::enabled(debug::Target::Nav, debug::Level::Info) {
+            let path_display = path.display().to_string();
+            let path_display = debug::shorten(&path_display, 64);
+            debug::log(
+                debug::Target::Nav,
+                debug::Level::Info,
+                format_args!("open file={path_display} bytes={}", source.len()),
+            );
+        }
         let title = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -69,6 +81,10 @@ impl BrowserApp {
 
     pub fn from_url(url: &str) -> Result<Self, String> {
         let base_url = Url::parse(url)?;
+        if debug::enabled(debug::Target::Nav, debug::Level::Info) {
+            let url = debug::shorten(base_url.as_str(), 72);
+            debug::log(debug::Target::Nav, debug::Level::Info, format_args!("open url={url}"));
+        }
         let title = base_url.as_str().to_owned();
         let loading_document = crate::html::parse_document("<p>Loading...</p>");
         let styles = StyleComputer::empty();
@@ -101,9 +117,21 @@ impl BrowserApp {
         if let Some(mut loader) = self.url_loader.take() {
             while let Some(event) = loader.pool.try_recv() {
                 if event.id == loader.html_request_id && !loader.html_loaded {
-                    let bytes = event.result.map_err(|err| {
-                        format!("Failed to fetch {}: {err}", loader.base_url.as_str())
-                    })?;
+                    let bytes = match event.result {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            if debug::enabled(debug::Target::Nav, debug::Level::Error) {
+                                let url = debug::shorten(loader.base_url.as_str(), 64);
+                                let err = debug::shorten(&err, 48);
+                                debug::log(
+                                    debug::Target::Nav,
+                                    debug::Level::Error,
+                                    format_args!("html! url={url} err={err}"),
+                                );
+                            }
+                            return Err(format!("Failed to fetch {}: {err}", loader.base_url.as_str()));
+                        }
+                    };
                     let html_source = String::from_utf8_lossy(&bytes).into_owned();
                     let document = crate::html::parse_document(&html_source);
 
@@ -117,6 +145,25 @@ impl BrowserApp {
                     self.cached_layout = None;
                     self.scroll_y_px = 0;
                     needs_redraw = true;
+                    if debug::enabled(debug::Target::Nav, debug::Level::Info) {
+                        let css_total = loader.stylesheets.len();
+                        let css_external = loader
+                            .stylesheets
+                            .iter()
+                            .filter(|slot| matches!(slot, StylesheetSlot::External { .. }))
+                            .count();
+                        let url = debug::shorten(loader.base_url.as_str(), 64);
+                        debug::log(
+                            debug::Target::Nav,
+                            debug::Level::Info,
+                            format_args!(
+                                "html+ url={url} bytes={} css={}/{}",
+                                bytes.len(),
+                                css_external,
+                                css_total
+                            ),
+                        );
+                    }
                     continue;
                 }
 
@@ -128,17 +175,38 @@ impl BrowserApp {
                     continue;
                 };
 
-                let bytes = event
-                    .result
-                    .map_err(|err| format!("Failed to fetch {}: {err}", event.url))?;
-                let css = String::from_utf8_lossy(&bytes).into_owned();
-                slot.set_stylesheet(Arc::new(Stylesheet::parse(&css)));
-                self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
-                self.styles = StyleComputer::empty();
-                self.styles_viewport = None;
-                self.cached_layout = None;
-                self.styles_dirty = true;
-                self.last_stylesheet_change = Some(Instant::now());
+                match event.result {
+                    Ok(bytes) => {
+                        let css = String::from_utf8_lossy(&bytes).into_owned();
+                        slot.set_stylesheet(Arc::new(Stylesheet::parse(&css)));
+                        self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
+                        self.styles = StyleComputer::empty();
+                        self.styles_viewport = None;
+                        self.cached_layout = None;
+                        self.styles_dirty = true;
+                        self.last_stylesheet_change = Some(Instant::now());
+                        if debug::enabled(debug::Target::Css, debug::Level::Debug) {
+                            let url = debug::shorten(&event.url, 64);
+                            debug::log(
+                                debug::Target::Css,
+                                debug::Level::Debug,
+                                format_args!("css+ id={} url={url} bytes={}", event.id.as_u64(), bytes.len()),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        slot.set_stylesheet(Arc::new(Stylesheet::parse("")));
+                        if debug::enabled(debug::Target::Css, debug::Level::Warn) {
+                            let url = debug::shorten(&event.url, 64);
+                            let err = debug::shorten(&err, 48);
+                            debug::log(
+                                debug::Target::Css,
+                                debug::Level::Warn,
+                                format_args!("css! id={} url={url} err={err}", event.id.as_u64()),
+                            );
+                        }
+                    }
+                }
             }
 
             ready_for_screenshot = loader.ready_for_screenshot();
@@ -160,6 +228,13 @@ impl BrowserApp {
             if tick.new_successes > 0 {
                 self.cached_layout = None;
                 needs_redraw = true;
+                if debug::enabled(debug::Target::Res, debug::Level::Debug) {
+                    debug::log(
+                        debug::Target::Res,
+                        debug::Level::Debug,
+                        format_args!("res+ n={}", tick.new_successes),
+                    );
+                }
             }
             pending_resources = resources.pending_count();
         }
@@ -190,8 +265,25 @@ impl BrowserApp {
                 .map(|resources| resources as &dyn ResourceLoader)
                 .unwrap_or(&no_resources);
 
+            let layout_start = debug::enabled(debug::Target::Layout, debug::Level::Debug)
+                .then(std::time::Instant::now);
             let output =
                 crate::layout::layout_document(&self.document, &self.styles, painter, viewport, resources)?;
+            if let Some(start) = layout_start {
+                let ms: u64 = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                debug::log(
+                    debug::Target::Layout,
+                    debug::Level::Debug,
+                    format_args!(
+                        "layout+ ms={ms} vw={} vh={} cmds={} links={} h={}",
+                        viewport.width_px,
+                        viewport.height_px,
+                        output.display_list.commands.len(),
+                        output.link_regions.len(),
+                        output.document_height_px
+                    ),
+                );
+            }
             self.cached_layout = Some(CachedLayout {
                 viewport,
                 display_list: output.display_list,
@@ -469,8 +561,15 @@ impl BrowserApp {
         }
 
         if href.starts_with("http://") || href.starts_with("https://") {
-            let Ok(url) = Url::parse(href) else {
-                return Ok(());
+            let url = match Url::parse(href) {
+                Ok(url) => url,
+                Err(_) => {
+                    if debug::enabled(debug::Target::Nav, debug::Level::Debug) {
+                        let href = debug::shorten(href, 64);
+                        debug::log(debug::Target::Nav, debug::Level::Debug, format_args!("href? {href}"));
+                    }
+                    return Ok(());
+                }
             };
             return self.begin_url_navigation(url);
         }
@@ -495,6 +594,10 @@ impl BrowserApp {
     }
 
     fn begin_url_navigation(&mut self, url: Url) -> Result<(), String> {
+        if debug::enabled(debug::Target::Nav, debug::Level::Info) {
+            let url = debug::shorten(url.as_str(), 72);
+            debug::log(debug::Target::Nav, debug::Level::Info, format_args!("nav url={url}"));
+        }
         self.title = url.as_str().to_owned();
         self.base = Some(PageBase::Url(url.clone()));
         self.resources = Some(ResourceManager::from_url(url.clone()));
@@ -512,6 +615,15 @@ impl BrowserApp {
     fn load_file(&mut self, path: &std::path::Path) -> Result<(), String> {
         let source = std::fs::read_to_string(path)
             .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+        if debug::enabled(debug::Target::Nav, debug::Level::Info) {
+            let path_display = path.display().to_string();
+            let path_display = debug::shorten(&path_display, 64);
+            debug::log(
+                debug::Target::Nav,
+                debug::Level::Info,
+                format_args!("nav file={path_display} bytes={}", source.len()),
+            );
+        }
         let title = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -562,6 +674,18 @@ impl BrowserApp {
         self.styles = StyleComputer::from_stylesheets(stylesheets);
         self.styles_viewport = Some(viewport);
         self.cached_layout = None;
+        if debug::enabled(debug::Target::Css, debug::Level::Debug) {
+            debug::log(
+                debug::Target::Css,
+                debug::Level::Debug,
+                format_args!(
+                    "styles+ vw={} vh={} sheets={}",
+                    viewport.width_px,
+                    viewport.height_px,
+                    self.style_sources.len()
+                ),
+            );
+        }
         Ok(())
     }
 }
@@ -711,184 +835,6 @@ fn resolve_stylesheet_file_path(base_dir: &std::path::Path, href: &str) -> std::
 
 fn resolve_link_file_path(base_dir: &std::path::Path, href: &str) -> std::path::PathBuf {
     resolve_stylesheet_file_path(base_dir, href)
-}
-
-struct UrlLoader {
-    base_url: Url,
-    pool: crate::net::FetchPool,
-    html_request_id: crate::net::RequestId,
-    html_loaded: bool,
-    stylesheets: Vec<StylesheetSlot>,
-}
-
-impl UrlLoader {
-    fn new(base_url: Url) -> Result<UrlLoader, String> {
-        let mut pool = crate::net::FetchPool::new(8);
-        let html_request_id = pool.fetch_bytes(base_url.as_str().to_owned())?;
-        Ok(UrlLoader {
-            base_url,
-            pool,
-            html_request_id,
-            html_loaded: false,
-            stylesheets: Vec::new(),
-        })
-    }
-
-    fn fetch_stylesheets(&mut self, document: &Document) -> Result<Vec<StylesheetSlot>, String> {
-        let mut refs = Vec::new();
-        collect_stylesheet_refs(&document.root, &self.base_url, &mut refs)?;
-
-        let mut slots = Vec::with_capacity(refs.len());
-        for reference in refs {
-            match reference {
-                StylesheetRef::Inline { css, media } => slots.push(StylesheetSlot::Inline {
-                    stylesheet: Arc::new(Stylesheet::parse(&css)),
-                    media,
-                }),
-                StylesheetRef::External { url, media } => {
-                    let id = self.pool.fetch_bytes(url.clone())?;
-                    slots.push(StylesheetSlot::External {
-                        request_id: id,
-                        stylesheet: None,
-                        media,
-                    });
-                }
-            }
-        }
-
-        Ok(slots)
-    }
-
-    fn ready_for_screenshot(&self) -> bool {
-        if !self.html_loaded {
-            return false;
-        }
-        self.stylesheets.iter().all(|slot| slot.is_loaded())
-    }
-}
-
-enum StylesheetSlot {
-    Inline {
-        stylesheet: Arc<Stylesheet>,
-        media: Option<String>,
-    },
-    External {
-        request_id: crate::net::RequestId,
-        stylesheet: Option<Arc<Stylesheet>>,
-        media: Option<String>,
-    },
-}
-
-impl StylesheetSlot {
-    fn request_id(&self) -> Option<crate::net::RequestId> {
-        match self {
-            StylesheetSlot::Inline { .. } => None,
-            StylesheetSlot::External { request_id, .. } => Some(*request_id),
-        }
-    }
-
-    fn set_stylesheet(&mut self, stylesheet: Arc<Stylesheet>) {
-        match self {
-            StylesheetSlot::Inline { .. } => {}
-            StylesheetSlot::External {
-                stylesheet: slot_sheet,
-                ..
-            } => {
-                *slot_sheet = Some(stylesheet);
-            }
-        }
-    }
-
-    fn is_loaded(&self) -> bool {
-        match self {
-            StylesheetSlot::Inline { .. } => true,
-            StylesheetSlot::External { stylesheet, .. } => stylesheet.is_some(),
-        }
-    }
-}
-
-fn stylesheet_sources_from_loader(slots: &[StylesheetSlot]) -> Vec<StylesheetSource> {
-    let mut out = Vec::new();
-    for slot in slots {
-        match slot {
-            StylesheetSlot::Inline { stylesheet, media } => out.push(StylesheetSource {
-                stylesheet: stylesheet.clone(),
-                media: media.clone(),
-            }),
-            StylesheetSlot::External {
-                stylesheet: Some(stylesheet),
-                media,
-                ..
-            } => out.push(StylesheetSource {
-                stylesheet: stylesheet.clone(),
-                media: media.clone(),
-            }),
-            StylesheetSlot::External {
-                stylesheet: None, ..
-            } => {}
-        }
-    }
-    out
-}
-
-enum StylesheetRef {
-    Inline {
-        css: String,
-        media: Option<String>,
-    },
-    External {
-        url: String,
-        media: Option<String>,
-    },
-}
-
-fn collect_stylesheet_refs(
-    element: &crate::dom::Element,
-    base_url: &Url,
-    out: &mut Vec<StylesheetRef>,
-) -> Result<(), String> {
-    if element.name == "style" {
-        let mut css = String::new();
-        for child in &element.children {
-            if let crate::dom::Node::Text(text) = child {
-                css.push_str(text);
-                css.push('\n');
-            }
-        }
-        out.push(StylesheetRef::Inline {
-            css,
-            media: element.attributes.get("media").map(str::to_owned),
-        });
-    }
-
-    if is_stylesheet_link(element) {
-        if let Some(href) = element.attributes.get("href") {
-            let href = href.trim();
-            if !href.is_empty() {
-                let url = if href.starts_with("http://") || href.starts_with("https://") {
-                    href.to_owned()
-                } else {
-                    base_url
-                        .resolve(href)
-                        .ok_or_else(|| format!("Failed to resolve stylesheet URL: {href}"))?
-                        .as_str()
-                        .to_owned()
-                };
-                out.push(StylesheetRef::External {
-                    url,
-                    media: element.attributes.get("media").map(str::to_owned),
-                });
-            }
-        }
-    }
-
-    for child in &element.children {
-        if let crate::dom::Node::Element(el) = child {
-            collect_stylesheet_refs(el, base_url, out)?;
-        }
-    }
-
-    Ok(())
 }
 
 impl crate::app::App for BrowserApp {
