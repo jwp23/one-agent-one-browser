@@ -32,6 +32,7 @@ fn render_regression_suite() {
         cases_dir.join("percent-width.html"),
         cases_dir.join("input-controls.html"),
         cases_dir.join("blog-test.html"),
+        cases_dir.join("simonwillison-kakapo-cam.url"),
         cases_dir.join("hn-frontpage.html"),
         cases_dir.join("medium-home.html"),
         cases_dir
