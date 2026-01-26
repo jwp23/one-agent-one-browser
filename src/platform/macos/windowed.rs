@@ -66,6 +66,11 @@ unsafe extern "C" {
     static NSDefaultRunLoopMode: Id;
 }
 
+// We only interact with AppKit via the Objective-C runtime. Explicitly linking the framework
+// ensures the NS* classes are loaded and registered with libobjc.
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {}
+
 pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> Result<(), String> {
     let initial_width_css = options.initial_width_px.unwrap_or(1024);
     let initial_height_css = options.initial_height_px.unwrap_or(768);
