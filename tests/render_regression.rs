@@ -18,6 +18,7 @@ fn render_regression_suite() {
         cases_dir.join("border-radius.html"),
         cases_dir.join("image-webp.html"),
         cases_dir.join("inline-svg.html"),
+        cases_dir.join("inline-svg-xlink.html"),
         cases_dir.join("svg-attr-px.html"),
         cases_dir.join("svg-auto-width-flex.html"),
         cases_dir.join("opacity.html"),
