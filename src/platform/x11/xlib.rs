@@ -1,4 +1,4 @@
-use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
+use core::ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
 
 pub type Atom = c_ulong;
 pub type Bool = c_int;
@@ -246,6 +246,27 @@ unsafe extern "C" {
         protocols: *mut Atom,
         count: c_int,
     ) -> c_int;
+
+    pub fn XGetSelectionOwner(display: *mut Display, selection: Atom) -> Window;
+
+    pub fn XGetWindowProperty(
+        display: *mut Display,
+        window: Window,
+        property: Atom,
+        long_offset: c_long,
+        long_length: c_long,
+        delete: Bool,
+        req_type: Atom,
+        actual_type_return: *mut Atom,
+        actual_format_return: *mut c_int,
+        nitems_return: *mut c_ulong,
+        bytes_after_return: *mut c_ulong,
+        prop_return: *mut *mut c_uchar,
+    ) -> c_int;
+
+    pub fn XResourceManagerString(display: *mut Display) -> *mut c_char;
+
+    pub fn XFree(data: *mut c_void) -> c_int;
 
     pub fn XPending(display: *mut Display) -> c_int;
     pub fn XNextEvent(display: *mut Display, event_return: *mut XEvent) -> c_int;

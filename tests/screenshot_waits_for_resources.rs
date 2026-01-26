@@ -72,6 +72,7 @@ fn run_browser_screenshot(
 ) {
     let screenshot_arg = format!("--screenshot={}", screenshot_path.display());
     let mut child = Command::new(browser_exe)
+        .env("OAB_SCALE", "1")
         .arg("--headless")
         .arg(format!("--width={width_px}"))
         .arg(format!("--height={height_px}"))

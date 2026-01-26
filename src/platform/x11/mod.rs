@@ -1,16 +1,20 @@
 mod cairo;
 mod painter;
+mod scale;
 mod xft;
 mod xlib;
 
 use super::WindowOptions;
 use crate::app::App;
-use crate::render::Viewport;
+use crate::geom::Color;
+use crate::image::Argb32Image;
+use crate::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
 use core::ffi::{c_int, c_uint, c_ulong};
 use std::ffi::CString;
 use std::time::{Duration, Instant};
 
 use painter::X11Painter;
+use scale::ScaleFactor;
 use xlib::*;
 
 // Avoid starving rendering when the X server generates events faster than we can drain them
@@ -44,6 +48,7 @@ fn run_window_with_display<A: App>(
 ) -> Result<(), String>
 {
     let screen = unsafe { XDefaultScreen(display) };
+    let scale = ScaleFactor::detect(display, screen);
     let visual = unsafe { XDefaultVisual(display, screen) };
     if visual.is_null() {
         return Err("XDefaultVisual returned null".to_owned());
@@ -54,19 +59,21 @@ fn run_window_with_display<A: App>(
     let black_pixel = unsafe { XBlackPixel(display, screen) };
     let white_pixel = unsafe { XWhitePixel(display, screen) };
 
-    let initial_width_i32 = options.initial_width_px.unwrap_or(1024);
-    let initial_height_i32 = options.initial_height_px.unwrap_or(768);
-    if initial_width_i32 <= 0 || initial_height_i32 <= 0 {
+    let initial_width_css_i32 = options.initial_width_px.unwrap_or(1024);
+    let initial_height_css_i32 = options.initial_height_px.unwrap_or(768);
+    if initial_width_css_i32 <= 0 || initial_height_css_i32 <= 0 {
         return Err(format!(
-            "Invalid initial window size: {initial_width_i32}x{initial_height_i32}"
+            "Invalid initial window size: {initial_width_css_i32}x{initial_height_css_i32}"
         ));
     }
-    let initial_width: c_uint = initial_width_i32
+    let initial_width_device_i32 = scale.css_size_to_device_px(initial_width_css_i32);
+    let initial_height_device_i32 = scale.css_size_to_device_px(initial_height_css_i32);
+    let initial_width: c_uint = initial_width_device_i32
         .try_into()
-        .map_err(|_| format!("Initial width out of range: {initial_width_i32}"))?;
-    let initial_height: c_uint = initial_height_i32
+        .map_err(|_| format!("Initial width out of range: {initial_width_device_i32}"))?;
+    let initial_height: c_uint = initial_height_device_i32
         .try_into()
-        .map_err(|_| format!("Initial height out of range: {initial_height_i32}"))?;
+        .map_err(|_| format!("Initial height out of range: {initial_height_device_i32}"))?;
 
     let window = unsafe {
         XCreateSimpleWindow(
@@ -152,8 +159,12 @@ fn run_window_with_display<A: App>(
     )?;
 
     let mut viewport = Viewport {
-        width_px: initial_width as i32,
-        height_px: initial_height as i32,
+        width_px: initial_width_device_i32,
+        height_px: initial_height_device_i32,
+    };
+    let mut css_viewport = Viewport {
+        width_px: scale.device_size_to_css_px(viewport.width_px),
+        height_px: scale.device_size_to_css_px(viewport.height_px),
     };
 
     let mut screenshot_path = options.screenshot_path;
@@ -188,6 +199,10 @@ fn run_window_with_display<A: App>(
                             width_px: configure.width,
                             height_px: configure.height,
                         };
+                        css_viewport = Viewport {
+                            width_px: scale.device_size_to_css_px(viewport.width_px),
+                            height_px: scale.device_size_to_css_px(viewport.height_px),
+                        };
                         needs_redraw = true;
                         has_rendered_ready_state = false;
                         resource_wait_started = None;
@@ -196,7 +211,9 @@ fn run_window_with_display<A: App>(
                         let button: &XButtonEvent =
                             unsafe { &*(event.inner.as_ptr() as *const XButtonEvent) };
                         if button.button == 1 {
-                            let tick = app.mouse_down(button.x, button.y, viewport)?;
+                            let x_css = scale.device_coord_to_css_px(button.x);
+                            let y_css = scale.device_coord_to_css_px(button.y);
+                            let tick = app.mouse_down(x_css, y_css, css_viewport)?;
                             if tick.needs_redraw {
                                 needs_redraw = true;
                             }
@@ -206,7 +223,8 @@ fn run_window_with_display<A: App>(
                             } else {
                                 WHEEL_SCROLL_STEP_PX
                             };
-                            let tick = app.mouse_wheel(delta_y_px, viewport)?;
+                            let delta_y_css = scale.device_delta_to_css_px(delta_y_px);
+                            let tick = app.mouse_wheel(delta_y_css, css_viewport)?;
                             if tick.needs_redraw {
                                 needs_redraw = true;
                             }
@@ -297,7 +315,8 @@ fn run_window_with_display<A: App>(
 
             if needs_redraw {
                 painter.ensure_back_buffer(viewport)?;
-                app.render(&mut painter, viewport)?;
+                let mut scaled_painter = ScaledPainter::new(&mut painter, scale);
+                app.render(&mut scaled_painter, css_viewport)?;
                 needs_redraw = false;
 
                 if ready_for_screenshot {
@@ -333,4 +352,185 @@ fn run_window_with_display<A: App>(
     }
 
     loop_result
+}
+
+struct ScaledPainter<'a> {
+    inner: &'a mut X11Painter,
+    scale: ScaleFactor,
+}
+
+impl<'a> ScaledPainter<'a> {
+    fn new(inner: &'a mut X11Painter, scale: ScaleFactor) -> Self {
+        Self { inner, scale }
+    }
+
+    fn scale_style(&self, style: TextStyle) -> TextStyle {
+        TextStyle {
+            font_size_px: self.scale.css_size_to_device_px(style.font_size_px),
+            letter_spacing_px: self.scale.css_coord_to_device_px(style.letter_spacing_px),
+            ..style
+        }
+    }
+}
+
+impl TextMeasurer for ScaledPainter<'_> {
+    fn font_metrics_px(&self, style: TextStyle) -> FontMetricsPx {
+        let scaled_style = self.scale_style(style);
+        let metrics = self.inner.font_metrics_px(scaled_style);
+        FontMetricsPx {
+            ascent_px: self
+                .scale
+                .device_delta_to_css_px(metrics.ascent_px)
+                .max(1),
+            descent_px: self
+                .scale
+                .device_delta_to_css_px(metrics.descent_px)
+                .max(0),
+        }
+    }
+
+    fn text_width_px(&self, text: &str, style: TextStyle) -> Result<i32, String> {
+        let scaled_style = self.scale_style(style);
+        let width_device_px = self.inner.text_width_px(text, scaled_style)?;
+        Ok(self.scale.device_delta_to_css_px(width_device_px).max(0))
+    }
+}
+
+impl Painter for ScaledPainter<'_> {
+    fn clear(&mut self) -> Result<(), String> {
+        self.inner.clear()
+    }
+
+    fn push_opacity(&mut self, opacity: u8) -> Result<(), String> {
+        self.inner.push_opacity(opacity)
+    }
+
+    fn pop_opacity(&mut self, opacity: u8) -> Result<(), String> {
+        self.inner.pop_opacity(opacity)
+    }
+
+    fn fill_rect(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        color: Color,
+    ) -> Result<(), String> {
+        let (x_device_px, width_device_px) = self.scale.css_span_to_device_px(x_px, width_px);
+        let (y_device_px, height_device_px) = self.scale.css_span_to_device_px(y_px, height_px);
+        self.inner.fill_rect(
+            x_device_px,
+            y_device_px,
+            width_device_px,
+            height_device_px,
+            color,
+        )
+    }
+
+    fn fill_rounded_rect(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        radius_px: i32,
+        color: Color,
+    ) -> Result<(), String> {
+        let (x_device_px, width_device_px) = self.scale.css_span_to_device_px(x_px, width_px);
+        let (y_device_px, height_device_px) = self.scale.css_span_to_device_px(y_px, height_px);
+        let radius_device_px = self.scale.css_coord_to_device_px(radius_px).max(0);
+        self.inner.fill_rounded_rect(
+            x_device_px,
+            y_device_px,
+            width_device_px,
+            height_device_px,
+            radius_device_px,
+            color,
+        )
+    }
+
+    fn stroke_rounded_rect(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        radius_px: i32,
+        border_width_px: i32,
+        color: Color,
+    ) -> Result<(), String> {
+        let (x_device_px, width_device_px) = self.scale.css_span_to_device_px(x_px, width_px);
+        let (y_device_px, height_device_px) = self.scale.css_span_to_device_px(y_px, height_px);
+        let radius_device_px = self.scale.css_coord_to_device_px(radius_px).max(0);
+        let border_width_device_px = self.scale.css_coord_to_device_px(border_width_px).max(0);
+        self.inner.stroke_rounded_rect(
+            x_device_px,
+            y_device_px,
+            width_device_px,
+            height_device_px,
+            radius_device_px,
+            border_width_device_px,
+            color,
+        )
+    }
+
+    fn draw_text(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        text: &str,
+        style: TextStyle,
+    ) -> Result<(), String> {
+        let x_device_px = self.scale.css_coord_to_device_px(x_px);
+        let y_device_px = self.scale.css_coord_to_device_px(y_px);
+        let style = self.scale_style(style);
+        self.inner.draw_text(x_device_px, y_device_px, text, style)
+    }
+
+    fn draw_image(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        image: &Argb32Image,
+        opacity: u8,
+    ) -> Result<(), String> {
+        let (x_device_px, width_device_px) = self.scale.css_span_to_device_px(x_px, width_px);
+        let (y_device_px, height_device_px) = self.scale.css_span_to_device_px(y_px, height_px);
+        self.inner.draw_image(
+            x_device_px,
+            y_device_px,
+            width_device_px,
+            height_device_px,
+            image,
+            opacity,
+        )
+    }
+
+    fn draw_svg(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        width_px: i32,
+        height_px: i32,
+        svg_xml: &str,
+        opacity: u8,
+    ) -> Result<(), String> {
+        let (x_device_px, width_device_px) = self.scale.css_span_to_device_px(x_px, width_px);
+        let (y_device_px, height_device_px) = self.scale.css_span_to_device_px(y_px, height_px);
+        self.inner.draw_svg(
+            x_device_px,
+            y_device_px,
+            width_device_px,
+            height_device_px,
+            svg_xml,
+            opacity,
+        )
+    }
+
+    fn flush(&mut self) -> Result<(), String> {
+        self.inner.flush()
+    }
 }

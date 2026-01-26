@@ -217,7 +217,11 @@ fn render_to_png(
     let _ = std::fs::remove_file(png_path);
 
     let screenshot_arg = format!("--screenshot={}", png_path.display());
-    let mut child = Command::new(browser_exe)
+    let mut cmd = Command::new(browser_exe);
+    if std::env::var_os("OAB_SCALE").is_none() {
+        cmd.env("OAB_SCALE", "1");
+    }
+    let mut child = cmd
         .arg("--headless")
         .arg(browser_arg)
         .arg(screenshot_arg)
