@@ -228,7 +228,13 @@ impl<'a> Parser<'a> {
 
     fn skip_balanced_block(&mut self) {
         let mut depth = 1usize;
-        while let Some(ch) = self.peek_char() {
+        while self.cursor < self.input.len() {
+            if self.input[self.cursor..].starts_with("/*") {
+                self.skip_comment();
+                continue;
+            }
+
+            let Some(ch) = self.peek_char() else { break };
             self.cursor += ch.len_utf8();
             match ch {
                 '{' => depth = depth.saturating_add(1),
@@ -240,10 +246,6 @@ impl<'a> Parser<'a> {
                 }
                 '"' | '\'' => {
                     self.skip_quoted_string(ch);
-                }
-                '/' => {
-                    self.cursor = self.cursor.saturating_sub(1);
-                    self.skip_comment();
                 }
                 _ => {}
             }
@@ -660,6 +662,16 @@ mod tests {
         );
         assert_eq!(sheet.rules.len(), 1);
         assert_eq!(sheet.rules[0].declarations[0].value, "#000000");
+    }
+
+    #[test]
+    fn ignores_at_rules_with_slashes_in_blocks() {
+        let sheet = Stylesheet::parse(
+            "@font-face { src: url('/static/font.woff2') format('woff2'); }\n\
+             body { color: #000000; }",
+        );
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].selectors[0].parts[0].tag.as_deref(), Some("body"));
     }
 
     #[test]
