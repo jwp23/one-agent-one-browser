@@ -93,6 +93,12 @@ fn looks_like_png(data: &[u8]) -> bool {
     data.len() >= SIG.len() && data[..SIG.len()] == SIG
 }
 
+#[cfg(target_os = "macos")]
+fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    decode_imageio_argb32(data)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     use core::ffi::{c_int, c_void};
 
@@ -213,6 +219,12 @@ fn looks_like_jpeg(data: &[u8]) -> bool {
     data.len() >= 2 && data[0] == 0xff && data[1] == 0xd8
 }
 
+#[cfg(target_os = "macos")]
+fn decode_jpeg_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    decode_imageio_argb32(data)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn decode_jpeg_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     use core::ffi::{c_char, c_int, c_ulong, c_void};
 
@@ -336,6 +348,12 @@ fn decode_jpeg_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     Argb32Image::new(width_u32, height_u32, bgra)
 }
 
+#[cfg(target_os = "macos")]
+fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    decode_imageio_argb32(data)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     use core::ffi::{c_int, c_void};
 
@@ -385,6 +403,179 @@ fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     Argb32Image::new(width_u32, height_u32, premultiply_rgba_to_bgra(rgba))
 }
 
+#[cfg(target_os = "macos")]
+fn decode_imageio_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    use core::ffi::{c_int, c_uchar, c_uint, c_void};
+
+    type CFIndex = isize;
+    type CFAllocatorRef = *const c_void;
+    type CFDataRef = *const c_void;
+    type CFDictionaryRef = *const c_void;
+    type CFTypeRef = *const c_void;
+    type CGContextRef = *mut c_void;
+    type CGColorSpaceRef = *mut c_void;
+    type CGImageRef = *mut c_void;
+    type CGImageSourceRef = *mut c_void;
+
+    type CGFloat = f64;
+    type SizeT = usize;
+
+    #[repr(C)]
+    struct CGPoint {
+        x: CGFloat,
+        y: CGFloat,
+    }
+
+    #[repr(C)]
+    struct CGSize {
+        width: CGFloat,
+        height: CGFloat,
+    }
+
+    #[repr(C)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    const K_CGIMAGE_ALPHA_PREMULTIPLIED_FIRST: c_uint = 2;
+    const K_CGBITMAP_BYTEORDER32LITTLE: c_uint = 2 << 12;
+    const BITMAP_INFO_BGRA_PREMULTIPLIED: c_uint =
+        K_CGIMAGE_ALPHA_PREMULTIPLIED_FIRST | K_CGBITMAP_BYTEORDER32LITTLE;
+
+    const BLEND_MODE_COPY: c_int = 0;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFDataCreate(
+            allocator: CFAllocatorRef,
+            bytes: *const c_uchar,
+            length: CFIndex,
+        ) -> CFDataRef;
+        fn CFRelease(cf: CFTypeRef);
+    }
+
+    #[link(name = "ImageIO", kind = "framework")]
+    unsafe extern "C" {
+        fn CGImageSourceCreateWithData(
+            data: CFDataRef,
+            options: CFDictionaryRef,
+        ) -> CGImageSourceRef;
+        fn CGImageSourceCreateImageAtIndex(
+            source: CGImageSourceRef,
+            index: SizeT,
+            options: CFDictionaryRef,
+        ) -> CGImageRef;
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGColorSpaceCreateDeviceRGB() -> CGColorSpaceRef;
+        fn CGColorSpaceRelease(space: CGColorSpaceRef);
+
+        fn CGBitmapContextCreate(
+            data: *mut c_void,
+            width: SizeT,
+            height: SizeT,
+            bits_per_component: SizeT,
+            bytes_per_row: SizeT,
+            space: CGColorSpaceRef,
+            bitmap_info: c_uint,
+        ) -> CGContextRef;
+        fn CGContextRelease(c: CGContextRef);
+
+        fn CGContextSetBlendMode(c: CGContextRef, mode: c_int);
+        fn CGContextDrawImage(c: CGContextRef, rect: CGRect, image: CGImageRef);
+
+        fn CGImageGetWidth(image: CGImageRef) -> SizeT;
+        fn CGImageGetHeight(image: CGImageRef) -> SizeT;
+        fn CGImageRelease(image: CGImageRef);
+    }
+
+    let len: CFIndex = data
+        .len()
+        .try_into()
+        .map_err(|_| "Image buffer too large".to_owned())?;
+    let cf_data = unsafe { CFDataCreate(std::ptr::null(), data.as_ptr(), len) };
+    if cf_data.is_null() {
+        return Err("CFDataCreate failed".to_owned());
+    }
+
+    let source = unsafe { CGImageSourceCreateWithData(cf_data, std::ptr::null()) };
+    unsafe { CFRelease(cf_data) };
+    if source.is_null() {
+        return Err("CGImageSourceCreateWithData failed".to_owned());
+    }
+
+    let image = unsafe { CGImageSourceCreateImageAtIndex(source, 0, std::ptr::null()) };
+    unsafe { CFRelease(source as CFTypeRef) };
+    if image.is_null() {
+        return Err("CGImageSourceCreateImageAtIndex failed".to_owned());
+    }
+
+    let width: u32 = unsafe { CGImageGetWidth(image) }
+        .try_into()
+        .map_err(|_| "Invalid decoded image width".to_owned())?;
+    let height: u32 = unsafe { CGImageGetHeight(image) }
+        .try_into()
+        .map_err(|_| "Invalid decoded image height".to_owned())?;
+    if width == 0 || height == 0 {
+        unsafe { CGImageRelease(image) };
+        return Err("Decoded image has invalid dimensions".to_owned());
+    }
+
+    let bytes_per_row = width
+        .checked_mul(4)
+        .ok_or_else(|| "Decoded image row stride overflow".to_owned())? as usize;
+    let expected_len = (height as usize)
+        .checked_mul(bytes_per_row)
+        .ok_or_else(|| "Decoded image buffer overflow".to_owned())?;
+    let mut bgra = vec![0u8; expected_len];
+
+    let color_space = unsafe { CGColorSpaceCreateDeviceRGB() };
+    if color_space.is_null() {
+        unsafe { CGImageRelease(image) };
+        return Err("CGColorSpaceCreateDeviceRGB failed".to_owned());
+    }
+
+    let ctx = unsafe {
+        CGBitmapContextCreate(
+            bgra.as_mut_ptr().cast::<c_void>(),
+            width as usize,
+            height as usize,
+            8,
+            bytes_per_row,
+            color_space,
+            BITMAP_INFO_BGRA_PREMULTIPLIED,
+        )
+    };
+    unsafe { CGColorSpaceRelease(color_space) };
+    if ctx.is_null() {
+        unsafe { CGImageRelease(image) };
+        return Err("CGBitmapContextCreate failed".to_owned());
+    }
+
+    unsafe {
+        CGContextSetBlendMode(ctx, BLEND_MODE_COPY);
+        CGContextDrawImage(
+            ctx,
+            CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: CGSize {
+                    width: width as CGFloat,
+                    height: height as CGFloat,
+                },
+            },
+            image,
+        );
+        CGContextRelease(ctx);
+        CGImageRelease(image);
+    }
+
+    Argb32Image::new(width, height, bgra)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn premultiply_rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; rgba.len()];
     for (src, dst) in rgba.chunks_exact(4).zip(out.chunks_exact_mut(4)) {

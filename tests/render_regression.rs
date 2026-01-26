@@ -1,3 +1,5 @@
+#![cfg(not(target_os = "macos"))]
+
 use std::path::PathBuf;
 use std::process::Command;
 
