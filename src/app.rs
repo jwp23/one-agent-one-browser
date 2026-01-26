@@ -11,6 +11,10 @@ pub trait App {
     fn tick(&mut self) -> Result<TickResult, String>;
     fn render(&mut self, painter: &mut dyn Painter, viewport: Viewport) -> Result<(), String>;
 
+    fn navigate_back(&mut self) -> Result<TickResult, String> {
+        Ok(TickResult::default())
+    }
+
     fn mouse_down(
         &mut self,
         _x_px: i32,

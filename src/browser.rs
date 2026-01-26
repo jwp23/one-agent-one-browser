@@ -27,6 +27,8 @@ pub struct BrowserApp {
     scroll_y_px: i32,
     url_loader: Option<UrlLoader>,
     base: Option<PageBase>,
+    location: Option<PageLocation>,
+    history: Vec<PageLocation>,
     resources: Option<ResourceManager>,
     styles_dirty: bool,
     last_stylesheet_change: Option<Instant>,
@@ -44,6 +46,12 @@ struct CachedLayout {
 enum PageBase {
     Url(Url),
     FileDir(std::path::PathBuf),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PageLocation {
+    Url(Url),
+    File(std::path::PathBuf),
 }
 
 impl BrowserApp {
@@ -71,6 +79,7 @@ impl BrowserApp {
         let resource_base = ResourceBase::FileDir(base_dir.clone());
         let mut app = Self::from_html_with_base(&title, &source, Some(resource_base))?;
         app.base = Some(PageBase::FileDir(base_dir.clone()));
+        app.location = Some(PageLocation::File(path.to_owned()));
         app.resources = Some(ResourceManager::from_file_dir(base_dir));
         Ok(app)
     }
@@ -99,6 +108,8 @@ impl BrowserApp {
             scroll_y_px: 0,
             url_loader: Some(loader),
             base: Some(PageBase::Url(base_url.clone())),
+            location: Some(PageLocation::Url(base_url.clone())),
+            history: Vec::new(),
             resources: Some(ResourceManager::from_url(base_url)),
             styles_dirty: false,
             last_stylesheet_change: None,
@@ -554,11 +565,47 @@ impl BrowserApp {
 
 
 impl BrowserApp {
+    fn maybe_push_history(&mut self, previous: Option<PageLocation>) {
+        let Some(previous) = previous else {
+            return;
+        };
+        if self
+            .location
+            .as_ref()
+            .is_some_and(|current| current == &previous)
+        {
+            return;
+        }
+        self.history.push(previous);
+    }
+
+    fn navigate_to_location(&mut self, location: PageLocation) -> Result<(), String> {
+        match location {
+            PageLocation::Url(url) => self.begin_url_navigation(url),
+            PageLocation::File(path) => self.load_file(&path),
+        }
+    }
+
+    fn go_back(&mut self) -> Result<TickResult, String> {
+        while let Some(location) = self.history.pop() {
+            if self.navigate_to_location(location).is_ok() {
+                return Ok(TickResult {
+                    needs_redraw: true,
+                    ready_for_screenshot: false,
+                    pending_resources: 0,
+                });
+            }
+        }
+        Ok(TickResult::default())
+    }
+
     fn navigate_href(&mut self, href: &str) -> Result<(), String> {
         let href = href.trim();
         if href.is_empty() {
             return Ok(());
         }
+
+        let previous = self.location.clone();
 
         if href.starts_with("http://") || href.starts_with("https://") {
             let url = match Url::parse(href) {
@@ -571,23 +618,27 @@ impl BrowserApp {
                     return Ok(());
                 }
             };
-            return self.begin_url_navigation(url);
+            self.begin_url_navigation(url)?;
+            self.maybe_push_history(previous);
+            return Ok(());
         }
 
-        match self.base.clone() {
-            Some(PageBase::Url(base)) => {
+        match (self.base.clone(), previous) {
+            (Some(PageBase::Url(base)), previous) => {
                 let Some(url) = base.resolve(href) else {
                     return Ok(());
                 };
                 self.begin_url_navigation(url)?;
+                self.maybe_push_history(previous);
             }
-            Some(PageBase::FileDir(dir)) => {
+            (Some(PageBase::FileDir(dir)), previous) => {
                 let path = resolve_link_file_path(&dir, href);
                 if let Err(_) = self.load_file(&path) {
                     return Ok(());
                 }
+                self.maybe_push_history(previous);
             }
-            None => {}
+            (None, _) => {}
         }
 
         Ok(())
@@ -598,15 +649,18 @@ impl BrowserApp {
             let url = debug::shorten(url.as_str(), 72);
             debug::log(debug::Target::Nav, debug::Level::Info, format_args!("nav url={url}"));
         }
+        let loader = UrlLoader::new(url.clone())?;
         self.title = url.as_str().to_owned();
         self.base = Some(PageBase::Url(url.clone()));
+        self.location = Some(PageLocation::Url(url.clone()));
         self.resources = Some(ResourceManager::from_url(url.clone()));
         self.document = crate::html::parse_document("<p>Loading...</p>");
         self.styles = StyleComputer::empty();
         self.style_sources = Vec::new();
         self.styles_viewport = None;
         self.cached_layout = None;
-        self.url_loader = Some(UrlLoader::new(url)?);
+        self.scroll_y_px = 0;
+        self.url_loader = Some(loader);
         self.styles_dirty = false;
         self.last_stylesheet_change = None;
         Ok(())
@@ -646,6 +700,7 @@ impl BrowserApp {
         self.scroll_y_px = 0;
         self.url_loader = None;
         self.base = Some(PageBase::FileDir(base_dir));
+        self.location = Some(PageLocation::File(path.to_owned()));
         self.resources = match &self.base {
             Some(PageBase::Url(url)) => Some(ResourceManager::from_url(url.clone())),
             Some(PageBase::FileDir(dir)) => Some(ResourceManager::from_file_dir(dir.clone())),
@@ -721,6 +776,8 @@ impl BrowserApp {
             scroll_y_px: 0,
             url_loader: None,
             base: None,
+            location: None,
+            history: Vec::new(),
             resources: None,
             styles_dirty: false,
             last_stylesheet_change: None,
@@ -844,6 +901,10 @@ impl crate::app::App for BrowserApp {
 
     fn render(&mut self, painter: &mut dyn Painter, viewport: Viewport) -> Result<(), String> {
         BrowserApp::render(self, painter, viewport)
+    }
+
+    fn navigate_back(&mut self) -> Result<TickResult, String> {
+        BrowserApp::go_back(self)
     }
 
     fn mouse_down(&mut self, x_px: i32, y_px: i32, viewport: Viewport) -> Result<TickResult, String> {

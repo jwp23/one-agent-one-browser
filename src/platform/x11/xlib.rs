@@ -6,8 +6,11 @@ pub type Colormap = c_ulong;
 pub type Display = c_void;
 pub type Drawable = c_ulong;
 pub type GC = *mut c_void;
+pub type KeySym = c_ulong;
 pub type Pixmap = c_ulong;
 pub type Window = c_ulong;
+
+pub const KEYSYM_ESCAPE: KeySym = 0xff1b;
 
 #[repr(C)]
 pub struct Visual {
@@ -82,6 +85,25 @@ pub struct XButtonEvent {
     pub y_root: c_int,
     pub state: c_uint,
     pub button: c_uint,
+    pub same_screen: Bool,
+}
+
+#[repr(C)]
+pub struct XKeyEvent {
+    pub type_: c_int,
+    pub serial: c_ulong,
+    pub send_event: Bool,
+    pub display: *mut Display,
+    pub window: Window,
+    pub root: Window,
+    pub subwindow: Window,
+    pub time: c_ulong,
+    pub x: c_int,
+    pub y: c_int,
+    pub x_root: c_int,
+    pub y_root: c_int,
+    pub state: c_uint,
+    pub keycode: c_uint,
     pub same_screen: Bool,
 }
 
@@ -270,6 +292,7 @@ unsafe extern "C" {
 
     pub fn XPending(display: *mut Display) -> c_int;
     pub fn XNextEvent(display: *mut Display, event_return: *mut XEvent) -> c_int;
+    pub fn XLookupKeysym(key_event: *mut XKeyEvent, index: c_int) -> KeySym;
     pub fn XDestroyWindow(display: *mut Display, window: Window) -> c_int;
     pub fn XFlush(display: *mut Display) -> c_int;
     pub fn XSync(display: *mut Display, discard: Bool) -> c_int;

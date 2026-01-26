@@ -217,6 +217,11 @@ fn run_window_with_display<A: App>(
                             if tick.needs_redraw {
                                 needs_redraw = true;
                             }
+                        } else if button.button == 8 {
+                            let tick = app.navigate_back()?;
+                            if tick.needs_redraw {
+                                needs_redraw = true;
+                            }
                         } else if button.button == 4 || button.button == 5 {
                             let delta_y_px = if button.button == 4 {
                                 -WHEEL_SCROLL_STEP_PX
@@ -231,8 +236,12 @@ fn run_window_with_display<A: App>(
                         }
                     }
                     EVENT_TYPE_KEY_PRESS => {
-                        should_exit = true;
-                        break;
+                        let key: &XKeyEvent = unsafe { &*(event.inner.as_ptr() as *const XKeyEvent) };
+                        let keysym = unsafe { XLookupKeysym(key as *const XKeyEvent as *mut XKeyEvent, 0) };
+                        if keysym == KEYSYM_ESCAPE {
+                            should_exit = true;
+                            break;
+                        }
                     }
                     EVENT_TYPE_CLIENT_MESSAGE => {
                         let message: &XClientMessageEvent =

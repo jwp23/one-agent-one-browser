@@ -140,6 +140,42 @@ fn clicks_anchor_navigates_to_file() {
 }
 
 #[test]
+fn mouse_back_navigates_to_previous_page() {
+    let root = std::env::temp_dir().join(format!(
+        "one-agent-one-browser-mouse-back-{}",
+        unique_id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+
+    let page1 = root.join("page1.html");
+    let page2 = root.join("page2.html");
+
+    std::fs::write(&page1, r#"<p><a href="page2.html">Go</a></p>"#).unwrap();
+    std::fs::write(&page2, "<p>Page 2</p>").unwrap();
+
+    let mut app = BrowserApp::from_file(&page1).unwrap();
+    let viewport = Viewport {
+        width_px: 200,
+        height_px: 200,
+    };
+
+    let mut painter = NoopPainter;
+    app.render(&mut painter, viewport).unwrap();
+
+    let click = app.mouse_down(0, 0, viewport).unwrap();
+    assert!(click.needs_redraw);
+    assert_eq!(app.title(), "page2.html");
+
+    let back = app.navigate_back().unwrap();
+    assert!(back.needs_redraw);
+    assert_eq!(app.title(), "page1.html");
+
+    let _ = std::fs::remove_file(&page1);
+    let _ = std::fs::remove_file(&page2);
+    let _ = std::fs::remove_dir(&root);
+}
+
+#[test]
 fn scrolling_offsets_click_hit_testing() {
     let root = std::env::temp_dir().join(format!(
         "one-agent-one-browser-scroll-click-{}",
