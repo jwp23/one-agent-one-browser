@@ -207,7 +207,7 @@ impl LayoutEngine<'_> {
         let margin = style.margin;
         let margin_auto = style.margin_auto;
         let border = style.border_width;
-        let padding = style.padding;
+        let padding = style.padding.resolve_px(containing.width);
 
         let replaced_size = if inline::is_replaced_element(element) {
             Some(inline::measure_replaced_element_outer_size(
@@ -404,7 +404,7 @@ impl LayoutEngine<'_> {
         let margin = style.margin;
         let margin_auto = style.margin_auto;
         let border = style.border_width;
-        let padding = style.padding;
+        let padding = style.padding.resolve_px(containing.width);
 
         let replaced_size = if inline::is_replaced_element(element) {
             Some(inline::measure_replaced_element_outer_size(
@@ -422,6 +422,8 @@ impl LayoutEngine<'_> {
         {
             width
         } else if let (Some(left), Some(right)) = (style.left_px, style.right_px) {
+            let left = left.resolve_px(containing.width);
+            let right = right.resolve_px(containing.width);
             containing.width.saturating_sub(left.saturating_add(right))
         } else if let Some(size) = replaced_size {
             size.width
@@ -451,17 +453,21 @@ impl LayoutEngine<'_> {
         used_width = used_width.max(0);
 
         let mut x = if let Some(left) = style.left_px {
-            containing.x.saturating_add(left)
+            containing
+                .x
+                .saturating_add(left.resolve_px(containing.width))
         } else if let Some(right) = style.right_px {
             containing
                 .right()
                 .saturating_sub(used_width)
-                .saturating_sub(right)
+                .saturating_sub(right.resolve_px(containing.width))
         } else {
             containing.x
         };
         let y = if let Some(top) = style.top_px {
-            containing.y.saturating_add(top)
+            containing
+                .y
+                .saturating_add(top.resolve_px(containing.height))
         } else {
             containing.y
         };

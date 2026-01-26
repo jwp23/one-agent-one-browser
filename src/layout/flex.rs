@@ -96,7 +96,7 @@ fn layout_flex_row_single_line<'doc>(
         let main_size = measure_item_main_size_row(engine, container_style, ancestors, item, content_box.width)?;
         let border_width = main_size.clamp(0, content_box.width);
         let border_height =
-            measure_item_border_height(engine, container_style, ancestors, item, border_width)?;
+            measure_item_border_height(engine, container_style, ancestors, item, border_width, content_box.width)?;
         sizes.push(Size {
             width: border_width,
             height: border_height,
@@ -147,6 +147,7 @@ fn layout_flex_row_single_line<'doc>(
                 width: size.width,
                 height: size.height,
             },
+            content_box.width,
             paint,
         )?;
     }
@@ -240,7 +241,7 @@ fn layout_flex_row_line<'doc>(
     for (item, &main_size) in line_items.iter().zip(measured_main_sizes) {
         let border_width = main_size.clamp(0, line_box.width);
         let border_height =
-            measure_item_border_height(engine, container_style, ancestors, item, border_width)?;
+            measure_item_border_height(engine, container_style, ancestors, item, border_width, line_box.width)?;
         sizes.push(Size {
             width: border_width,
             height: border_height,
@@ -290,6 +291,7 @@ fn layout_flex_row_line<'doc>(
                 width: size.width,
                 height: size.height,
             },
+            line_box.width,
             paint,
         )?;
     }
@@ -321,7 +323,7 @@ fn layout_flex_column_container<'doc>(
 
         let border_width = resolve_column_item_width(content_box.width, item);
         let border_height =
-            measure_item_border_height(engine, style, ancestors, item, border_width)?;
+            measure_item_border_height(engine, style, ancestors, item, border_width, content_box.width)?;
 
         let aligned_x = align_column_cross_start(
             style.flex_align_items,
@@ -345,6 +347,7 @@ fn layout_flex_column_container<'doc>(
                 width: border_width,
                 height: border_height,
             },
+            content_box.width,
             paint,
         )?;
 
@@ -571,11 +574,12 @@ pub(super) fn measure_element_max_content_width<'doc>(
     }
     ancestors.pop();
 
+    let padding = style.padding.resolve_px(max_width);
     width_px = width_px
         .saturating_add(style.border_width.left)
         .saturating_add(style.border_width.right)
-        .saturating_add(style.padding.left)
-        .saturating_add(style.padding.right);
+        .saturating_add(padding.left)
+        .saturating_add(padding.right);
 
     Ok(width_px.max(0).min(max_width))
 }
@@ -657,11 +661,12 @@ fn measure_flex_container_max_content_width<'doc>(
     }
     ancestors.pop();
 
+    let padding = style.padding.resolve_px(max_width);
     let total = primary
         .saturating_add(style.border_width.left)
         .saturating_add(style.border_width.right)
-        .saturating_add(style.padding.left)
-        .saturating_add(style.padding.right);
+        .saturating_add(padding.left)
+        .saturating_add(padding.right);
 
     Ok(total.max(0).min(max_width))
 }
@@ -891,6 +896,7 @@ fn measure_item_border_height<'doc>(
     ancestors: &mut Vec<&'doc Element>,
     item: &FlexItem<'doc>,
     border_width: i32,
+    padding_reference_width_px: i32,
 ) -> Result<i32, String> {
     let border_width = border_width.max(0);
     match item.node {
@@ -914,6 +920,7 @@ fn measure_item_border_height<'doc>(
                     width: border_width,
                     height: engine.viewport.height_px,
                 },
+                padding_reference_width_px,
                 false,
             )?;
             Ok(border_height.max(0))
@@ -937,6 +944,7 @@ fn layout_item_box<'doc>(
     ancestors: &mut Vec<&'doc Element>,
     item: &FlexItem<'doc>,
     border_box: Rect,
+    padding_reference_width_px: i32,
     paint: bool,
 ) -> Result<i32, String> {
     if border_box.width <= 0 {
@@ -959,7 +967,10 @@ fn layout_item_box<'doc>(
     }
 
     let border = item.style.border_width;
-    let padding = item.style.padding;
+    let padding = item
+        .style
+        .padding
+        .resolve_px(padding_reference_width_px);
     let content_box = border_box.inset(super::add_edges(border, padding));
 
     let content_height = match item.node {

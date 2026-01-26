@@ -79,10 +79,6 @@ pub(super) fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
         Display::Block | Display::Flex | Display::Table => true,
         Display::TableRow | Display::TableCell => true,
         Display::Inline | Display::InlineBlock => {
-            if matches!(element.name.as_str(), "div" | "p" | "table") {
-                return true;
-            }
-
             if element.name != "span" {
                 return false;
             }

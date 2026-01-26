@@ -2,6 +2,7 @@ use super::builder::{MatchedRule, StyleBuilder};
 use super::{ComputedStyle, Display};
 use crate::css::{CompoundSelector, Stylesheet};
 use crate::dom::{Document, Element, Node};
+use crate::render::Viewport;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -78,7 +79,7 @@ impl StyleComputer {
 
         builder.apply_presentational_hints(element);
 
-        let matched = self.match_rules(element, ancestors);
+        let matched = self.match_rules(element, ancestors, viewport);
         builder.apply_matched_custom_properties(&matched);
         builder.apply_inline_style_custom_properties(element);
         builder.finalize_custom_properties();
@@ -88,9 +89,18 @@ impl StyleComputer {
         builder.finish()
     }
 
-    fn match_rules<'a>(&'a self, element: &Element, ancestors: &[&Element]) -> Vec<MatchedRule<'a>> {
+    fn match_rules<'a>(
+        &'a self,
+        element: &Element,
+        ancestors: &[&Element],
+        viewport: Option<(i32, i32)>,
+    ) -> Vec<MatchedRule<'a>> {
         let mut seen = HashSet::<usize>::new();
         let mut matched = Vec::<MatchedRule<'a>>::new();
+        let viewport = viewport.map(|(width_px, height_px)| Viewport {
+            width_px,
+            height_px,
+        });
 
         let mut consider = |rule_id: usize| {
             if !seen.insert(rule_id) {
@@ -105,6 +115,14 @@ impl StyleComputer {
             let Some(rule) = sheet.rules.get(rule_ref.rule_index) else {
                 return;
             };
+            if let Some(media) = rule.media.as_deref() {
+                let Some(viewport) = viewport else {
+                    return;
+                };
+                if !crate::css_media::media_query_matches(media, viewport) {
+                    return;
+                }
+            }
             let Some((specificity, _)) = super::selectors::match_rule(rule, element, ancestors)
             else {
                 return;

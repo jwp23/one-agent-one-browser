@@ -48,6 +48,10 @@ impl ResourceManager {
         self.state.borrow_mut().drain_events()
     }
 
+    pub fn pending_count(&self) -> usize {
+        self.state.borrow().pending.len()
+    }
+
     fn resolve_reference(&self, reference: &str) -> Option<ResolvedReference> {
         resolve_reference(&self.base, reference)
     }

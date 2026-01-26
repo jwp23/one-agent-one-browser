@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body {
+        margin: 0;
+        background: #ffffff;
+      }
+      #outer {
+        margin: 20px;
+        width: 400px;
+        background: #dddddd;
+      }
+      #calc {
+        height: 20px;
+        width: calc(50% - 20px);
+        background: #ff0000;
+      }
+      #expected {
+        height: 20px;
+        width: 180px;
+        margin-top: 10px;
+        background: #00aa00;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="outer">
+      <div id="calc"></div>
+      <div id="expected"></div>
+    </div>
+  </body>
+</html>

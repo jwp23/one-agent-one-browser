@@ -89,6 +89,9 @@ impl LayoutEngine<'_> {
             return Ok(());
         }
 
+        let transformed = style.text_transform.apply(text);
+        let text = transformed.as_ref();
+
         let mut text_style = self.text_style_for(style);
         text_style.underline = false;
         if is_placeholder {
@@ -141,4 +144,3 @@ fn placeholder_color(base: Color) -> Color {
         a: base.a,
     }
 }
-

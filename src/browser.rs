@@ -88,6 +88,7 @@ impl BrowserApp {
     pub fn tick(&mut self) -> Result<TickResult, String> {
         let mut needs_redraw = false;
         let mut ready_for_screenshot = true;
+        let mut pending_resources = 0usize;
 
         if let Some(mut loader) = self.url_loader.take() {
             while let Some(event) = loader.pool.try_recv() {
@@ -151,6 +152,7 @@ impl BrowserApp {
                 self.cached_layout = None;
                 needs_redraw = true;
             }
+            pending_resources = resources.pending_count();
         }
 
         if needs_redraw {
@@ -161,6 +163,7 @@ impl BrowserApp {
         Ok(TickResult {
             needs_redraw,
             ready_for_screenshot,
+            pending_resources,
         })
     }
 
@@ -276,6 +279,7 @@ impl BrowserApp {
         Ok(TickResult {
             needs_redraw: true,
             ready_for_screenshot: false,
+            pending_resources: 0,
         })
     }
 }

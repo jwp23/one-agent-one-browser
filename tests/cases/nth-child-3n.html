@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body {
+        margin: 0;
+        background: #ffffff;
+      }
+      #row {
+        margin: 20px;
+        padding: 10px;
+        background: #dddddd;
+      }
+      .item {
+        display: inline-block;
+        width: 50px;
+        height: 50px;
+        background: #ff0000;
+        margin-right: 10px;
+      }
+      .item:nth-child(3n) {
+        background: #00aa00;
+        margin-right: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="row">
+      <div class="item"></div>
+      <div class="item"></div>
+      <div class="item"></div>
+      <div class="item"></div>
+    </div>
+  </body>
+</html>

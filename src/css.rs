@@ -34,6 +34,7 @@ pub struct Rule {
     pub selectors: Vec<Selector>,
     pub declarations: Vec<Declaration>,
     pub order: u32,
+    pub media: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +114,13 @@ pub enum PseudoClass {
     Visited,
     Hover,
     Root,
+    NthChild(NthChildPattern),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NthChildPattern {
+    pub a: i32,
+    pub b: i32,
 }
 
 pub fn parse_inline_declarations(source: &str) -> Vec<Declaration> {
@@ -140,11 +148,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_stylesheet(mut self) -> Stylesheet {
+        let rules = self.parse_rules(None);
+        Stylesheet { rules }
+    }
+
+    fn parse_rules(&mut self, media: Option<String>) -> Vec<Rule> {
         let mut rules = Vec::new();
 
         while self.skip_ws_and_comments() {
             if self.peek_char() == Some('@') {
-                self.skip_at_rule();
+                if self.peek_media_at_rule() {
+                    self.parse_media_at_rule(&mut rules, media.as_deref());
+                } else {
+                    self.skip_at_rule();
+                }
                 continue;
             }
 
@@ -166,12 +183,76 @@ impl<'a> Parser<'a> {
                     selectors,
                     declarations,
                     order: self.order,
+                    media: media.clone(),
                 });
                 self.order = self.order.saturating_add(1);
             }
         }
 
-        Stylesheet { rules }
+        rules
+    }
+
+    fn peek_media_at_rule(&self) -> bool {
+        let rest = self.input[self.cursor..].as_bytes();
+        if rest.is_empty() || rest[0] != b'@' {
+            return false;
+        }
+        let keyword = b"media";
+        let mut idx = 1usize;
+        for &expected in keyword {
+            let Some(&byte) = rest.get(idx) else {
+                return false;
+            };
+            if byte.to_ascii_lowercase() != expected {
+                return false;
+            }
+            idx += 1;
+        }
+        let after = rest.get(idx).copied().unwrap_or(b' ');
+        !(after.is_ascii_alphanumeric() || after == b'-' || after == b'_')
+    }
+
+    fn parse_media_at_rule(&mut self, out: &mut Vec<Rule>, outer_media: Option<&str>) {
+        if self.peek_char() != Some('@') {
+            return;
+        }
+        self.cursor += 1;
+        let _ = self.consume_until_word_end(); // "media"
+
+        let Some(media_text) = self.consume_until('{') else {
+            return;
+        };
+        if self.peek_char() != Some('{') {
+            return;
+        }
+        self.cursor += 1;
+
+        let inner_css = self.consume_block_contents();
+        let inner_media = media_text.trim();
+        let combined = match outer_media {
+            Some(outer) if !outer.is_empty() => format!("{outer} and {inner_media}"),
+            _ => inner_media.to_owned(),
+        };
+
+        let mut nested = Parser {
+            input: inner_css,
+            cursor: 0,
+            order: self.order,
+        };
+        out.extend(nested.parse_rules(Some(combined)));
+        self.order = nested.order;
+    }
+
+    fn consume_until_word_end(&mut self) -> Option<&'a str> {
+        let start = self.cursor;
+        while let Some(ch) = self.peek_char() {
+            if ch.is_whitespace() || ch == ';' || ch == '{' {
+                break;
+            }
+            self.cursor += ch.len_utf8();
+        }
+        let word = self.input[start..self.cursor].trim();
+        if word.is_empty() { None } else { Some(word) }
     }
 
     fn skip_ws_and_comments(&mut self) -> bool {
@@ -324,6 +405,11 @@ fn parse_selector_group(input: &str) -> Vec<Selector> {
 }
 
 fn parse_selector(selector: &str) -> Selector {
+    let selector = if selector.contains('>') {
+        std::borrow::Cow::Owned(selector.replace('>', " > "))
+    } else {
+        std::borrow::Cow::Borrowed(selector)
+    };
     let parts = selector
         .split_whitespace()
         .map(str::trim)
@@ -372,16 +458,30 @@ fn parse_compound_selector(mut input: &str) -> CompoundSelector {
                 }
 
                 let (name, after_name) = split_pseudo_name(rest);
-                if name.is_empty()
-                    || is_pseudo_element
-                    || after_name.starts_with('(')
-                    || matches!(name, "before" | "after")
-                {
+                if name.is_empty() || is_pseudo_element || matches!(name, "before" | "after") {
                     selector.unsupported = true;
                     break;
                 }
 
-                if let Some(pseudo) = parse_pseudo_class(name) {
+                if let Some(args) = after_name.strip_prefix('(') {
+                    let Some(close) = args.find(')') else {
+                        selector.unsupported = true;
+                        break;
+                    };
+                    let arg_text = args[..close].trim();
+                    let remaining = args[close + 1..].trim_start();
+                    if name == "nth-child" {
+                        let Some(pattern) = parse_nth_child_pattern(arg_text) else {
+                            selector.unsupported = true;
+                            break;
+                        };
+                        selector.pseudo_classes.push(PseudoClass::NthChild(pattern));
+                        input = remaining;
+                    } else {
+                        selector.unsupported = true;
+                        break;
+                    }
+                } else if let Some(pseudo) = parse_pseudo_class(name) {
                     selector.pseudo_classes.push(pseudo);
                     input = after_name;
                 } else {
@@ -487,6 +587,44 @@ fn parse_pseudo_class(name: &str) -> Option<PseudoClass> {
         "root" => Some(PseudoClass::Root),
         _ => None,
     }
+}
+
+fn parse_nth_child_pattern(input: &str) -> Option<NthChildPattern> {
+    let normalized = input.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    let value = normalized.to_ascii_lowercase();
+    if value.is_empty() {
+        return None;
+    }
+    if value == "odd" {
+        return Some(NthChildPattern { a: 2, b: 1 });
+    }
+    if value == "even" {
+        return Some(NthChildPattern { a: 2, b: 0 });
+    }
+
+    if let Some(n_idx) = value.find('n') {
+        let (a_part, b_part) = value.split_at(n_idx);
+        let b_part = &b_part[1..];
+
+        let a = if a_part.is_empty() || a_part == "+" {
+            1
+        } else if a_part == "-" {
+            -1
+        } else {
+            a_part.parse::<i32>().ok()?
+        };
+
+        let b = if b_part.is_empty() {
+            0
+        } else {
+            b_part.parse::<i32>().ok()?
+        };
+
+        return Some(NthChildPattern { a, b });
+    }
+
+    let b = value.parse::<i32>().ok()?;
+    Some(NthChildPattern { a: 0, b })
 }
 
 struct DeclarationParser<'a> {
@@ -655,13 +793,16 @@ mod tests {
     }
 
     #[test]
-    fn ignores_media_queries() {
+    fn parses_media_queries() {
         let sheet = Stylesheet::parse(
             "@media only screen { body { color: #ffffff; } }\n\
              body { color: #000000; }",
         );
-        assert_eq!(sheet.rules.len(), 1);
-        assert_eq!(sheet.rules[0].declarations[0].value, "#000000");
+        assert_eq!(sheet.rules.len(), 2);
+        assert_eq!(sheet.rules[0].media.as_deref(), Some("only screen"));
+        assert_eq!(sheet.rules[0].declarations[0].value, "#ffffff");
+        assert_eq!(sheet.rules[1].media, None);
+        assert_eq!(sheet.rules[1].declarations[0].value, "#000000");
     }
 
     #[test]

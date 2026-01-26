@@ -4,6 +4,7 @@ use crate::render::{Painter, Viewport};
 pub struct TickResult {
     pub needs_redraw: bool,
     pub ready_for_screenshot: bool,
+    pub pending_resources: usize,
 }
 
 pub trait App {

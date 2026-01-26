@@ -8,7 +8,7 @@ use crate::app::App;
 use crate::render::Viewport;
 use core::ffi::{c_int, c_uint, c_ulong};
 use std::ffi::CString;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use painter::X11Painter;
 use xlib::*;
@@ -16,6 +16,8 @@ use xlib::*;
 // Avoid starving rendering when the X server generates events faster than we can drain them
 // (e.g. during drag-resize). Rendering at least once per tick keeps the window responsive.
 const MAX_X11_EVENTS_PER_TICK: usize = 512;
+
+const SCREENSHOT_RESOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run_window<A: App>(title: &str, options: WindowOptions, app: &mut A) -> Result<(), String> {
     let display = unsafe { XOpenDisplay(std::ptr::null()) };
@@ -158,6 +160,8 @@ fn run_window_with_display<A: App>(
     let loop_result = (|| {
         let mut needs_redraw = true;
         let mut should_exit = false;
+        let mut has_rendered_ready_state = false;
+        let mut resource_wait_started: Option<Instant> = None;
 
         loop {
             let mut processed_events = 0usize;
@@ -183,6 +187,8 @@ fn run_window_with_display<A: App>(
                             height_px: configure.height,
                         };
                         needs_redraw = true;
+                        has_rendered_ready_state = false;
+                        resource_wait_started = None;
                     }
                     EVENT_TYPE_BUTTON_PRESS => {
                         let button: &XButtonEvent =
@@ -223,11 +229,58 @@ fn run_window_with_display<A: App>(
                 needs_redraw = true;
             }
             let ready_for_screenshot = tick.ready_for_screenshot;
-            if screenshot_path.is_some() && ready_for_screenshot {
-                needs_redraw = true;
+            if !ready_for_screenshot {
+                has_rendered_ready_state = false;
+                resource_wait_started = None;
             }
-            if headless && ready_for_screenshot {
+
+            let should_wait_for_resources = tick.pending_resources > 0;
+            let timed_out_waiting_for_resources = resource_wait_started
+                .is_some_and(|started| started.elapsed() >= SCREENSHOT_RESOURCE_WAIT_TIMEOUT);
+            let can_complete = !should_wait_for_resources || timed_out_waiting_for_resources;
+
+            let wants_screenshot = screenshot_path.is_some();
+            let should_complete_headless = headless && !wants_screenshot;
+            let should_complete_screenshot = wants_screenshot && ready_for_screenshot && has_rendered_ready_state;
+
+            let mut capture_now = false;
+            let mut capture_after_render = false;
+            let mut exit_headless_now = false;
+
+            if ready_for_screenshot && (wants_screenshot || headless) && !has_rendered_ready_state {
                 needs_redraw = true;
+            } else if ready_for_screenshot && should_wait_for_resources && has_rendered_ready_state {
+                resource_wait_started.get_or_insert(Instant::now());
+            } else if ready_for_screenshot && has_rendered_ready_state {
+                resource_wait_started = None;
+            }
+
+            if ready_for_screenshot && has_rendered_ready_state && can_complete {
+                if should_complete_screenshot {
+                    if needs_redraw {
+                        capture_after_render = true;
+                    } else {
+                        capture_now = true;
+                    }
+                } else if should_complete_headless && !needs_redraw {
+                    exit_headless_now = true;
+                }
+            }
+
+            if exit_headless_now {
+                break;
+            }
+
+            if capture_now {
+                let Some(path) = screenshot_path.take() else {
+                    return Err("Internal error: capture_now set but screenshot path missing".to_owned());
+                };
+                unsafe {
+                    XSync(display, 0);
+                }
+                let rgb = painter.capture_back_buffer_rgb()?;
+                crate::png::write_rgb_png(&path, &rgb)?;
+                break;
             }
 
             if needs_redraw {
@@ -236,15 +289,16 @@ fn run_window_with_display<A: App>(
                 needs_redraw = false;
 
                 if ready_for_screenshot {
-                    if let Some(path) = screenshot_path.take() {
+                    has_rendered_ready_state = true;
+                    if capture_after_render {
+                        let Some(path) = screenshot_path.take() else {
+                            return Err("Internal error: capture_after_render set but screenshot path missing".to_owned());
+                        };
                         unsafe {
                             XSync(display, 0);
                         }
                         let rgb = painter.capture_back_buffer_rgb()?;
                         crate::png::write_rgb_png(&path, &rgb)?;
-                        break;
-                    }
-                    if headless {
                         break;
                     }
                 }

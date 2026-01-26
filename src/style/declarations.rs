@@ -5,8 +5,9 @@ use super::parse::{
     parse_css_font_family, parse_css_length_px,
 };
 use super::{
-    AutoEdges, BorderStyle, CascadePriority, Display, Float, FlexAlignItems, FlexDirection,
-    FlexJustifyContent, FlexWrap, LetterSpacing, Position, StyleBuilder, TextAlign, Visibility,
+    AutoEdges, BorderStyle, CascadePriority, CssEdges, CssLength, Display, Float, FlexAlignItems,
+    FlexDirection, FlexJustifyContent, FlexWrap, LetterSpacing, Position, StyleBuilder, TextAlign,
+    TextTransform, Visibility,
 };
 
 pub(super) fn apply_declaration(
@@ -71,8 +72,8 @@ pub(super) fn apply_declaration(
                 || value.eq_ignore_ascii_case("initial")
             {
                 builder.apply_top(None, priority);
-            } else if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_top(Some(px), priority);
+            } else if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_top(Some(length), priority);
             }
         }
         "right" => {
@@ -82,8 +83,8 @@ pub(super) fn apply_declaration(
                 || value.eq_ignore_ascii_case("initial")
             {
                 builder.apply_right(None, priority);
-            } else if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_right(Some(px), priority);
+            } else if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_right(Some(length), priority);
             }
         }
         "bottom" => {
@@ -93,8 +94,8 @@ pub(super) fn apply_declaration(
                 || value.eq_ignore_ascii_case("initial")
             {
                 builder.apply_bottom(None, priority);
-            } else if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_bottom(Some(px), priority);
+            } else if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_bottom(Some(length), priority);
             }
         }
         "left" => {
@@ -104,8 +105,8 @@ pub(super) fn apply_declaration(
                 || value.eq_ignore_ascii_case("initial")
             {
                 builder.apply_left(None, priority);
-            } else if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_left(Some(px), priority);
+            } else if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_left(Some(length), priority);
             }
         }
         "color" => {
@@ -183,36 +184,45 @@ pub(super) fn apply_declaration(
                 builder.apply_text_align(align, priority);
             }
         }
+        "text-transform" => {
+            let transform = match value.trim().to_ascii_lowercase().as_str() {
+                "uppercase" => Some(TextTransform::Uppercase),
+                "lowercase" => Some(TextTransform::Lowercase),
+                "none" => Some(TextTransform::None),
+                _ => None,
+            };
+            if let Some(transform) = transform {
+                builder.apply_text_transform(transform, priority);
+            }
+        }
         "line-height" => {
-            if let Some(px) = builder.parse_css_line_height_px(value) {
-                builder.apply_line_height_px(px, priority);
-            } else if value.eq_ignore_ascii_case("normal") {
-                builder.apply_line_height_px(None, priority);
+            if let Some(line_height) = builder.parse_css_line_height(value) {
+                builder.apply_line_height(line_height, priority);
             }
         }
         "padding" => {
-            if let Some(edges) = parse_css_box_edges(value) {
+            if let Some(edges) = parse_css_box_edges_length(builder, value) {
                 builder.apply_padding(edges, priority);
             }
         }
         "padding-left" => {
-            if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_padding_component(|e| Edges { left: px, ..e }, priority);
+            if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_padding_component(|e| CssEdges { left: length, ..e }, priority);
             }
         }
         "padding-right" => {
-            if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_padding_component(|e| Edges { right: px, ..e }, priority);
+            if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_padding_component(|e| CssEdges { right: length, ..e }, priority);
             }
         }
         "padding-top" => {
-            if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_padding_component(|e| Edges { top: px, ..e }, priority);
+            if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_padding_component(|e| CssEdges { top: length, ..e }, priority);
             }
         }
         "padding-bottom" => {
-            if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_padding_component(|e| Edges { bottom: px, ..e }, priority);
+            if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_padding_component(|e| CssEdges { bottom: length, ..e }, priority);
             }
         }
         "border" => {
@@ -480,6 +490,42 @@ fn parse_border_shorthand(value: &str) -> Option<ParsedBorder> {
         style,
         color,
     })
+}
+
+fn parse_css_box_edges_length(builder: &StyleBuilder, value: &str) -> Option<CssEdges> {
+    let lengths: Vec<CssLength> = value
+        .split_whitespace()
+        .filter_map(|part| builder.parse_css_length(part))
+        .collect();
+
+    match lengths.as_slice() {
+        [] => None,
+        [all] => Some(CssEdges {
+            top: *all,
+            right: *all,
+            bottom: *all,
+            left: *all,
+        }),
+        [vertical, horizontal] => Some(CssEdges {
+            top: *vertical,
+            right: *horizontal,
+            bottom: *vertical,
+            left: *horizontal,
+        }),
+        [top, horizontal, bottom] => Some(CssEdges {
+            top: *top,
+            right: *horizontal,
+            bottom: *bottom,
+            left: *horizontal,
+        }),
+        [top, right, bottom, left] => Some(CssEdges {
+            top: *top,
+            right: *right,
+            bottom: *bottom,
+            left: *left,
+        }),
+        _ => None,
+    }
 }
 
 fn all_edges(px: i32) -> Edges {

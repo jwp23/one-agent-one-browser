@@ -3,9 +3,9 @@ use crate::dom::Element;
 use crate::geom::{Color, Edges};
 use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px};
 use super::{
-    custom_properties, declarations, length, AutoEdges, BorderStyle, ComputedStyle, CssLength,
+    custom_properties, declarations, length, AutoEdges, BorderStyle, ComputedStyle, CssEdges, CssLength,
     Display, Float, FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, FontFamily,
-    LinearGradient, Position, TextAlign, Visibility,
+    LineHeight, LinearGradient, Position, TextAlign, TextTransform, Visibility,
 };
 use super::CustomProperties;
 use std::collections::HashMap;
@@ -73,10 +73,10 @@ pub(super) struct StyleBuilder {
     visibility: Option<Cascaded<Visibility>>,
     position: Option<Cascaded<Position>>,
     float: Option<Cascaded<Float>>,
-    top_px: Option<Cascaded<Option<i32>>>,
-    right_px: Option<Cascaded<Option<i32>>>,
-    bottom_px: Option<Cascaded<Option<i32>>>,
-    left_px: Option<Cascaded<Option<i32>>>,
+    top_px: Option<Cascaded<Option<CssLength>>>,
+    right_px: Option<Cascaded<Option<CssLength>>>,
+    bottom_px: Option<Cascaded<Option<CssLength>>>,
+    left_px: Option<Cascaded<Option<CssLength>>>,
     opacity: Option<Cascaded<u8>>,
     color: Option<Cascaded<Color>>,
     background_color: Option<Cascaded<Option<Color>>>,
@@ -87,14 +87,15 @@ pub(super) struct StyleBuilder {
     bold: Option<Cascaded<bool>>,
     underline: Option<Cascaded<bool>>,
     text_align: Option<Cascaded<TextAlign>>,
-    line_height_px: Option<Cascaded<Option<i32>>>,
+    text_transform: Option<Cascaded<TextTransform>>,
+    line_height: Option<Cascaded<LineHeight>>,
     margin: Option<Cascaded<Edges>>,
     margin_auto: Option<Cascaded<AutoEdges>>,
     border_width: Option<Cascaded<Edges>>,
     border_style: Option<Cascaded<BorderStyle>>,
     border_color: Option<Cascaded<Color>>,
     border_radius_px: Option<Cascaded<i32>>,
-    padding: Option<Cascaded<Edges>>,
+    padding: Option<Cascaded<CssEdges>>,
     width_px: Option<Cascaded<Option<CssLength>>>,
     min_width_px: Option<Cascaded<Option<CssLength>>>,
     max_width_px: Option<Cascaded<Option<CssLength>>>,
@@ -136,7 +137,8 @@ impl StyleBuilder {
             bold: None,
             underline: None,
             text_align: None,
-            line_height_px: None,
+            text_transform: None,
+            line_height: None,
             margin: None,
             margin_auto: None,
             border_width: None,
@@ -228,10 +230,14 @@ impl StyleBuilder {
                 .text_align
                 .map(|v| v.value)
                 .unwrap_or(self.base.text_align),
-            line_height_px: self
-                .line_height_px
+            text_transform: self
+                .text_transform
                 .map(|v| v.value)
-                .unwrap_or(self.base.line_height_px),
+                .unwrap_or(self.base.text_transform),
+            line_height: self
+                .line_height
+                .map(|v| v.value)
+                .unwrap_or(self.base.line_height),
             margin: self.margin.map(|v| v.value).unwrap_or(self.base.margin),
             margin_auto: self
                 .margin_auto
@@ -495,19 +501,19 @@ impl StyleBuilder {
         apply_cascade(&mut self.float, value, priority);
     }
 
-    pub(super) fn apply_top(&mut self, value: Option<i32>, priority: CascadePriority) {
+    pub(super) fn apply_top(&mut self, value: Option<CssLength>, priority: CascadePriority) {
         apply_cascade(&mut self.top_px, value, priority);
     }
 
-    pub(super) fn apply_right(&mut self, value: Option<i32>, priority: CascadePriority) {
+    pub(super) fn apply_right(&mut self, value: Option<CssLength>, priority: CascadePriority) {
         apply_cascade(&mut self.right_px, value, priority);
     }
 
-    pub(super) fn apply_bottom(&mut self, value: Option<i32>, priority: CascadePriority) {
+    pub(super) fn apply_bottom(&mut self, value: Option<CssLength>, priority: CascadePriority) {
         apply_cascade(&mut self.bottom_px, value, priority);
     }
 
-    pub(super) fn apply_left(&mut self, value: Option<i32>, priority: CascadePriority) {
+    pub(super) fn apply_left(&mut self, value: Option<CssLength>, priority: CascadePriority) {
         apply_cascade(&mut self.left_px, value, priority);
     }
 
@@ -555,8 +561,12 @@ impl StyleBuilder {
         apply_cascade(&mut self.text_align, value, priority);
     }
 
-    pub(super) fn apply_line_height_px(&mut self, value: Option<i32>, priority: CascadePriority) {
-        apply_cascade(&mut self.line_height_px, value, priority);
+    pub(super) fn apply_text_transform(&mut self, value: TextTransform, priority: CascadePriority) {
+        apply_cascade(&mut self.text_transform, value, priority);
+    }
+
+    pub(super) fn apply_line_height(&mut self, value: LineHeight, priority: CascadePriority) {
+        apply_cascade(&mut self.line_height, value, priority);
     }
 
     pub(super) fn apply_margin(&mut self, value: Edges, priority: CascadePriority) {
@@ -583,7 +593,7 @@ impl StyleBuilder {
         apply_cascade(&mut self.border_radius_px, value, priority);
     }
 
-    pub(super) fn apply_padding(&mut self, value: Edges, priority: CascadePriority) {
+    pub(super) fn apply_padding(&mut self, value: CssEdges, priority: CascadePriority) {
         apply_cascade(&mut self.padding, value, priority);
     }
 
@@ -645,7 +655,7 @@ impl StyleBuilder {
 
     pub(super) fn apply_padding_component(
         &mut self,
-        update: impl FnOnce(Edges) -> Edges,
+        update: impl FnOnce(CssEdges) -> CssEdges,
         priority: CascadePriority,
     ) {
         let base = self
@@ -699,14 +709,7 @@ impl StyleBuilder {
         self.apply_border_width(updated, priority);
     }
 
-    pub(super) fn current_font_size_px(&self) -> i32 {
-        self.font_size_px
-            .as_ref()
-            .map(|v| v.value)
-            .unwrap_or(self.base.font_size_px)
-    }
-
-    pub(super) fn parse_css_line_height_px(&self, value: &str) -> Option<Option<i32>> {
+    pub(super) fn parse_css_line_height(&self, value: &str) -> Option<LineHeight> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return None;
@@ -717,12 +720,15 @@ impl StyleBuilder {
             .all(|ch| ch.is_ascii_digit() || ch == '.' || ch == '-')
         {
             let multiplier: f32 = trimmed.parse().ok()?;
-            let px = (multiplier * self.current_font_size_px() as f32).round() as i32;
-            return Some(Some(px));
+            return Some(LineHeight::Number(multiplier));
+        }
+
+        if trimmed.eq_ignore_ascii_case("normal") {
+            return Some(LineHeight::Normal);
         }
 
         if let Some(px) = self.parse_css_length_px(value) {
-            return Some(Some(px));
+            return Some(LineHeight::Px(px));
         }
 
         None

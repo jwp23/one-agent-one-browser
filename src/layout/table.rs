@@ -124,7 +124,7 @@ pub(super) fn layout_table<'doc>(
                 bottom: cellpadding,
                 left: cellpadding,
             };
-            let padding = add_edges(cell_padding, cell_style.padding);
+            let padding = add_edges(cell_padding, cell_style.padding.resolve_px(span_width));
 
             let border_box = Rect {
                 x,
@@ -314,7 +314,8 @@ fn measure_cell_min_width<'doc>(
     )?;
     ancestors.pop();
 
-    let padding = cell_style.padding.left.saturating_add(cell_style.padding.right);
+    let padding = cell_style.padding.resolve_px(0);
+    let padding = padding.left.saturating_add(padding.right);
     Ok(max_width
         .saturating_add(cellpadding.saturating_mul(2))
         .saturating_add(padding))
@@ -352,12 +353,13 @@ fn measure_inline_words<'doc>(
                 }
 
                 if let Some(width) = child_style.width_px {
+                    let padding = child_style.padding.resolve_px(0);
                     let total = width
                         .resolve_px(0)
                         .saturating_add(child_style.margin.left)
                         .saturating_add(child_style.margin.right)
-                        .saturating_add(child_style.padding.left)
-                        .saturating_add(child_style.padding.right);
+                        .saturating_add(padding.left)
+                        .saturating_add(padding.right);
                     *out = (*out).max(total);
                 }
 

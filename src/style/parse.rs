@@ -103,14 +103,14 @@ pub(super) fn parse_css_length_px(value: &str) -> Option<i32> {
     parse_css_length_px_with_viewport(value, None, None)
 }
 
-pub(super) fn parse_css_length_px_with_viewport(
+pub(super) fn parse_css_length_px_f32_with_viewport(
     value: &str,
     viewport_width_px: Option<i32>,
     viewport_height_px: Option<i32>,
-) -> Option<i32> {
+) -> Option<f32> {
     let value = value.trim();
     if value == "0" {
-        return Some(0);
+        return Some(0.0);
     }
 
     let mut end = 0usize;
@@ -126,21 +126,29 @@ pub(super) fn parse_css_length_px_with_viewport(
 
     let number: f32 = value[..end].parse().ok()?;
     let unit = value[end..].trim().to_ascii_lowercase();
-    let px = match unit.as_str() {
-        "px" | "" => number,
-        "pt" => number * (96.0 / 72.0),
-        "rem" | "em" => number * 16.0,
+    match unit.as_str() {
+        "px" | "" => Some(number),
+        "pt" => Some(number * (96.0 / 72.0)),
+        "rem" | "em" => Some(number * 16.0),
         "vw" => {
             let width_px = viewport_width_px?;
-            number * (width_px as f32) / 100.0
+            Some(number * (width_px as f32) / 100.0)
         }
         "vh" => {
             let height_px = viewport_height_px?;
-            number * (height_px as f32) / 100.0
+            Some(number * (height_px as f32) / 100.0)
         }
-        _ => return None,
-    };
-    Some(px.round() as i32)
+        _ => None,
+    }
+}
+
+pub(super) fn parse_css_length_px_with_viewport(
+    value: &str,
+    viewport_width_px: Option<i32>,
+    viewport_height_px: Option<i32>,
+) -> Option<i32> {
+    parse_css_length_px_f32_with_viewport(value, viewport_width_px, viewport_height_px)
+        .map(|px| px.round() as i32)
 }
 
 #[derive(Clone, Copy, Debug)]

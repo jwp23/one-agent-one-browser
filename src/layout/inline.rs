@@ -166,8 +166,9 @@ fn collect_tokens<'doc>(
     match node {
         Node::Text(text) => {
             let visible = paint && parent_style.visibility == Visibility::Visible;
+            let transformed = parent_style.text_transform.apply(text);
             push_text(
-                text,
+                transformed.as_ref(),
                 engine.text_style_for(parent_style),
                 visible,
                 link_href,
@@ -212,7 +213,8 @@ fn collect_tokens<'doc>(
             ancestors.push(el);
             match display {
                 Display::Inline => {
-                    push_inline_spacing(out, style.margin.left.saturating_add(style.padding.left));
+                    let padding = style.padding.resolve_px(max_width);
+                    push_inline_spacing(out, style.margin.left.saturating_add(padding.left));
                     for child in &el.children {
                         collect_tokens(
                             engine,
@@ -228,7 +230,7 @@ fn collect_tokens<'doc>(
                     }
                     push_inline_spacing(
                         out,
-                        style.margin.right.saturating_add(style.padding.right),
+                        style.margin.right.saturating_add(padding.right),
                     );
                 }
                 _ => {
@@ -287,7 +289,8 @@ fn measure_inline_element_outer_size<'doc>(
         .saturating_sub(margin.left.saturating_add(margin.right))
         .max(0);
 
-    let inset = super::add_edges(style.border_width, style.padding);
+    let padding = style.padding.resolve_px(max_width);
+    let inset = super::add_edges(style.border_width, padding);
     let horizontal_inset = inset.left.saturating_add(inset.right);
     let vertical_inset = inset.top.saturating_add(inset.bottom);
 
@@ -348,7 +351,8 @@ pub(super) fn measure_replaced_element_outer_size(
         .saturating_sub(margin.left.saturating_add(margin.right))
         .max(0);
 
-    let inset = super::add_edges(style.border_width, style.padding);
+    let padding = style.padding.resolve_px(max_width);
+    let inset = super::add_edges(style.border_width, padding);
     let horizontal_inset = inset.left.saturating_add(inset.right);
     let vertical_inset = inset.top.saturating_add(inset.bottom);
 
@@ -460,7 +464,12 @@ fn intrinsic_input_content_dimensions(
     style: &ComputedStyle,
 ) -> (Option<i32>, Option<i32>) {
     let font_size_px = style.font_size_px.max(0);
-    let line_height_px = style.line_height_px.unwrap_or(font_size_px).max(0).max(1);
+    let line_height_px = style
+        .line_height
+        .resolve_px(font_size_px)
+        .unwrap_or(font_size_px)
+        .max(0)
+        .max(1);
 
     let input_type = element
         .attributes
@@ -603,7 +612,11 @@ fn layout_tokens<'doc>(
     let mut lines: Vec<Line<'doc>> = Vec::new();
     let base_style = engine.text_style_for(parent_style);
     let base_metrics = engine.measurer.font_metrics_px(base_style);
-    let mut line = Line::new(parent_style.line_height_px, base_metrics);
+    let explicit_line_height_px = parent_style
+        .line_height
+        .resolve_px(parent_style.font_size_px)
+        .map(|value| value.max(1));
+    let mut line = Line::new(explicit_line_height_px, base_metrics);
     let mut x_px = 0i32;
 
     for token in tokens {
@@ -611,7 +624,7 @@ fn layout_tokens<'doc>(
             InlineToken::Newline => {
                 lines.push(std::mem::replace(
                     &mut line,
-                    Line::new(parent_style.line_height_px, base_metrics),
+                    Line::new(explicit_line_height_px, base_metrics),
                 ));
                 x_px = 0;
             }
@@ -642,7 +655,7 @@ fn layout_tokens<'doc>(
                 if x_px != 0 && x_px.saturating_add(word_width_px) > content_box.width {
                     lines.push(std::mem::replace(
                         &mut line,
-                        Line::new(parent_style.line_height_px, base_metrics),
+                        Line::new(explicit_line_height_px, base_metrics),
                     ));
                     x_px = 0;
                 }
@@ -666,7 +679,7 @@ fn layout_tokens<'doc>(
                 if x_px != 0 && x_px.saturating_add(b.size.width) > content_box.width {
                     lines.push(std::mem::replace(
                         &mut line,
-                        Line::new(parent_style.line_height_px, base_metrics),
+                        Line::new(explicit_line_height_px, base_metrics),
                     ));
                     x_px = 0;
                 }
@@ -770,9 +783,10 @@ fn layout_tokens<'doc>(
                         engine.paint_border(border_box, &element_box.style);
 
                         if is_replaced_element(element_box.element) {
+                            let padding = element_box.style.padding.resolve_px(content_box.width);
                             let content_box = border_box.inset(super::add_edges(
                                 element_box.style.border_width,
-                                element_box.style.padding,
+                                padding,
                             ));
                             engine.paint_replaced_content(
                                 element_box.element,
@@ -793,9 +807,10 @@ fn layout_tokens<'doc>(
                     }
 
                     if !is_replaced_element(element_box.element) {
+                        let padding = element_box.style.padding.resolve_px(content_box.width);
                         let content_box = border_box.inset(super::add_edges(
                             element_box.style.border_width,
-                            element_box.style.padding,
+                            padding,
                         ));
                         ancestors.push(element_box.element);
                         engine.layout_flow_children(
@@ -836,7 +851,11 @@ fn measure_tokens<'doc>(
     let mut lines: Vec<Line<'doc>> = Vec::new();
     let base_style = engine.text_style_for(parent_style);
     let base_metrics = engine.measurer.font_metrics_px(base_style);
-    let mut line = Line::new(parent_style.line_height_px, base_metrics);
+    let explicit_line_height_px = parent_style
+        .line_height
+        .resolve_px(parent_style.font_size_px)
+        .map(|value| value.max(1));
+    let mut line = Line::new(explicit_line_height_px, base_metrics);
     let mut x_px = 0i32;
 
     for token in tokens {
@@ -844,7 +863,7 @@ fn measure_tokens<'doc>(
             InlineToken::Newline => {
                 lines.push(std::mem::replace(
                     &mut line,
-                    Line::new(parent_style.line_height_px, base_metrics),
+                    Line::new(explicit_line_height_px, base_metrics),
                 ));
                 x_px = 0;
             }
@@ -875,7 +894,7 @@ fn measure_tokens<'doc>(
                 if x_px != 0 && x_px.saturating_add(word_width_px) > max_width {
                     lines.push(std::mem::replace(
                         &mut line,
-                        Line::new(parent_style.line_height_px, base_metrics),
+                        Line::new(explicit_line_height_px, base_metrics),
                     ));
                     x_px = 0;
                 }
@@ -899,7 +918,7 @@ fn measure_tokens<'doc>(
                 if x_px != 0 && x_px.saturating_add(b.size.width) > max_width {
                     lines.push(std::mem::replace(
                         &mut line,
-                        Line::new(parent_style.line_height_px, base_metrics),
+                        Line::new(explicit_line_height_px, base_metrics),
                     ));
                     x_px = 0;
                 }

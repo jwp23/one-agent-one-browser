@@ -17,7 +17,7 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
         return false;
     }
 
-    if !compound_matches(&selector.parts[selector.parts.len() - 1], element) {
+    if !compound_matches(&selector.parts[selector.parts.len() - 1], element, ancestors) {
         return false;
     }
 
@@ -26,7 +26,7 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
         let mut matched = false;
         while ancestor_index > 0 {
             ancestor_index -= 1;
-            if compound_matches(part, ancestors[ancestor_index]) {
+            if compound_matches(part, ancestors[ancestor_index], &ancestors[..ancestor_index]) {
                 matched = true;
                 break;
             }
@@ -39,7 +39,7 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
     true
 }
 
-fn compound_matches(selector: &crate::css::CompoundSelector, element: &Element) -> bool {
+fn compound_matches(selector: &crate::css::CompoundSelector, element: &Element, ancestors: &[&Element]) -> bool {
     if selector.unsupported {
         return false;
     }
@@ -74,7 +74,7 @@ fn compound_matches(selector: &crate::css::CompoundSelector, element: &Element) 
     }
 
     for pseudo in &selector.pseudo_classes {
-        if !pseudo_matches(*pseudo, element) {
+        if !pseudo_matches(*pseudo, element, ancestors) {
             return false;
         }
     }
@@ -82,11 +82,60 @@ fn compound_matches(selector: &crate::css::CompoundSelector, element: &Element) 
     true
 }
 
-fn pseudo_matches(pseudo: PseudoClass, element: &Element) -> bool {
+fn pseudo_matches(pseudo: PseudoClass, element: &Element, ancestors: &[&Element]) -> bool {
     match pseudo {
         PseudoClass::Link => element.name == "a" && element.attributes.get("href").is_some(),
         PseudoClass::Visited => false,
         PseudoClass::Hover => false,
         PseudoClass::Root => element.name == "html",
+        PseudoClass::NthChild(pattern) => nth_child_matches(element, ancestors, pattern),
+    }
+}
+
+fn nth_child_matches(element: &Element, ancestors: &[&Element], pattern: crate::css::NthChildPattern) -> bool {
+    let Some(parent) = ancestors.last() else {
+        return false;
+    };
+    let Some(index) = nth_child_index(parent, element) else {
+        return false;
+    };
+    matches_an_plus_b(index, pattern.a, pattern.b)
+}
+
+fn nth_child_index(parent: &Element, element: &Element) -> Option<usize> {
+    let mut index = 0usize;
+    for child in &parent.children {
+        let crate::dom::Node::Element(el) = child else {
+            continue;
+        };
+        index = index.saturating_add(1);
+        if std::ptr::eq(el, element) {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn matches_an_plus_b(index: usize, a: i32, b: i32) -> bool {
+    if index == 0 {
+        return false;
+    }
+    let index = index.min(i32::MAX as usize) as i32;
+
+    if a == 0 {
+        return index == b;
+    }
+
+    if a > 0 {
+        if index < b {
+            return false;
+        }
+        (index - b) % a == 0
+    } else {
+        if index > b {
+            return false;
+        }
+        let step = -a;
+        (b - index) % step == 0
     }
 }
