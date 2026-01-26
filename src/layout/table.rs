@@ -1,6 +1,6 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Edges, Rect, Size};
-use crate::render::{DisplayCommand, DrawRect, TextStyle};
+use crate::render::{DisplayCommand, TextStyle};
 use crate::style::{ComputedStyle, Display, Visibility};
 
 use super::LayoutEngine;
@@ -54,7 +54,7 @@ pub(super) fn layout_table<'doc>(
             let min_width =
                 measure_cell_min_width(engine, cell.element, &cell_style, ancestors, cellpadding)?;
 
-            if let Some(width) = cell_style.width_px {
+            if let Some(width) = cell_style.width_px.map(|width| width.resolve_px(content_box.width)) {
                 col_widths[cell.col_index] = col_widths[cell.col_index].max(width);
                 fixed[cell.col_index] = true;
             } else {
@@ -134,19 +134,11 @@ pub(super) fn layout_table<'doc>(
             };
             let content = border_box.inset(padding);
 
-            let mut background_index = None;
-            if cell_paint {
-                if let Some(color) = cell_style.background_color {
-                    background_index = Some(engine.list.commands.len());
-                    engine.list.commands.push(DisplayCommand::Rect(DrawRect {
-                        x_px: border_box.x,
-                        y_px: border_box.y,
-                        width_px: border_box.width,
-                        height_px: 0,
-                        color,
-                    }));
-                }
-            }
+            let background_index = if cell_paint {
+                engine.push_background(border_box, &cell_style, 0)
+            } else {
+                None
+            };
 
             ancestors.push(cell.element);
             let content_height = engine.layout_flow_children(
@@ -164,9 +156,7 @@ pub(super) fn layout_table<'doc>(
             }
 
             if let Some(index) = background_index {
-                if let Some(DisplayCommand::Rect(rect)) = engine.list.commands.get_mut(index) {
-                    rect.height_px = cell_height;
-                }
+                engine.set_background_height(index, cell_height);
             }
 
             if needs_opacity_group {
@@ -363,6 +353,7 @@ fn measure_inline_words<'doc>(
 
                 if let Some(width) = child_style.width_px {
                     let total = width
+                        .resolve_px(0)
                         .saturating_add(child_style.margin.left)
                         .saturating_add(child_style.margin.right)
                         .saturating_add(child_style.padding.left)

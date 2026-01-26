@@ -87,5 +87,6 @@ fn pseudo_matches(pseudo: PseudoClass, element: &Element) -> bool {
         PseudoClass::Link => element.name == "a" && element.attributes.get("href").is_some(),
         PseudoClass::Visited => false,
         PseudoClass::Hover => false,
+        PseudoClass::Root => element.name == "html",
     }
 }

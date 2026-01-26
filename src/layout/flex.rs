@@ -1,6 +1,5 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
-use crate::render::DrawRoundedRect;
 use crate::style::{
     ComputedStyle, Display, FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, Position,
     Visibility,
@@ -331,6 +330,8 @@ fn layout_flex_column_container<'doc>(
             border_width,
             item.margin.left,
             item.margin.right,
+            item.style.margin_auto.left,
+            item.style.margin_auto.right,
         );
 
         layout_item_box(
@@ -398,19 +399,35 @@ fn align_column_cross_start(
     item_width: i32,
     margin_left: i32,
     margin_right: i32,
+    margin_auto_left: bool,
+    margin_auto_right: bool,
 ) -> i32 {
+    let margin_left = if margin_auto_left { 0 } else { margin_left };
+    let margin_right = if margin_auto_right { 0 } else { margin_right };
     let available = container_width
         .saturating_sub(margin_left.saturating_add(margin_right))
         .max(0);
     let item_width = item_width.max(0);
+    let remaining = available.saturating_sub(item_width).max(0);
+
+    if margin_auto_left && margin_auto_right {
+        return container_x
+            .saturating_add(margin_left)
+            .saturating_add(remaining / 2);
+    }
+    if margin_auto_left {
+        return container_x.saturating_add(margin_left).saturating_add(remaining);
+    }
+    if margin_auto_right {
+        return container_x.saturating_add(margin_left);
+    }
+
     match align {
         FlexAlignItems::Start => container_x.saturating_add(margin_left),
         FlexAlignItems::Center => container_x
             .saturating_add(margin_left)
-            .saturating_add((available.saturating_sub(item_width).max(0)) / 2),
-        FlexAlignItems::End => container_x
-            .saturating_add(margin_left)
-            .saturating_add(available.saturating_sub(item_width).max(0)),
+            .saturating_add(remaining / 2),
+        FlexAlignItems::End => container_x.saturating_add(margin_left).saturating_add(remaining),
     }
 }
 
@@ -429,7 +446,7 @@ fn collect_items<'doc>(
                 }
                 items.push(FlexItem {
                     node: FlexNode::Text(child),
-                    style: *style,
+                    style: style.clone(),
                     margin: crate::geom::Edges::ZERO,
                 });
             }
@@ -441,10 +458,11 @@ fn collect_items<'doc>(
                 if matches!(child_style.position, Position::Absolute | Position::Fixed) {
                     continue;
                 }
+                let margin = child_style.margin;
                 items.push(FlexItem {
                     node: FlexNode::Element(el),
                     style: child_style,
-                    margin: child_style.margin,
+                    margin,
                 });
             }
         }
@@ -484,7 +502,7 @@ fn measure_item_main_size_row<'doc>(
     let border_width = if let Some(basis) = item.style.flex_basis_px {
         basis
     } else if let Some(width) = item.style.width_px {
-        width
+        width.resolve_px(max_width)
     } else {
         match item.node {
             FlexNode::Text(node) => inline::measure_inline_nodes(
@@ -501,10 +519,10 @@ fn measure_item_main_size_row<'doc>(
 
     let mut border_width = border_width.max(0);
     if let Some(min) = item.style.min_width_px {
-        border_width = border_width.max(min.max(0));
+        border_width = border_width.max(min.resolve_px(max_width).max(0));
     }
     if let Some(max) = item.style.max_width_px {
-        border_width = border_width.min(max.max(0));
+        border_width = border_width.min(max.resolve_px(max_width).max(0));
     }
     Ok(border_width.min(max_width.max(0)))
 }
@@ -518,7 +536,7 @@ pub(super) fn measure_element_max_content_width<'doc>(
 ) -> Result<i32, String> {
     let max_width = max_width.max(0);
     if let Some(width) = style.width_px {
-        return Ok(width.max(0).min(max_width));
+        return Ok(width.resolve_px(max_width).max(0).min(max_width));
     }
 
     if style.display == Display::Flex {
@@ -604,16 +622,16 @@ fn measure_flex_container_max_content_width<'doc>(
                 let mut width = if let Some(basis) = child_style.flex_basis_px {
                     basis.max(0)
                 } else if let Some(width) = child_style.width_px {
-                    width.max(0)
+                    width.resolve_px(max_width).max(0)
                 } else {
                     measure_element_max_content_width(engine, el, &child_style, ancestors, max_width)?
                 };
 
                 if let Some(min) = child_style.min_width_px {
-                    width = width.max(min.max(0));
+                    width = width.max(min.resolve_px(max_width).max(0));
                 }
                 if let Some(max) = child_style.max_width_px {
-                    width = width.min(max.max(0));
+                    width = width.min(max.resolve_px(max_width).max(0));
                 }
 
                 (width.min(max_width), child_style.margin.left, child_style.margin.right)
@@ -663,7 +681,7 @@ fn measure_node_max_content_width<'doc>(
                 return Ok(0);
             }
             if let Some(width) = style.width_px {
-                return Ok(width.max(0).min(max_width));
+                return Ok(width.resolve_px(max_width).max(0).min(max_width));
             }
             measure_element_max_content_width(engine, el, &style, ancestors, max_width)
         }
@@ -905,7 +923,10 @@ fn measure_item_border_height<'doc>(
 
 fn resolve_column_item_width(container_width: i32, item: &FlexItem<'_>) -> i32 {
     if let Some(width) = item.style.width_px {
-        return width.max(0).min(container_width.max(0));
+        return width
+            .resolve_px(container_width)
+            .max(0)
+            .min(container_width.max(0));
     }
     container_width.max(0)
 }
@@ -934,32 +955,7 @@ fn layout_item_box<'doc>(
     }
 
     if paint {
-        if let Some(color) = item.style.background_color {
-            background_index = Some(engine.list.commands.len());
-            if item.style.border_radius_px > 0 {
-                engine
-                    .list
-                    .commands
-                    .push(crate::render::DisplayCommand::RoundedRect(DrawRoundedRect {
-                        x_px: border_box.x,
-                        y_px: border_box.y,
-                        width_px: border_box.width,
-                        height_px: 0,
-                        radius_px: item.style.border_radius_px,
-                        color,
-                    }));
-            } else {
-                engine.list.commands.push(crate::render::DisplayCommand::Rect(
-                    crate::render::DrawRect {
-                        x_px: border_box.x,
-                        y_px: border_box.y,
-                        width_px: border_box.width,
-                        height_px: 0,
-                        color,
-                    },
-                ));
-            }
-        }
+        background_index = engine.push_background(border_box, &item.style, 0);
     }
 
     let border = item.style.border_width;
@@ -978,10 +974,10 @@ fn layout_item_box<'doc>(
         )?,
         FlexNode::Element(el) => {
             if super::inline::is_replaced_element(el) {
-                let mut forced_style = item.style;
+                let mut forced_style = item.style.clone();
                 forced_style.margin = crate::geom::Edges::ZERO;
                 forced_style.margin_auto = crate::style::AutoEdges::NONE;
-                forced_style.width_px = Some(border_box.width);
+                forced_style.width_px = Some(crate::style::CssLength::Px(border_box.width));
                 let size = super::inline::measure_replaced_element_outer_size(
                     el,
                     &forced_style,
@@ -1047,13 +1043,7 @@ fn layout_item_box<'doc>(
     }
 
     if let Some(index) = background_index {
-        if let Some(cmd) = engine.list.commands.get_mut(index) {
-            match cmd {
-                crate::render::DisplayCommand::Rect(rect) => rect.height_px = border_height,
-                crate::render::DisplayCommand::RoundedRect(rect) => rect.height_px = border_height,
-                _ => {}
-            }
-        }
+        engine.set_background_height(index, border_height);
     }
 
     if paint {
@@ -1069,7 +1059,7 @@ fn layout_item_box<'doc>(
 
         if let FlexNode::Element(el) = item.node {
             if super::inline::is_replaced_element(el) {
-                engine.paint_replaced_content(el, content_box)?;
+                engine.paint_replaced_content(el, &item.style, content_box)?;
             }
         }
     }

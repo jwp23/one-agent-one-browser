@@ -1,0 +1,26 @@
+<style>
+  body {
+    margin: 0;
+    background: #ffffff;
+  }
+
+  .label {
+    margin: 16px;
+    font-family: sans-serif;
+    font-size: 16px;
+  }
+
+  svg {
+    display: block;
+    margin: 16px;
+    border: 2px solid #000000;
+  }
+</style>
+
+<div class="label">SVG below should be 20x20px (not viewBox-sized)</div>
+
+<svg xmlns="http://www.w3.org/2000/svg" width="20px" height="20px" viewBox="0 0 256 256">
+  <rect x="0" y="0" width="256" height="256" fill="#f49c52" />
+  <circle cx="128" cy="128" r="72" fill="#ffffff" />
+</svg>
+

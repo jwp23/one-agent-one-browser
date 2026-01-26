@@ -1,13 +1,19 @@
+mod background;
+mod custom_properties;
 mod declarations;
+mod length;
 mod parse;
 mod selectors;
 
 use crate::css::{Specificity, Stylesheet};
 use crate::dom::{Document, Element, Node};
 use crate::geom::{Color, Edges};
-use parse::{
-    parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px,
-};
+use parse::{parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px};
+use std::collections::HashMap;
+
+pub use custom_properties::CustomProperties;
+pub use background::{GradientDirection, LinearGradient};
+pub use length::CssLength;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Display {
@@ -33,6 +39,13 @@ pub enum Position {
     Relative,
     Absolute,
     Fixed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Float {
+    None,
+    Left,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -82,11 +95,13 @@ pub enum FlexAlignItems {
     End,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ComputedStyle {
     pub display: Display,
     pub visibility: Visibility,
     pub position: Position,
+    pub float: Float,
+    pub custom_properties: CustomProperties,
     pub top_px: Option<i32>,
     pub right_px: Option<i32>,
     pub bottom_px: Option<i32>,
@@ -94,6 +109,7 @@ pub struct ComputedStyle {
     pub opacity: u8,
     pub color: Color,
     pub background_color: Option<Color>,
+    pub background_gradient: Option<LinearGradient>,
     pub font_family: FontFamily,
     pub font_size_px: i32,
     pub letter_spacing_px: i32,
@@ -108,9 +124,9 @@ pub struct ComputedStyle {
     pub border_color: Color,
     pub border_radius_px: i32,
     pub padding: Edges,
-    pub width_px: Option<i32>,
-    pub min_width_px: Option<i32>,
-    pub max_width_px: Option<i32>,
+    pub width_px: Option<CssLength>,
+    pub min_width_px: Option<CssLength>,
+    pub max_width_px: Option<CssLength>,
     pub height_px: Option<i32>,
     pub min_height_px: Option<i32>,
     pub flex_justify_content: FlexJustifyContent,
@@ -129,6 +145,8 @@ impl ComputedStyle {
             display: Display::Block,
             visibility: Visibility::Visible,
             position: Position::Static,
+            float: Float::None,
+            custom_properties: CustomProperties::default(),
             top_px: None,
             right_px: None,
             bottom_px: None,
@@ -136,6 +154,7 @@ impl ComputedStyle {
             opacity: 255,
             color: Color::BLACK,
             background_color: None,
+            background_gradient: None,
             font_family: FontFamily::SansSerif,
             font_size_px: 16,
             letter_spacing_px: 0,
@@ -171,6 +190,8 @@ impl ComputedStyle {
             display,
             visibility: Visibility::Visible,
             position: Position::Static,
+            float: Float::None,
+            custom_properties: parent.custom_properties.clone(),
             top_px: None,
             right_px: None,
             bottom_px: None,
@@ -178,6 +199,7 @@ impl ComputedStyle {
             opacity: 255,
             color: parent.color,
             background_color: None,
+            background_gradient: None,
             font_family: parent.font_family,
             font_size_px: parent.font_size_px,
             letter_spacing_px: parent.letter_spacing_px,
@@ -280,6 +302,9 @@ impl StyleComputer {
         let mut builder = StyleBuilder::new(style, viewport);
 
         builder.apply_presentational_hints(element);
+        builder.apply_stylesheet_custom_properties(&self.stylesheet, element, ancestors);
+        builder.apply_inline_style_custom_properties(element);
+        builder.finalize_custom_properties();
         builder.apply_stylesheet(&self.stylesheet, element, ancestors);
         builder.apply_inline_style(element);
 
@@ -327,8 +352,8 @@ fn default_display_for_element(element: &Element) -> Display {
     }
 
     match element.name.as_str() {
-        "html" | "body" | "div" | "p" | "center" | "header" | "main" | "footer" | "nav"
-        | "ul" | "ol" | "li" | "h1" | "h2" | "h3" | "blockquote" | "pre" => Display::Block,
+        "html" | "body" | "div" | "p" | "center" | "header" | "main" | "footer" | "nav" | "ul"
+        | "ol" | "li" | "h1" | "h2" | "h3" | "blockquote" | "pre" => Display::Block,
         "img" | "svg" | "button" | "input" => Display::InlineBlock,
         "br" => Display::Inline,
         _ => Display::Inline,
@@ -386,9 +411,12 @@ impl LetterSpacing {
 struct StyleBuilder {
     base: ComputedStyle,
     viewport: Option<(i32, i32)>,
+    custom_properties_declared: HashMap<String, Cascaded<String>>,
+    custom_properties: CustomProperties,
     display: Option<Cascaded<Display>>,
     visibility: Option<Cascaded<Visibility>>,
     position: Option<Cascaded<Position>>,
+    float: Option<Cascaded<Float>>,
     top_px: Option<Cascaded<Option<i32>>>,
     right_px: Option<Cascaded<Option<i32>>>,
     bottom_px: Option<Cascaded<Option<i32>>>,
@@ -396,6 +424,7 @@ struct StyleBuilder {
     opacity: Option<Cascaded<u8>>,
     color: Option<Cascaded<Color>>,
     background_color: Option<Cascaded<Option<Color>>>,
+    background_gradient: Option<Cascaded<Option<LinearGradient>>>,
     font_family: Option<Cascaded<FontFamily>>,
     font_size_px: Option<Cascaded<i32>>,
     letter_spacing: Option<Cascaded<LetterSpacing>>,
@@ -410,9 +439,9 @@ struct StyleBuilder {
     border_color: Option<Cascaded<Color>>,
     border_radius_px: Option<Cascaded<i32>>,
     padding: Option<Cascaded<Edges>>,
-    width_px: Option<Cascaded<Option<i32>>>,
-    min_width_px: Option<Cascaded<Option<i32>>>,
-    max_width_px: Option<Cascaded<Option<i32>>>,
+    width_px: Option<Cascaded<Option<CssLength>>>,
+    min_width_px: Option<Cascaded<Option<CssLength>>>,
+    max_width_px: Option<Cascaded<Option<CssLength>>>,
     height_px: Option<Cascaded<Option<i32>>>,
     min_height_px: Option<Cascaded<Option<i32>>>,
     flex_justify_content: Option<Cascaded<FlexJustifyContent>>,
@@ -427,12 +456,16 @@ struct StyleBuilder {
 
 impl StyleBuilder {
     fn new(base: ComputedStyle, viewport: Option<(i32, i32)>) -> StyleBuilder {
+        let custom_properties = base.custom_properties.clone();
         StyleBuilder {
             base,
             viewport,
+            custom_properties_declared: HashMap::new(),
+            custom_properties,
             display: None,
             visibility: None,
             position: None,
+            float: None,
             top_px: None,
             right_px: None,
             bottom_px: None,
@@ -440,6 +473,7 @@ impl StyleBuilder {
             opacity: None,
             color: None,
             background_color: None,
+            background_gradient: None,
             font_family: None,
             font_size_px: None,
             letter_spacing: None,
@@ -478,6 +512,14 @@ impl StyleBuilder {
         parse_css_length_px_with_viewport(value, viewport_width_px, viewport_height_px)
     }
 
+    fn parse_css_length(&self, value: &str) -> Option<CssLength> {
+        let (viewport_width_px, viewport_height_px) = match self.viewport {
+            Some((width, height)) => (Some(width), Some(height)),
+            None => (None, None),
+        };
+        length::parse_css_length(value, viewport_width_px, viewport_height_px)
+    }
+
     fn finish(self) -> ComputedStyle {
         let font_size_px = self
             .font_size_px
@@ -495,15 +537,11 @@ impl StyleBuilder {
                 .visibility
                 .map(|v| v.value)
                 .unwrap_or(self.base.visibility),
-            position: self
-                .position
-                .map(|v| v.value)
-                .unwrap_or(self.base.position),
+            position: self.position.map(|v| v.value).unwrap_or(self.base.position),
+            float: self.float.map(|v| v.value).unwrap_or(self.base.float),
+            custom_properties: self.custom_properties,
             top_px: self.top_px.map(|v| v.value).unwrap_or(self.base.top_px),
-            right_px: self
-                .right_px
-                .map(|v| v.value)
-                .unwrap_or(self.base.right_px),
+            right_px: self.right_px.map(|v| v.value).unwrap_or(self.base.right_px),
             bottom_px: self
                 .bottom_px
                 .map(|v| v.value)
@@ -515,6 +553,10 @@ impl StyleBuilder {
                 .background_color
                 .map(|v| v.value)
                 .unwrap_or(self.base.background_color),
+            background_gradient: self
+                .background_gradient
+                .map(|v| v.value)
+                .unwrap_or(self.base.background_gradient),
             font_family: self
                 .font_family
                 .map(|v| v.value)
@@ -649,15 +691,27 @@ impl StyleBuilder {
             }
         }
 
-        if let Some(bg) = element.attributes.get("bgcolor").and_then(Color::from_css_hex) {
+        if let Some(bg) = element
+            .attributes
+            .get("bgcolor")
+            .and_then(Color::from_css_hex)
+        {
             self.apply_background_color(Some(bg), priority);
         }
 
-        if let Some(width) = element.attributes.get("width").and_then(parse_html_length_px) {
-            self.apply_width(Some(width), priority);
+        if let Some(width) = element
+            .attributes
+            .get("width")
+            .and_then(parse_html_length_px)
+        {
+            self.apply_width(Some(CssLength::Px(width)), priority);
         }
 
-        if let Some(height) = element.attributes.get("height").and_then(parse_html_length_px) {
+        if let Some(height) = element
+            .attributes
+            .get("height")
+            .and_then(parse_html_length_px)
+        {
             self.apply_height(Some(height), priority);
         }
 
@@ -674,6 +728,67 @@ impl StyleBuilder {
         }
     }
 
+    fn apply_stylesheet_custom_properties(
+        &mut self,
+        sheet: &Stylesheet,
+        element: &Element,
+        ancestors: &[&Element],
+    ) {
+        for rule in &sheet.rules {
+            let Some((specificity, order)) = selectors::match_rule(rule, element, ancestors) else {
+                continue;
+            };
+            let priority = CascadePriority {
+                specificity: CascadeSpecificity::from_selector(specificity),
+                order,
+            };
+            for decl in &rule.declarations {
+                if !decl.name.starts_with("--") {
+                    continue;
+                }
+                custom_properties::apply_custom_property_declaration(
+                    &mut self.custom_properties_declared,
+                    &decl.name,
+                    &decl.value,
+                    priority,
+                );
+            }
+        }
+    }
+
+    fn apply_inline_style_custom_properties(&mut self, element: &Element) {
+        let Some(style_attr) = element.attributes.style.as_deref() else {
+            return;
+        };
+
+        let priority = CascadePriority {
+            specificity: CascadeSpecificity {
+                inline: 1,
+                ids: 0,
+                classes: 0,
+                tags: 0,
+            },
+            order: u32::MAX,
+        };
+
+        for decl in crate::css::parse_inline_declarations(style_attr) {
+            if !decl.name.starts_with("--") {
+                continue;
+            }
+            custom_properties::apply_custom_property_declaration(
+                &mut self.custom_properties_declared,
+                &decl.name,
+                &decl.value,
+                priority,
+            );
+        }
+    }
+
+    fn finalize_custom_properties(&mut self) {
+        self.custom_properties =
+            CustomProperties::merge(&self.base.custom_properties, &self.custom_properties_declared);
+    }
+
     fn apply_stylesheet(&mut self, sheet: &Stylesheet, element: &Element, ancestors: &[&Element]) {
         for rule in &sheet.rules {
             let Some((specificity, order)) = selectors::match_rule(rule, element, ancestors) else {
@@ -684,6 +799,9 @@ impl StyleBuilder {
                 order,
             };
             for decl in &rule.declarations {
+                if decl.name.starts_with("--") {
+                    continue;
+                }
                 declarations::apply_declaration(self, &decl.name, &decl.value, priority);
             }
         }
@@ -705,8 +823,18 @@ impl StyleBuilder {
         };
 
         for decl in crate::css::parse_inline_declarations(style_attr) {
+            if decl.name.starts_with("--") {
+                continue;
+            }
             declarations::apply_declaration(self, &decl.name, &decl.value, priority);
         }
+    }
+
+    pub(super) fn resolve_vars<'a>(
+        &'a self,
+        value: &'a str,
+    ) -> Option<std::borrow::Cow<'a, str>> {
+        self.custom_properties.resolve_vars(value)
     }
 
     fn apply_display(&mut self, value: Display, priority: CascadePriority) {
@@ -719,6 +847,10 @@ impl StyleBuilder {
 
     fn apply_position(&mut self, value: Position, priority: CascadePriority) {
         apply_cascade(&mut self.position, value, priority);
+    }
+
+    fn apply_float(&mut self, value: Float, priority: CascadePriority) {
+        apply_cascade(&mut self.float, value, priority);
     }
 
     fn apply_top(&mut self, value: Option<i32>, priority: CascadePriority) {
@@ -747,6 +879,14 @@ impl StyleBuilder {
 
     fn apply_background_color(&mut self, value: Option<Color>, priority: CascadePriority) {
         apply_cascade(&mut self.background_color, value, priority);
+    }
+
+    fn apply_background_gradient(
+        &mut self,
+        value: Option<LinearGradient>,
+        priority: CascadePriority,
+    ) {
+        apply_cascade(&mut self.background_gradient, value, priority);
     }
 
     fn apply_font_family(&mut self, value: FontFamily, priority: CascadePriority) {
@@ -805,15 +945,15 @@ impl StyleBuilder {
         apply_cascade(&mut self.padding, value, priority);
     }
 
-    fn apply_width(&mut self, value: Option<i32>, priority: CascadePriority) {
+    fn apply_width(&mut self, value: Option<CssLength>, priority: CascadePriority) {
         apply_cascade(&mut self.width_px, value, priority);
     }
 
-    fn apply_min_width(&mut self, value: Option<i32>, priority: CascadePriority) {
+    fn apply_min_width(&mut self, value: Option<CssLength>, priority: CascadePriority) {
         apply_cascade(&mut self.min_width_px, value, priority);
     }
 
-    fn apply_max_width(&mut self, value: Option<i32>, priority: CascadePriority) {
+    fn apply_max_width(&mut self, value: Option<CssLength>, priority: CascadePriority) {
         apply_cascade(&mut self.max_width_px, value, priority);
     }
 
@@ -861,7 +1001,11 @@ impl StyleBuilder {
     where
         F: FnOnce(Edges) -> Edges,
     {
-        let current = self.margin.as_ref().map(|v| v.value).unwrap_or(self.base.margin);
+        let current = self
+            .margin
+            .as_ref()
+            .map(|v| v.value)
+            .unwrap_or(self.base.margin);
         self.apply_margin(update(current), priority);
     }
 

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <style>
+  :root {
+    --bg: #ffcc00;
+    --fg: #0000ff;
+    --border: #00aa00;
+  }
+  body {
+    margin: 0;
+    font-size: 32px;
+  }
+  #main {
+    width: 300px;
+    height: 160px;
+    padding: 20px;
+    background-color: var(--bg);
+    color: var(--fg);
+    border: 10px solid var(--border);
+  }
+  #fallback {
+    width: 100px;
+    height: 100px;
+    margin-top: 20px;
+    background-color: var(--missing, #ff00ff);
+  }
+    </style>
+  </head>
+  <body>
+    <div id="main">Var Test</div>
+    <div id="fallback"></div>
+  </body>
+</html>

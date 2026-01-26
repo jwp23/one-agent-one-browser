@@ -1,6 +1,6 @@
 use crate::geom::Color;
 use crate::image::Argb32Image;
-use crate::style::FontFamily;
+use crate::style::{FontFamily, GradientDirection};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +51,17 @@ pub struct DrawRect {
     pub width_px: i32,
     pub height_px: i32,
     pub color: Color,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawLinearGradientRect {
+    pub x_px: i32,
+    pub y_px: i32,
+    pub width_px: i32,
+    pub height_px: i32,
+    pub direction: GradientDirection,
+    pub start_color: Color,
+    pub end_color: Color,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,6 +116,7 @@ pub struct DrawSvg {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DisplayCommand {
     Rect(DrawRect),
+    LinearGradientRect(DrawLinearGradientRect),
     RoundedRect(DrawRoundedRect),
     RoundedRectBorder(DrawRoundedRectBorder),
     Text(DrawText),

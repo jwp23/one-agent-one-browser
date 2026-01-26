@@ -1,8 +1,7 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
 use crate::render::{
-    DisplayCommand, DrawImage, DrawRect, DrawRoundedRect, DrawSvg, DrawText, FontMetricsPx,
-    LinkHitRegion, TextStyle,
+    DisplayCommand, DrawText, FontMetricsPx, LinkHitRegion, TextStyle,
 };
 use crate::style::{ComputedStyle, Display, TextAlign, Visibility};
 use std::rc::Rc;
@@ -75,7 +74,15 @@ pub(super) fn layout_inline_nodes_with_link<'doc>(
         )?;
     }
 
-    layout_tokens(engine, &tokens, parent_style, ancestors, content_box, start_y, paint)
+    layout_tokens(
+        engine,
+        &tokens,
+        parent_style,
+        ancestors,
+        content_box,
+        start_y,
+        paint,
+    )
 }
 
 pub(super) fn measure_inline_nodes<'doc>(
@@ -137,7 +144,11 @@ impl InlineCursor {
         if matches!(out.last(), Some(InlineToken::Newline) | None) {
             return;
         }
-        out.push(InlineToken::Space(space.style, space.visible, space.link_href));
+        out.push(InlineToken::Space(
+            space.style,
+            space.visible,
+            space.link_href,
+        ));
     }
 }
 
@@ -215,11 +226,16 @@ fn collect_tokens<'doc>(
                             max_width,
                         )?;
                     }
-                    push_inline_spacing(out, style.margin.right.saturating_add(style.padding.right));
+                    push_inline_spacing(
+                        out,
+                        style.margin.right.saturating_add(style.padding.right),
+                    );
                 }
                 _ => {
                     cursor.flush_pending_space(out);
-                    let size = measure_inline_element_outer_size(engine, el, &style, ancestors, max_width)?;
+                    let size = measure_inline_element_outer_size(
+                        engine, el, &style, ancestors, max_width,
+                    )?;
                     out.push(InlineToken::ElementBox(InlineElementBox {
                         element: el,
                         style,
@@ -276,19 +292,22 @@ fn measure_inline_element_outer_size<'doc>(
     let vertical_inset = inset.top.saturating_add(inset.bottom);
 
     let mut border_width = if let Some(width) = style.width_px {
-        width.max(0)
+        width.resolve_px(max_width).max(0)
     } else {
-        let available_content_width = available_border_width.saturating_sub(horizontal_inset).max(0);
+        let available_content_width = available_border_width
+            .saturating_sub(horizontal_inset)
+            .max(0);
         let nodes: Vec<&Node> = element.children.iter().collect();
-        let content_size = measure_inline_nodes(engine, &nodes, style, ancestors, available_content_width)?;
+        let content_size =
+            measure_inline_nodes(engine, &nodes, style, ancestors, available_content_width)?;
         content_size.width.saturating_add(horizontal_inset)
     };
 
     if let Some(min_width) = style.min_width_px {
-        border_width = border_width.max(min_width.max(0));
+        border_width = border_width.max(min_width.resolve_px(max_width).max(0));
     }
-    if let Some(max_width) = style.max_width_px {
-        border_width = border_width.min(max_width.max(0));
+    if let Some(max_width_value) = style.max_width_px {
+        border_width = border_width.min(max_width_value.resolve_px(max_width).max(0));
     }
     border_width = border_width.min(available_border_width).max(0);
 
@@ -297,7 +316,8 @@ fn measure_inline_element_outer_size<'doc>(
     } else {
         let available_content_width = border_width.saturating_sub(horizontal_inset).max(0);
         let nodes: Vec<&Node> = element.children.iter().collect();
-        let content_size = measure_inline_nodes(engine, &nodes, style, ancestors, available_content_width)?;
+        let content_size =
+            measure_inline_nodes(engine, &nodes, style, ancestors, available_content_width)?;
         content_size.height.saturating_add(vertical_inset)
     };
 
@@ -334,12 +354,12 @@ pub(super) fn measure_replaced_element_outer_size(
 
     let mut content_width = style
         .width_px
-        .map(|width| width.max(0).saturating_sub(horizontal_inset).max(0));
+        .map(|width| width.resolve_px(max_width).max(0).saturating_sub(horizontal_inset).max(0));
     let mut content_height = style
         .height_px
         .map(|height| height.max(0).saturating_sub(vertical_inset).max(0));
 
-    let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(element);
+    let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(element, style);
     let ratio = intrinsic_aspect_ratio(element, intrinsic_width, intrinsic_height);
 
     match (content_width, content_height) {
@@ -364,14 +384,20 @@ pub(super) fn measure_replaced_element_outer_size(
         }
     }
 
-    let mut border_width = content_width.unwrap_or(0).max(0).saturating_add(horizontal_inset);
-    let mut border_height = content_height.unwrap_or(0).max(0).saturating_add(vertical_inset);
+    let mut border_width = content_width
+        .unwrap_or(0)
+        .max(0)
+        .saturating_add(horizontal_inset);
+    let mut border_height = content_height
+        .unwrap_or(0)
+        .max(0)
+        .saturating_add(vertical_inset);
 
     if let Some(min_width) = style.min_width_px {
-        border_width = border_width.max(min_width.max(0));
+        border_width = border_width.max(min_width.resolve_px(max_width).max(0));
     }
-    if let Some(max_width) = style.max_width_px {
-        border_width = border_width.min(max_width.max(0));
+    if let Some(max_width_value) = style.max_width_px {
+        border_width = border_width.min(max_width_value.resolve_px(max_width).max(0));
     }
     border_width = border_width.min(available_border_width).max(0);
 
@@ -391,26 +417,78 @@ pub(super) fn measure_replaced_element_outer_size(
     })
 }
 
-fn intrinsic_dimensions(element: &Element) -> (Option<i32>, Option<i32>) {
+fn intrinsic_dimensions(element: &Element, style: &ComputedStyle) -> (Option<i32>, Option<i32>) {
+    let mut width = element
+        .attributes
+        .get("width")
+        .and_then(|value| parse_dimension(value))
+        .and_then(|value| i32::try_from(value.round() as i64).ok())
+        .filter(|value| *value > 0);
+    let mut height = element
+        .attributes
+        .get("height")
+        .and_then(|value| parse_dimension(value))
+        .and_then(|value| i32::try_from(value.round() as i64).ok())
+        .filter(|value| *value > 0);
+
     if element.name == "svg" {
         if let Some((w, h)) = parse_svg_viewbox_dimensions(element.attributes.get("viewbox")) {
-            return (Some(w.round() as i32), Some(h.round() as i32));
+            if width.is_none() {
+                width = Some(w.round() as i32);
+            }
+            if height.is_none() {
+                height = Some(h.round() as i32);
+            }
         }
     }
 
-    let width = element
-        .attributes
-        .get("width")
-        .and_then(|value| parse_number(value))
-        .and_then(|value| i32::try_from(value.round() as i64).ok())
-        .filter(|value| *value > 0);
-    let height = element
-        .attributes
-        .get("height")
-        .and_then(|value| parse_number(value))
-        .and_then(|value| i32::try_from(value.round() as i64).ok())
-        .filter(|value| *value > 0);
+    if element.name == "input" {
+        let (default_width, default_height) = intrinsic_input_content_dimensions(element, style);
+        if width.is_none() {
+            width = default_width;
+        }
+        if height.is_none() {
+            height = default_height;
+        }
+    }
+
     (width, height)
+}
+
+fn intrinsic_input_content_dimensions(
+    element: &Element,
+    style: &ComputedStyle,
+) -> (Option<i32>, Option<i32>) {
+    let font_size_px = style.font_size_px.max(0);
+    let line_height_px = style.line_height_px.unwrap_or(font_size_px).max(0).max(1);
+
+    let input_type = element
+        .attributes
+        .get("type")
+        .unwrap_or("text")
+        .trim()
+        .to_ascii_lowercase();
+
+    let width = match input_type.as_str() {
+        "submit" | "button" | "reset" => {
+            let mut label = element.attributes.get("value").unwrap_or("").trim();
+            if label.is_empty() {
+                label = match input_type.as_str() {
+                    "reset" => "Reset",
+                    _ => "Submit",
+                };
+            }
+            let chars = label.chars().count() as i32;
+            let approximate_char_width_px = ((font_size_px as f32) * 0.6).round() as i32;
+            let letter_spacing_px = style.letter_spacing_px.max(0);
+            let spacing_px = letter_spacing_px.saturating_mul(chars.saturating_sub(1)).max(0);
+            let text_px = approximate_char_width_px.saturating_mul(chars).saturating_add(spacing_px);
+            Some(text_px.saturating_add(font_size_px / 2).max(font_size_px * 2).max(1))
+        }
+        _ => Some(font_size_px.saturating_mul(10).max(80).max(1)),
+    };
+
+    (width, Some(line_height_px))
 }
 
 fn intrinsic_aspect_ratio(
@@ -418,6 +496,9 @@ fn intrinsic_aspect_ratio(
     intrinsic_width: Option<i32>,
     intrinsic_height: Option<i32>,
 ) -> Option<f32> {
+    if element.name == "input" {
+        return None;
+    }
     if element.name == "svg" {
         if let Some((w, h)) = parse_svg_viewbox_dimensions(element.attributes.get("viewbox")) {
             if h > 0.0 {
@@ -436,6 +517,22 @@ fn intrinsic_aspect_ratio(
 
 fn parse_number(value: &str) -> Option<f32> {
     value.trim().parse::<f32>().ok()
+}
+
+fn parse_dimension(value: &str) -> Option<f32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.ends_with('%') {
+        return None;
+    }
+
+    let number = trimmed
+        .strip_suffix("px")
+        .or_else(|| trimmed.strip_suffix("PX"))
+        .unwrap_or(trimmed);
+    parse_number(number)
 }
 
 fn parse_svg_viewbox_dimensions(view_box: Option<&str>) -> Option<(f32, f32)> {
@@ -461,45 +558,7 @@ fn parse_svg_viewbox_dimensions(view_box: Option<&str>) -> Option<(f32, f32)> {
 }
 
 pub(super) fn serialize_element_xml(element: &Element) -> String {
-    let mut out = String::new();
-    write_element_xml(element, &mut out);
-    out
-}
-
-fn write_element_xml(element: &Element, out: &mut String) {
-    out.push('<');
-    out.push_str(&element.name);
-
-    for (name, value) in element.attributes.to_serialized_pairs() {
-        out.push(' ');
-        out.push_str(&name);
-        out.push_str("=\"");
-        write_xml_escaped(&value, out, true);
-        out.push('"');
-    }
-
-    out.push('>');
-    for child in &element.children {
-        match child {
-            Node::Text(text) => write_xml_escaped(text, out, false),
-            Node::Element(child) => write_element_xml(child, out),
-        }
-    }
-    out.push_str("</");
-    out.push_str(&element.name);
-    out.push('>');
-}
-
-fn write_xml_escaped(value: &str, out: &mut String, for_attribute: bool) {
-    for ch in value.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' if for_attribute => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
+    super::svg_xml::serialize_element_xml(element)
 }
 
 fn push_text<'doc>(
@@ -698,33 +757,15 @@ fn layout_tokens<'doc>(
                     let opacity = element_box.style.opacity;
                     let needs_opacity_group = element_paint && opacity < 255;
                     if needs_opacity_group {
-                        engine.list.commands.push(DisplayCommand::PushOpacity(opacity));
+                        engine
+                            .list
+                            .commands
+                            .push(DisplayCommand::PushOpacity(opacity));
                     }
 
                     if element_paint {
-                        if let Some(color) = element_box.style.background_color {
-                            if element_box.style.border_radius_px > 0 {
-                                engine
-                                    .list
-                                    .commands
-                                    .push(DisplayCommand::RoundedRect(DrawRoundedRect {
-                                        x_px: border_box.x,
-                                        y_px: border_box.y,
-                                        width_px: border_box.width,
-                                        height_px: border_box.height,
-                                        radius_px: element_box.style.border_radius_px,
-                                        color,
-                                    }));
-                            } else {
-                                engine.list.commands.push(DisplayCommand::Rect(DrawRect {
-                                    x_px: border_box.x,
-                                    y_px: border_box.y,
-                                    width_px: border_box.width,
-                                    height_px: border_box.height,
-                                    color,
-                                }));
-                            }
-                        }
+                        let _ =
+                            engine.push_background(border_box, &element_box.style, border_box.height);
 
                         engine.paint_border(border_box, &element_box.style);
 
@@ -733,37 +774,11 @@ fn layout_tokens<'doc>(
                                 element_box.style.border_width,
                                 element_box.style.padding,
                             ));
-
-                            if element_box.element.name == "img" {
-                                if let Some(src) = element_box.element.attributes.get("src") {
-                                    if let Some(image) = engine.load_image(src)? {
-                                        if content_box.width > 0 && content_box.height > 0 {
-                                            engine.list.commands.push(DisplayCommand::Image(
-                                                DrawImage {
-                                                    x_px: content_box.x,
-                                                    y_px: content_box.y,
-                                                    width_px: content_box.width,
-                                                    height_px: content_box.height,
-                                                    opacity: 255,
-                                                    image,
-                                                },
-                                            ));
-                                        }
-                                    }
-                                }
-                            } else if element_box.element.name == "svg" {
-                                if content_box.width > 0 && content_box.height > 0 {
-                                    let xml = serialize_element_xml(element_box.element);
-                                    engine.list.commands.push(DisplayCommand::Svg(DrawSvg {
-                                        x_px: content_box.x,
-                                        y_px: content_box.y,
-                                        width_px: content_box.width,
-                                        height_px: content_box.height,
-                                        opacity: 255,
-                                        svg_xml: Rc::from(xml),
-                                    }));
-                                }
-                            }
+                            engine.paint_replaced_content(
+                                element_box.element,
+                                &element_box.style,
+                                content_box,
+                            )?;
                         }
 
                         if let Some(href) = element_box.link_href.clone() {
@@ -794,7 +809,10 @@ fn layout_tokens<'doc>(
                     }
 
                     if needs_opacity_group {
-                        engine.list.commands.push(DisplayCommand::PopOpacity(opacity));
+                        engine
+                            .list
+                            .commands
+                            .push(DisplayCommand::PopOpacity(opacity));
                     }
 
                     x_px = x_px.saturating_add(element_box.size.width);

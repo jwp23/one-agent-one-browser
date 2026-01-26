@@ -5,7 +5,7 @@ use super::parse::{
     parse_css_font_family, parse_css_length_px,
 };
 use super::{
-    AutoEdges, BorderStyle, CascadePriority, Display, FlexAlignItems, FlexDirection,
+    AutoEdges, BorderStyle, CascadePriority, Display, Float, FlexAlignItems, FlexDirection,
     FlexJustifyContent, FlexWrap, LetterSpacing, Position, StyleBuilder, TextAlign, Visibility,
 };
 
@@ -15,6 +15,11 @@ pub(super) fn apply_declaration(
     value: &str,
     priority: CascadePriority,
 ) {
+    let Some(value) = builder.resolve_vars(value) else {
+        return;
+    };
+    let value = value.as_ref();
+
     match name {
         "display" => {
             if value.eq_ignore_ascii_case("none") {
@@ -46,6 +51,17 @@ pub(super) fn apply_declaration(
             };
             if let Some(position) = position {
                 builder.apply_position(position, priority);
+            }
+        }
+        "float" => {
+            let float = match value.trim().to_ascii_lowercase().as_str() {
+                "none" => Some(Float::None),
+                "left" => Some(Float::Left),
+                "right" => Some(Float::Right),
+                _ => None,
+            };
+            if let Some(float) = float {
+                builder.apply_float(float, priority);
             }
         }
         "top" => {
@@ -106,10 +122,15 @@ pub(super) fn apply_declaration(
         }
         "background" => {
             let value = value.trim();
-            if let Some(color) = parse_css_color(value) {
+            if let Some(gradient) = super::background::parse_css_linear_gradient(value) {
+                builder.apply_background_gradient(Some(gradient), priority);
+                builder.apply_background_color(None, priority);
+            } else if let Some(color) = parse_css_color(value) {
                 builder.apply_background_color(Some(color), priority);
+                builder.apply_background_gradient(None, priority);
             } else if value.eq_ignore_ascii_case("transparent") {
                 builder.apply_background_color(None, priority);
+                builder.apply_background_gradient(None, priority);
             }
         }
         "opacity" => {
@@ -223,17 +244,15 @@ pub(super) fn apply_declaration(
             }
         }
         "border-color" => {
-            if let Some(color) = value
-                .split_whitespace()
-                .find_map(parse_css_color)
-            {
+            if let Some(color) = value.split_whitespace().find_map(parse_css_color) {
                 builder.apply_border_color(color, priority);
             }
         }
         "border-bottom" => {
             if let Some(border) = parse_border_shorthand(value) {
                 if let Some(width) = border.width_px {
-                    builder.apply_border_width_component(|e| Edges { bottom: width, ..e }, priority);
+                    builder
+                        .apply_border_width_component(|e| Edges { bottom: width, ..e }, priority);
                 }
                 if let Some(style) = border.style {
                     builder.apply_border_style(style, priority);
@@ -287,24 +306,24 @@ pub(super) fn apply_declaration(
                 || value.eq_ignore_ascii_case("initial")
             {
                 builder.apply_width(None, priority);
-            } else if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_width(Some(px), priority);
+            } else if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_width(Some(length), priority);
             }
         }
         "min-width" => {
             let value = value.trim();
             if value.eq_ignore_ascii_case("unset") || value.eq_ignore_ascii_case("initial") {
                 builder.apply_min_width(None, priority);
-            } else if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_min_width(Some(px), priority);
+            } else if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_min_width(Some(length), priority);
             }
         }
         "max-width" => {
             let value = value.trim();
             if value.eq_ignore_ascii_case("unset") || value.eq_ignore_ascii_case("initial") {
                 builder.apply_max_width(None, priority);
-            } else if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_max_width(Some(px), priority);
+            } else if let Some(length) = builder.parse_css_length(value) {
+                builder.apply_max_width(Some(length), priority);
             }
         }
         "height" => {

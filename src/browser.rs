@@ -170,6 +170,9 @@ impl BrowserApp {
                         rect.height_px,
                         rect.color,
                     )?,
+                    DisplayCommand::LinearGradientRect(rect) => {
+                        fill_linear_gradient_rect(painter, rect)?;
+                    }
                     DisplayCommand::PushOpacity(opacity) => painter.push_opacity(*opacity)?,
                     DisplayCommand::PopOpacity(opacity) => painter.pop_opacity(*opacity)?,
                     DisplayCommand::RoundedRect(rect) => painter.fill_rounded_rect(
@@ -246,6 +249,70 @@ impl BrowserApp {
             ready_for_screenshot: false,
         })
     }
+}
+
+fn fill_linear_gradient_rect(
+    painter: &mut dyn Painter,
+    rect: &crate::render::DrawLinearGradientRect,
+) -> Result<(), String> {
+    if rect.width_px <= 0 || rect.height_px <= 0 {
+        return Ok(());
+    }
+
+    let (start, end) = match rect.direction {
+        crate::style::GradientDirection::TopToBottom => (rect.start_color, rect.end_color),
+        crate::style::GradientDirection::BottomToTop => (rect.end_color, rect.start_color),
+        crate::style::GradientDirection::LeftToRight => (rect.start_color, rect.end_color),
+        crate::style::GradientDirection::RightToLeft => (rect.end_color, rect.start_color),
+    };
+
+    let den = match rect.direction {
+        crate::style::GradientDirection::TopToBottom | crate::style::GradientDirection::BottomToTop => {
+            rect.height_px.saturating_sub(1)
+        }
+        crate::style::GradientDirection::LeftToRight | crate::style::GradientDirection::RightToLeft => {
+            rect.width_px.saturating_sub(1)
+        }
+    };
+    if den <= 0 {
+        painter.fill_rect(rect.x_px, rect.y_px, rect.width_px, rect.height_px, start)?;
+        return Ok(());
+    }
+
+    fn lerp_channel(start: u8, end: u8, num: i32, den: i32) -> u8 {
+        let start = start as i32;
+        let end = end as i32;
+        let num = num.clamp(0, den);
+        ((start * (den - num) + end * num + den / 2) / den)
+            .clamp(0, 255) as u8
+    }
+
+    match rect.direction {
+        crate::style::GradientDirection::TopToBottom | crate::style::GradientDirection::BottomToTop => {
+            for y in 0..rect.height_px {
+                let color = crate::geom::Color {
+                    r: lerp_channel(start.r, end.r, y, den),
+                    g: lerp_channel(start.g, end.g, y, den),
+                    b: lerp_channel(start.b, end.b, y, den),
+                    a: lerp_channel(start.a, end.a, y, den),
+                };
+                painter.fill_rect(rect.x_px, rect.y_px.saturating_add(y), rect.width_px, 1, color)?;
+            }
+        }
+        crate::style::GradientDirection::LeftToRight | crate::style::GradientDirection::RightToLeft => {
+            for x in 0..rect.width_px {
+                let color = crate::geom::Color {
+                    r: lerp_channel(start.r, end.r, x, den),
+                    g: lerp_channel(start.g, end.g, x, den),
+                    b: lerp_channel(start.b, end.b, x, den),
+                    a: lerp_channel(start.a, end.a, x, den),
+                };
+                painter.fill_rect(rect.x_px.saturating_add(x), rect.y_px, 1, rect.height_px, color)?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 impl BrowserApp {

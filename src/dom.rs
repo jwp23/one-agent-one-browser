@@ -5,7 +5,8 @@ pub struct Document {
 
 impl Document {
     pub fn render_root(&self) -> &Element {
-        self.find_first_element_by_name("body")
+        self.find_first_element_by_name("html")
+            .or_else(|| self.find_first_element_by_name("body"))
             .unwrap_or(&self.root)
     }
 

@@ -1,27 +1,26 @@
-mod inline;
 mod flex;
+mod floats;
+mod helpers;
+mod inline;
+mod replaced;
+mod svg_xml;
 mod table;
 
-use crate::image::Argb32Image;
-use crate::resources::ResourceLoader;
 use crate::dom::{Document, Element, Node};
 use crate::geom::{Edges, Rect};
+use crate::image::Argb32Image;
 use crate::render::{
-    DisplayCommand,
-    DisplayList,
-    DrawImage,
-    DrawRect,
-    DrawRoundedRect,
-    DrawRoundedRectBorder,
-    DrawSvg,
-    LinkHitRegion,
-    TextMeasurer,
-    TextStyle,
-    Viewport,
+    DisplayCommand, DisplayList, DrawLinearGradientRect, DrawRect, DrawRoundedRect,
+    DrawRoundedRectBorder, LinkHitRegion, TextMeasurer, TextStyle, Viewport,
 };
-use crate::style::{AutoEdges, ComputedStyle, Display, Position, StyleComputer, TextAlign, Visibility};
+use crate::resources::ResourceLoader;
+use crate::style::{
+    ComputedStyle, Display, Float, Position, StyleComputer, Visibility,
+};
 use std::collections::HashMap;
 use std::rc::Rc;
+
+use helpers::*;
 
 pub struct LayoutOutput {
     pub display_list: DisplayList,
@@ -82,7 +81,11 @@ impl LayoutEngine<'_> {
         } else {
             self.viewport.height_px.max(0)
         };
-        let padding_box = Rect { height, ..border_box }.inset(border);
+        let padding_box = Rect {
+            height,
+            ..border_box
+        }
+        .inset(border);
         self.positioned_containing_blocks.push(padding_box);
     }
 
@@ -108,43 +111,6 @@ impl LayoutEngine<'_> {
         Ok(Some(image))
     }
 
-    fn paint_replaced_content(&mut self, element: &Element, content_box: Rect) -> Result<(), String> {
-        if content_box.width <= 0 || content_box.height <= 0 {
-            return Ok(());
-        }
-
-        match element.name.as_str() {
-            "img" => {
-                if let Some(src) = element.attributes.get("src") {
-                    if let Some(image) = self.load_image(src)? {
-                        self.list.commands.push(DisplayCommand::Image(DrawImage {
-                            x_px: content_box.x,
-                            y_px: content_box.y,
-                            width_px: content_box.width,
-                            height_px: content_box.height,
-                            opacity: 255,
-                            image,
-                        }));
-                    }
-                }
-            }
-            "svg" => {
-                let xml = inline::serialize_element_xml(element);
-                self.list.commands.push(DisplayCommand::Svg(DrawSvg {
-                    x_px: content_box.x,
-                    y_px: content_box.y,
-                    width_px: content_box.width,
-                    height_px: content_box.height,
-                    opacity: 255,
-                    svg_xml: Rc::from(xml),
-                }));
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
-
     fn layout_document(&mut self, document: &Document) -> Result<(), String> {
         let root = document.render_root();
         let root_style = ComputedStyle::root_defaults();
@@ -157,6 +123,23 @@ impl LayoutEngine<'_> {
             self.viewport.width_px,
             self.viewport.height_px,
         );
+        let body_style = if root.name == "html" {
+            document
+                .find_first_element_by_name("body")
+                .map(|body| {
+                    let body_ancestors = vec![root];
+                    self.styles.compute_style_in_viewport(
+                        body,
+                        &style,
+                        &body_ancestors,
+                        self.viewport.width_px,
+                        self.viewport.height_px,
+                    )
+                })
+                .unwrap_or_else(|| style.clone())
+        } else {
+            style.clone()
+        };
 
         let rect = Rect {
             x: 0,
@@ -170,7 +153,7 @@ impl LayoutEngine<'_> {
             document,
             self.styles,
             &root_style,
-            &style,
+            &body_style,
             self.viewport.width_px,
             self.viewport.height_px,
         ) {
@@ -183,7 +166,16 @@ impl LayoutEngine<'_> {
             }));
         }
         let mut cursor_y = rect.y;
-        self.layout_block_box(root, &style, &root_style, &mut ancestors, rect, &mut cursor_y, true)
+        self.layout_block_box(
+            root,
+            &style,
+            &root_style,
+            &mut ancestors,
+            rect,
+            &mut cursor_y,
+            true,
+            None,
+        )
     }
 
     fn layout_block_box<'doc>(
@@ -195,6 +187,7 @@ impl LayoutEngine<'_> {
         containing: Rect,
         cursor_y: &mut i32,
         paint: bool,
+        flow_override: Option<Rect>,
     ) -> Result<(), String> {
         if style.display == Display::None {
             return Ok(());
@@ -207,7 +200,9 @@ impl LayoutEngine<'_> {
         let opacity = style.opacity;
         let needs_opacity_group = paint && opacity < 255;
         if needs_opacity_group {
-            self.list.commands.push(DisplayCommand::PushOpacity(opacity));
+            self.list
+                .commands
+                .push(DisplayCommand::PushOpacity(opacity));
         }
         let margin = style.margin;
         let margin_auto = style.margin_auto;
@@ -237,10 +232,16 @@ impl LayoutEngine<'_> {
                 .max(0)
         } else {
             let mut width = self.resolve_used_width(element, style, available_width);
-            if let Some(min_width) = style.min_width_px {
+            if let Some(min_width) = style
+                .min_width_px
+                .map(|width| width.resolve_px(available_width))
+            {
                 width = width.max(min_width);
             }
-            if let Some(max_width) = style.max_width_px {
+            if let Some(max_width) = style
+                .max_width_px
+                .map(|width| width.resolve_px(available_width))
+            {
                 width = width.min(max_width);
             }
             width.max(0)
@@ -262,33 +263,15 @@ impl LayoutEngine<'_> {
             height: 0,
         };
         let content_box = border_box.inset(add_edges(border, padding));
+        let child_content_box = flow_override
+            .map(|flow| constrain_flow_content_box(content_box, flow))
+            .unwrap_or(content_box);
 
-        let mut background_index = None;
-        if paint {
-            if let Some(color) = style.background_color {
-                background_index = Some(self.list.commands.len());
-                if style.border_radius_px > 0 {
-                    self.list
-                        .commands
-                        .push(DisplayCommand::RoundedRect(DrawRoundedRect {
-                            x_px: border_box.x,
-                            y_px: border_box.y,
-                            width_px: border_box.width,
-                            height_px: 0,
-                            radius_px: style.border_radius_px,
-                            color,
-                        }));
-                } else {
-                    self.list.commands.push(DisplayCommand::Rect(DrawRect {
-                        x_px: border_box.x,
-                        y_px: border_box.y,
-                        width_px: border_box.width,
-                        height_px: 0,
-                        color,
-                    }));
-                }
-            }
-        }
+        let background_index = if paint {
+            self.push_background(border_box, style, 0)
+        } else {
+            None
+        };
 
         let content_height = if let Some(size) = replaced_size {
             let border_height = size
@@ -312,10 +295,19 @@ impl LayoutEngine<'_> {
             }
             ancestors.push(element);
             let content_height = match style.display {
-                Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
-                    .height,
-                Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
-                _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+                Display::Table => {
+                    table::layout_table(self, element, style, ancestors, content_box, paint)?.height
+                }
+                Display::Flex => {
+                    flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?
+                }
+                _ => self.layout_flow_children(
+                    &element.children,
+                    style,
+                    ancestors,
+                    child_content_box,
+                    paint,
+                )?,
             };
             ancestors.pop();
             if pushed_positioning {
@@ -338,13 +330,7 @@ impl LayoutEngine<'_> {
         }
 
         if let Some(index) = background_index {
-            if let Some(cmd) = self.list.commands.get_mut(index) {
-                match cmd {
-                    DisplayCommand::Rect(rect) => rect.height_px = border_height,
-                    DisplayCommand::RoundedRect(rect) => rect.height_px = border_height,
-                    _ => {}
-                }
-            }
+            self.set_background_height(index, border_height);
         }
 
         if paint {
@@ -366,7 +352,7 @@ impl LayoutEngine<'_> {
                     height: border_height,
                 }
                 .inset(add_edges(border, padding));
-                self.paint_replaced_content(element, content_box)?;
+                self.paint_replaced_content(element, style, content_box)?;
             }
         }
 
@@ -400,7 +386,9 @@ impl LayoutEngine<'_> {
         let opacity = style.opacity;
         let needs_opacity_group = paint && opacity < 255;
         if needs_opacity_group {
-            self.list.commands.push(DisplayCommand::PushOpacity(opacity));
+            self.list
+                .commands
+                .push(DisplayCommand::PushOpacity(opacity));
         }
 
         let containing = match style.position {
@@ -428,7 +416,10 @@ impl LayoutEngine<'_> {
             None
         };
 
-        let mut used_width = if let Some(width) = style.width_px {
+        let mut used_width = if let Some(width) = style
+            .width_px
+            .map(|width| width.resolve_px(containing.width))
+        {
             width
         } else if let (Some(left), Some(right)) = (style.left_px, style.right_px) {
             containing.width.saturating_sub(left.saturating_add(right))
@@ -437,12 +428,24 @@ impl LayoutEngine<'_> {
                 .saturating_sub(margin.left.saturating_add(margin.right))
                 .max(0)
         } else {
-            flex::measure_element_max_content_width(self, element, style, ancestors, containing.width)?
+            flex::measure_element_max_content_width(
+                self,
+                element,
+                style,
+                ancestors,
+                containing.width,
+            )?
         };
-        if let Some(min_width) = style.min_width_px {
+        if let Some(min_width) = style
+            .min_width_px
+            .map(|width| width.resolve_px(containing.width))
+        {
             used_width = used_width.max(min_width);
         }
-        if let Some(max_width) = style.max_width_px {
+        if let Some(max_width) = style
+            .max_width_px
+            .map(|width| width.resolve_px(containing.width))
+        {
             used_width = used_width.min(max_width);
         }
         used_width = used_width.max(0);
@@ -476,32 +479,11 @@ impl LayoutEngine<'_> {
         };
         let content_box = border_box.inset(add_edges(border, padding));
 
-        let mut background_index = None;
-        if paint {
-            if let Some(color) = style.background_color {
-                background_index = Some(self.list.commands.len());
-                if style.border_radius_px > 0 {
-                    self.list
-                        .commands
-                        .push(DisplayCommand::RoundedRect(DrawRoundedRect {
-                            x_px: border_box.x,
-                            y_px: border_box.y,
-                            width_px: border_box.width,
-                            height_px: 0,
-                            radius_px: style.border_radius_px,
-                            color,
-                        }));
-                } else {
-                    self.list.commands.push(DisplayCommand::Rect(DrawRect {
-                        x_px: border_box.x,
-                        y_px: border_box.y,
-                        width_px: border_box.width,
-                        height_px: 0,
-                        color,
-                    }));
-                }
-            }
-        }
+        let background_index = if paint {
+            self.push_background(border_box, style, 0)
+        } else {
+            None
+        };
 
         let content_height = if let Some(size) = replaced_size {
             let border_height = size
@@ -525,10 +507,19 @@ impl LayoutEngine<'_> {
             }
             ancestors.push(element);
             let content_height = match style.display {
-                Display::Table => table::layout_table(self, element, style, ancestors, content_box, paint)?
-                    .height,
-                Display::Flex => flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?,
-                _ => self.layout_flow_children(&element.children, style, ancestors, content_box, paint)?,
+                Display::Table => {
+                    table::layout_table(self, element, style, ancestors, content_box, paint)?.height
+                }
+                Display::Flex => {
+                    flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?
+                }
+                _ => self.layout_flow_children(
+                    &element.children,
+                    style,
+                    ancestors,
+                    content_box,
+                    paint,
+                )?,
             };
             ancestors.pop();
             if pushed_positioning {
@@ -551,13 +542,7 @@ impl LayoutEngine<'_> {
         }
 
         if let Some(index) = background_index {
-            if let Some(cmd) = self.list.commands.get_mut(index) {
-                match cmd {
-                    DisplayCommand::Rect(rect) => rect.height_px = border_height,
-                    DisplayCommand::RoundedRect(rect) => rect.height_px = border_height,
-                    _ => {}
-                }
-            }
+            self.set_background_height(index, border_height);
         }
 
         if paint {
@@ -579,7 +564,7 @@ impl LayoutEngine<'_> {
                     height: border_height,
                 }
                 .inset(add_edges(border, padding));
-                self.paint_replaced_content(element, content_box)?;
+                self.paint_replaced_content(element, style, content_box)?;
             }
         }
 
@@ -598,8 +583,16 @@ impl LayoutEngine<'_> {
         content_box: Rect,
         paint: bool,
     ) -> Result<i32, String> {
+        struct DeferredFloatPaint {
+            commands: Vec<DisplayCommand>,
+            links: Vec<LinkHitRegion>,
+        }
+
         let mut cursor_y = content_box.y;
         let mut inline_nodes: Vec<&'doc Node> = Vec::new();
+        let mut floats: Vec<floats::FloatPlacement> = Vec::new();
+        let mut max_float_bottom = cursor_y;
+        let mut deferred_floats: Vec<DeferredFloatPaint> = Vec::new();
 
         for child in children {
             match child {
@@ -616,14 +609,65 @@ impl LayoutEngine<'_> {
                         continue;
                     }
 
-                    if matches!(style.position, Position::Absolute | Position::Fixed) {
+                    if matches!(style.float, Float::Left | Float::Right)
+                        && !matches!(style.position, Position::Absolute | Position::Fixed)
+                    {
                         if !inline_nodes.is_empty() {
+                            let (flow_box, new_y) =
+                                floats::flow_area_at_y(&floats, content_box, cursor_y);
+                            cursor_y = new_y;
                             let height = inline::layout_inline_nodes(
                                 self,
                                 &inline_nodes,
                                 parent_style,
                                 ancestors,
-                                content_box,
+                                flow_box,
+                                cursor_y,
+                                paint,
+                            )?;
+                            cursor_y = cursor_y.saturating_add(height);
+                            inline_nodes.clear();
+                        }
+
+                        let mut saved_commands = Vec::new();
+                        let mut saved_links = Vec::new();
+                        std::mem::swap(&mut self.list.commands, &mut saved_commands);
+                        std::mem::swap(&mut self.link_regions, &mut saved_links);
+
+                        let placement = floats::layout_float(
+                            self,
+                            el,
+                            &style,
+                            parent_style,
+                            ancestors,
+                            content_box,
+                            cursor_y,
+                            &floats,
+                            paint,
+                        )?;
+                        deferred_floats.push(DeferredFloatPaint {
+                            commands: std::mem::take(&mut self.list.commands),
+                            links: std::mem::take(&mut self.link_regions),
+                        });
+
+                        std::mem::swap(&mut self.list.commands, &mut saved_commands);
+                        std::mem::swap(&mut self.link_regions, &mut saved_links);
+                        max_float_bottom = max_float_bottom.max(placement.rect.bottom());
+                        floats.push(placement);
+                        continue;
+                    }
+
+                    if matches!(style.position, Position::Absolute | Position::Fixed) {
+                        if !inline_nodes.is_empty() {
+                            let (flow_box, new_y) =
+                                floats::flow_area_at_y(&floats, content_box, cursor_y);
+                            cursor_y = new_y;
+                            let height = inline::layout_inline_nodes(
+                                self,
+                                &inline_nodes,
+                                parent_style,
+                                ancestors,
+                                flow_box,
                                 cursor_y,
                                 paint,
                             )?;
@@ -632,24 +676,21 @@ impl LayoutEngine<'_> {
                         }
 
                         let containing = self.current_positioned_containing_block();
-                        self.layout_positioned_box(
-                            el,
-                            &style,
-                            ancestors,
-                            containing,
-                            paint,
-                        )?;
+                        self.layout_positioned_box(el, &style, ancestors, containing, paint)?;
                         continue;
                     }
 
                     if is_flow_block(&style, el) {
                         if !inline_nodes.is_empty() {
+                            let (flow_box, new_y) =
+                                floats::flow_area_at_y(&floats, content_box, cursor_y);
+                            cursor_y = new_y;
                             let height = inline::layout_inline_nodes(
                                 self,
                                 &inline_nodes,
                                 parent_style,
                                 ancestors,
-                                content_box,
+                                flow_box,
                                 cursor_y,
                                 paint,
                             )?;
@@ -657,22 +698,56 @@ impl LayoutEngine<'_> {
                             inline_nodes.clear();
                         }
 
-                        let mut child_cursor_y = cursor_y;
-                        self.layout_block_box(
-                            el,
-                            &style,
-                            parent_style,
-                            ancestors,
-                            Rect {
-                                x: content_box.x,
-                                y: cursor_y,
-                                width: content_box.width,
-                                height: content_box.height,
-                            },
-                            &mut child_cursor_y,
-                            paint,
-                        )?;
-                        cursor_y = child_cursor_y;
+                        let establishes_bfc = establishes_block_formatting_context(&style);
+                        if establishes_bfc {
+                            let required_outer_width = required_outer_width_for_float_clearance(
+                                &style,
+                                content_box.width,
+                            );
+                            let (flow_box, new_y) = floats::flow_area_for_width(
+                                &floats,
+                                content_box,
+                                cursor_y,
+                                required_outer_width,
+                            );
+                            cursor_y = new_y;
+                            let mut child_cursor_y = cursor_y;
+                            self.layout_block_box(
+                                el,
+                                &style,
+                                parent_style,
+                                ancestors,
+                                Rect {
+                                    x: flow_box.x,
+                                    y: cursor_y,
+                                    width: flow_box.width,
+                                    height: content_box.height,
+                                },
+                                &mut child_cursor_y,
+                                paint,
+                                None,
+                            )?;
+                            cursor_y = child_cursor_y;
+                        } else {
+                            let flow_box = floats::flow_area_at_exact_y(&floats, content_box, cursor_y);
+                            let mut child_cursor_y = cursor_y;
+                            self.layout_block_box(
+                                el,
+                                &style,
+                                parent_style,
+                                ancestors,
+                                Rect {
+                                    x: content_box.x,
+                                    y: cursor_y,
+                                    width: content_box.width,
+                                    height: content_box.height,
+                                },
+                                &mut child_cursor_y,
+                                paint,
+                                Some(flow_box),
+                            )?;
+                            cursor_y = child_cursor_y;
+                        }
                     } else {
                         inline_nodes.push(child);
                     }
@@ -685,32 +760,40 @@ impl LayoutEngine<'_> {
         }
 
         if !inline_nodes.is_empty() && cursor_y < self.viewport.height_px {
-                            let height = inline::layout_inline_nodes(
-                                self,
-                                &inline_nodes,
-                                parent_style,
-                                ancestors,
-                                content_box,
-                                cursor_y,
-                                paint,
-                            )?;
+            let (flow_box, new_y) = floats::flow_area_at_y(&floats, content_box, cursor_y);
+            cursor_y = new_y;
+            let height = inline::layout_inline_nodes(
+                self,
+                &inline_nodes,
+                parent_style,
+                ancestors,
+                flow_box,
+                cursor_y,
+                paint,
+            )?;
             cursor_y = cursor_y.saturating_add(height);
         }
 
-        Ok(cursor_y.saturating_sub(content_box.y).max(0))
+        for deferred in deferred_floats {
+            self.list.commands.extend(deferred.commands);
+            self.link_regions.extend(deferred.links);
+        }
+
+        Ok(cursor_y.max(max_float_bottom).saturating_sub(content_box.y).max(0))
     }
 
-    fn resolve_used_width(&self, element: &Element, style: &ComputedStyle, available_width: i32) -> i32 {
+    fn resolve_used_width(
+        &self,
+        element: &Element,
+        style: &ComputedStyle,
+        available_width: i32,
+    ) -> i32 {
         if let Some(width) = style.width_px {
-            return width;
+            return width.resolve_px(available_width).max(0);
         }
 
         if style.display == Display::Table {
-            if let Some(percent) = element
-                .attributes
-                .get("width")
-                .and_then(parse_percentage)
-            {
+            if let Some(percent) = element.attributes.get("width").and_then(parse_percentage) {
                 let pct_width = (available_width as f32 * (percent / 100.0)).round() as i32;
                 return pct_width.max(0);
             }
@@ -746,8 +829,9 @@ impl LayoutEngine<'_> {
             && border.top == border.left
             && border.top > 0
         {
-            self.list.commands.push(DisplayCommand::RoundedRectBorder(
-                DrawRoundedRectBorder {
+            self.list
+                .commands
+                .push(DisplayCommand::RoundedRectBorder(DrawRoundedRectBorder {
                     x_px: border_box.x,
                     y_px: border_box.y,
                     width_px: border_box.width,
@@ -755,8 +839,7 @@ impl LayoutEngine<'_> {
                     radius_px: style.border_radius_px,
                     border_width_px: border.top,
                     color,
-                },
-            ));
+                }));
             return;
         }
 
@@ -806,209 +889,74 @@ impl LayoutEngine<'_> {
             }));
         }
     }
-}
 
-fn add_edges(a: Edges, b: Edges) -> Edges {
-    Edges {
-        top: a.top.saturating_add(b.top),
-        right: a.right.saturating_add(b.right),
-        bottom: a.bottom.saturating_add(b.bottom),
-        left: a.left.saturating_add(b.left),
+    fn push_background(
+        &mut self,
+        border_box: Rect,
+        style: &ComputedStyle,
+        height_px: i32,
+    ) -> Option<usize> {
+        if border_box.width <= 0 {
+            return None;
+        }
+
+        if let Some(gradient) = style.background_gradient {
+            let index = self.list.commands.len();
+            self.list
+                .commands
+                .push(DisplayCommand::LinearGradientRect(DrawLinearGradientRect {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px,
+                    direction: gradient.direction,
+                    start_color: gradient.start,
+                    end_color: gradient.end,
+                }));
+            return Some(index);
+        }
+
+        let Some(color) = style.background_color else {
+            return None;
+        };
+
+        let index = self.list.commands.len();
+        if style.border_radius_px > 0 {
+            self.list
+                .commands
+                .push(DisplayCommand::RoundedRect(DrawRoundedRect {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px,
+                    radius_px: style.border_radius_px,
+                    color,
+                }));
+        } else {
+            self.list.commands.push(DisplayCommand::Rect(DrawRect {
+                x_px: border_box.x,
+                y_px: border_box.y,
+                width_px: border_box.width,
+                height_px,
+                color,
+            }));
+        }
+        Some(index)
     }
-}
 
-fn resolve_canvas_background(
-    document: &Document,
-    styles: &StyleComputer,
-    root_style: &ComputedStyle,
-    body_style: &ComputedStyle,
-    viewport_width_px: i32,
-    viewport_height_px: i32,
-) -> Option<crate::geom::Color> {
-    if let Some(html) = document.find_first_element_by_name("html") {
-        let html_style = styles.compute_style_in_viewport(
-            html,
-            root_style,
-            &[],
-            viewport_width_px,
-            viewport_height_px,
-        );
-        if html_style.background_color.is_some() {
-            return html_style.background_color;
+    fn set_background_height(&mut self, index: usize, height_px: i32) {
+        let Some(cmd) = self.list.commands.get_mut(index) else {
+            return;
+        };
+
+        match cmd {
+            DisplayCommand::Rect(rect) => rect.height_px = height_px,
+            DisplayCommand::RoundedRect(rect) => rect.height_px = height_px,
+            DisplayCommand::LinearGradientRect(rect) => rect.height_px = height_px,
+            _ => {}
         }
     }
-    body_style.background_color
-}
-
-fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
-    match style.display {
-        Display::Block | Display::Flex | Display::Table => true,
-        Display::TableRow | Display::TableCell => true,
-        Display::Inline | Display::InlineBlock => {
-            if matches!(element.name.as_str(), "div" | "p" | "table") {
-                return true;
-            }
-
-            if element.name != "span" {
-                return false;
-            }
-
-            element.children.iter().any(|child| {
-                let Node::Element(el) = child else {
-                    return false;
-                };
-                matches!(
-                    el.name.as_str(),
-                    "html"
-                        | "body"
-                        | "div"
-                        | "p"
-                        | "center"
-                        | "header"
-                        | "main"
-                        | "footer"
-                        | "nav"
-                        | "ul"
-                        | "ol"
-                        | "li"
-                        | "h1"
-                        | "h2"
-                        | "h3"
-                        | "blockquote"
-                        | "pre"
-                        | "table"
-                        | "tr"
-                        | "td"
-                )
-            })
-        }
-        Display::None => false,
-    }
-}
-
-fn apply_block_alignment(align: TextAlign, containing: Rect, default_x: i32, width: i32, margin: Edges) -> i32 {
-    if width <= 0 {
-        return default_x;
-    }
-    let available = containing.width.saturating_sub(margin.left.saturating_add(margin.right));
-    if available <= width {
-        return default_x;
-    }
-    match align {
-        TextAlign::Center => containing.x.saturating_add((available - width) / 2),
-        TextAlign::Right => containing
-            .x
-            .saturating_add(available.saturating_sub(width))
-            .saturating_add(margin.left),
-        TextAlign::Left => default_x,
-    }
-}
-
-fn apply_auto_margin_alignment(
-    auto: AutoEdges,
-    containing: Rect,
-    default_x: i32,
-    width: i32,
-    margin: Edges,
-) -> i32 {
-    let left_px = if auto.left { 0 } else { margin.left };
-    let right_px = if auto.right { 0 } else { margin.right };
-    let available = containing
-        .width
-        .saturating_sub(left_px.saturating_add(right_px))
-        .max(0);
-
-    if available <= width {
-        return default_x;
-    }
-
-    let remaining = available.saturating_sub(width).max(0);
-    if auto.left && auto.right {
-        containing.x.saturating_add(left_px).saturating_add(remaining / 2)
-    } else if auto.left {
-        containing.x.saturating_add(left_px).saturating_add(remaining)
-    } else {
-        default_x
-    }
-}
-
-fn parse_percentage(value: &str) -> Option<f32> {
-    let value = value.trim();
-    let number = value.strip_suffix('%')?;
-    let number: f32 = number.trim().parse().ok()?;
-    Some(number)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct FixedMeasurer;
-
-    impl TextMeasurer for FixedMeasurer {
-        fn font_metrics_px(&self, _style: TextStyle) -> crate::render::FontMetricsPx {
-            crate::render::FontMetricsPx {
-                ascent_px: 8,
-                descent_px: 2,
-            }
-        }
-
-        fn text_width_px(&self, text: &str, _style: TextStyle) -> Result<i32, String> {
-            Ok(text.len() as i32)
-        }
-    }
-
-    #[test]
-    fn wraps_words_when_exceeding_width() {
-        let doc = crate::html::parse_document("<p>Hello World</p>");
-        let viewport = Viewport {
-            width_px: 5,
-            height_px: 200,
-        };
-        let styles = crate::style::StyleComputer::from_document(&doc);
-        let output =
-            layout_document(&doc, &styles, &FixedMeasurer, viewport, &crate::resources::NoResources)
-                .unwrap();
-        assert!(output
-            .display_list
-            .commands
-            .iter()
-            .any(|cmd| matches!(cmd, DisplayCommand::Text(_))));
-    }
-
-    #[test]
-    fn records_link_hit_regions_for_anchor_text() {
-        let doc = crate::html::parse_document(r#"<p><a href="https://example.com">Hello</a></p>"#);
-        let viewport = Viewport {
-            width_px: 200,
-            height_px: 200,
-        };
-        let styles = crate::style::StyleComputer::from_document(&doc);
-        let output =
-            layout_document(&doc, &styles, &FixedMeasurer, viewport, &crate::resources::NoResources)
-                .unwrap();
-        assert!(output
-            .link_regions
-            .iter()
-            .any(|region| region.href.as_ref() == "https://example.com"));
-    }
-
-    #[test]
-    fn records_link_hit_regions_for_flex_item_anchor() {
-        let doc = crate::html::parse_document(
-            r#"<style>header { display: flex; }</style><header><a href="/posts/">Posts</a></header>"#,
-        );
-        let viewport = Viewport {
-            width_px: 200,
-            height_px: 200,
-        };
-        let styles = crate::style::StyleComputer::from_document(&doc);
-        let output =
-            layout_document(&doc, &styles, &FixedMeasurer, viewport, &crate::resources::NoResources)
-                .unwrap();
-        assert!(output
-            .link_regions
-            .iter()
-            .any(|region| region.href.as_ref() == "/posts/"));
-    }
-}
+mod tests;

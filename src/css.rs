@@ -92,6 +92,7 @@ pub enum PseudoClass {
     Link,
     Visited,
     Hover,
+    Root,
 }
 
 pub fn parse_inline_declarations(source: &str) -> Vec<Declaration> {
@@ -461,6 +462,7 @@ fn parse_pseudo_class(name: &str) -> Option<PseudoClass> {
         "link" => Some(PseudoClass::Link),
         "visited" => Some(PseudoClass::Visited),
         "hover" => Some(PseudoClass::Hover),
+        "root" => Some(PseudoClass::Root),
         _ => None,
     }
 }
@@ -684,5 +686,14 @@ mod tests {
         assert_eq!(sheet.rules.len(), 1);
         let selector = &sheet.rules[0].selectors[0];
         assert!(selector.parts[0].unsupported);
+    }
+
+    #[test]
+    fn parses_root_pseudo_class() {
+        let sheet = Stylesheet::parse(":root { color: #000000; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let selector = &sheet.rules[0].selectors[0];
+        assert_eq!(selector.parts.len(), 1);
+        assert_eq!(selector.parts[0].pseudo_classes, vec![PseudoClass::Root]);
     }
 }
