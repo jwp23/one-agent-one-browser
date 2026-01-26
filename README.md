@@ -10,6 +10,31 @@ This is an experiment to see if an agent using LLMs, could build a functional br
 
 Platform: Linux/X11 only (requires an X server and `$DISPLAY`).
 
+### System dependencies
+
+This project uses FFI to link against common system libraries. The exact package names vary across distros, but you generally need: X11/Xft/Cairo, librsvg, libcurl, libpng, libjpeg-turbo, and libwebp.
+
+Arch Linux (Wayland via XWayland):
+
+```sh
+sudo pacman -S --needed xorg-xwayland libx11 libxft cairo librsvg curl libpng libjpeg-turbo libwebp
+```
+
+Ubuntu (Wayland via XWayland):
+
+```sh
+sudo apt-get update
+sudo apt-get install -y xwayland libx11-6 libxft2 libcairo2 librsvg2-2 libcurl4 libpng16-16 libturbojpeg0 libwebp7
+```
+
+RHEL (Wayland via XWayland):
+
+```sh
+sudo dnf install -y xorg-x11-server-Xwayland libX11 libXft cairo librsvg2 libcurl libpng libjpeg-turbo libwebp
+```
+
+If you run an Xorg session (not Wayland), install an Xorg server package instead of XWayland (`xorg-server` / `xorg` / `xorg-x11-server-Xorg`).
+
 ```sh
 # Built-in "Hello World"
 cargo run
