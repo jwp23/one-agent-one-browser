@@ -139,6 +139,117 @@ fn clicks_anchor_navigates_to_file() {
     let _ = std::fs::remove_dir(&root);
 }
 
+#[test]
+fn scrolling_offsets_click_hit_testing() {
+    let root = std::env::temp_dir().join(format!(
+        "one-agent-one-browser-scroll-click-{}",
+        unique_id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+
+    let page1 = root.join("page1.html");
+    let page2 = root.join("page2.html");
+
+    std::fs::write(
+        &page1,
+        r#"
+<style>body { margin: 0; } p { margin: 0; }</style>
+<div style="height: 400px"></div>
+<p><a href="page2.html">Go</a></p>
+<div style="height: 400px"></div>
+"#,
+    )
+    .unwrap();
+    std::fs::write(&page2, "<p>Page 2</p>").unwrap();
+
+    let mut app = BrowserApp::from_file(&page1).unwrap();
+    let viewport = Viewport {
+        width_px: 200,
+        height_px: 100,
+    };
+
+    let mut painter = NoopPainter;
+    app.render(&mut painter, viewport).unwrap();
+
+    let before_scroll = app.mouse_down(0, 0, viewport).unwrap();
+    assert!(!before_scroll.needs_redraw);
+    assert_eq!(app.title(), "page1.html");
+
+    let wheel = app.mouse_wheel(400, viewport).unwrap();
+    assert!(wheel.needs_redraw);
+
+    let after_scroll = app.mouse_down(0, 0, viewport).unwrap();
+    assert!(after_scroll.needs_redraw);
+    assert_eq!(app.title(), "page2.html");
+
+    let _ = std::fs::remove_file(&page1);
+    let _ = std::fs::remove_file(&page2);
+    let _ = std::fs::remove_dir(&root);
+}
+
+#[test]
+fn fixed_link_hit_testing_does_not_use_scroll_offset() {
+    let root = std::env::temp_dir().join(format!(
+        "one-agent-one-browser-fixed-scroll-click-{}",
+        unique_id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+
+    let page1 = root.join("page1.html");
+    let page2 = root.join("page2.html");
+
+    std::fs::write(
+        &page1,
+        r#"
+<style>body { margin: 0; } a { position: fixed; top: 0; left: 0; }</style>
+<a href="page2.html">Fixed</a>
+<div style="height: 2000px"></div>
+"#,
+    )
+    .unwrap();
+    std::fs::write(&page2, "<p>Page 2</p>").unwrap();
+
+    let mut app = BrowserApp::from_file(&page1).unwrap();
+    let viewport = Viewport {
+        width_px: 200,
+        height_px: 100,
+    };
+
+    let mut painter = NoopPainter;
+    app.render(&mut painter, viewport).unwrap();
+
+    let html_source = std::fs::read_to_string(&page1).unwrap();
+    let doc = one_agent_one_browser::html::parse_document(&html_source);
+    let styles = one_agent_one_browser::style::StyleComputer::from_document(&doc);
+    let layout = one_agent_one_browser::layout::layout_document(
+        &doc,
+        &styles,
+        &painter,
+        viewport,
+        &one_agent_one_browser::resources::NoResources,
+    )
+    .unwrap();
+    let fixed_link = layout
+        .link_regions
+        .iter()
+        .find(|region| region.href.as_ref() == "page2.html")
+        .expect("expected a link region for page2.html");
+    assert!(fixed_link.is_fixed);
+
+    let wheel = app.mouse_wheel(500, viewport).unwrap();
+    assert!(wheel.needs_redraw);
+
+    let click = app
+        .mouse_down(fixed_link.x_px, fixed_link.y_px, viewport)
+        .unwrap();
+    assert!(click.needs_redraw);
+    assert_eq!(app.title(), "page2.html");
+
+    let _ = std::fs::remove_file(&page1);
+    let _ = std::fs::remove_file(&page2);
+    let _ = std::fs::remove_dir(&root);
+}
+
 fn unique_id() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
 

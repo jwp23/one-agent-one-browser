@@ -19,4 +19,8 @@ pub trait App {
     ) -> Result<TickResult, String> {
         Ok(TickResult::default())
     }
+
+    fn mouse_wheel(&mut self, _delta_y_px: i32, _viewport: Viewport) -> Result<TickResult, String> {
+        Ok(TickResult::default())
+    }
 }

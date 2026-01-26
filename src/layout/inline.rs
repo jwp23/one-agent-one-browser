@@ -695,9 +695,6 @@ fn layout_tokens<'doc>(
 
     let mut y_px = start_y;
     for line in lines {
-        if y_px >= engine.viewport.height_px {
-            break;
-        }
         let line_width = line.width_px;
         let align = parent_style.text_align;
         let x_offset = match align {
@@ -725,6 +722,7 @@ fn layout_tokens<'doc>(
                                 y_px,
                                 width_px: width,
                                 height_px: line.height_px,
+                                is_fixed: engine.fixed_depth > 0,
                             });
                         }
                     }
@@ -802,6 +800,7 @@ fn layout_tokens<'doc>(
                                 y_px: border_box.y,
                                 width_px: border_box.width,
                                 height_px: border_box.height,
+                                is_fixed: engine.fixed_depth > 0,
                             });
                         }
                     }

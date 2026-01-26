@@ -19,6 +19,8 @@ const MAX_X11_EVENTS_PER_TICK: usize = 512;
 
 const SCREENSHOT_RESOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
+const WHEEL_SCROLL_STEP_PX: i32 = 48;
+
 pub fn run_window<A: App>(title: &str, options: WindowOptions, app: &mut A) -> Result<(), String> {
     let display = unsafe { XOpenDisplay(std::ptr::null()) };
     if display.is_null() {
@@ -195,6 +197,16 @@ fn run_window_with_display<A: App>(
                             unsafe { &*(event.inner.as_ptr() as *const XButtonEvent) };
                         if button.button == 1 {
                             let tick = app.mouse_down(button.x, button.y, viewport)?;
+                            if tick.needs_redraw {
+                                needs_redraw = true;
+                            }
+                        } else if button.button == 4 || button.button == 5 {
+                            let delta_y_px = if button.button == 4 {
+                                -WHEEL_SCROLL_STEP_PX
+                            } else {
+                                WHEEL_SCROLL_STEP_PX
+                            };
+                            let tick = app.mouse_wheel(delta_y_px, viewport)?;
                             if tick.needs_redraw {
                                 needs_redraw = true;
                             }

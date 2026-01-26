@@ -25,6 +25,8 @@ use helpers::*;
 pub struct LayoutOutput {
     pub display_list: DisplayList,
     pub link_regions: Vec<LinkHitRegion>,
+    pub document_height_px: i32,
+    pub canvas_background_color: Option<crate::geom::Color>,
 }
 
 pub fn layout_document(
@@ -43,11 +45,15 @@ pub fn layout_document(
         list: DisplayList::default(),
         link_regions: Vec::new(),
         positioned_containing_blocks: Vec::new(),
+        fixed_depth: 0,
+        canvas_background_color: None,
     };
-    engine.layout_document(document)?;
+    let document_height_px = engine.layout_document(document)?;
     Ok(LayoutOutput {
         display_list: engine.list,
         link_regions: engine.link_regions,
+        document_height_px,
+        canvas_background_color: engine.canvas_background_color,
     })
 }
 
@@ -60,6 +66,8 @@ struct LayoutEngine<'a> {
     list: DisplayList,
     link_regions: Vec<LinkHitRegion>,
     positioned_containing_blocks: Vec<Rect>,
+    fixed_depth: usize,
+    canvas_background_color: Option<crate::geom::Color>,
 }
 
 impl LayoutEngine<'_> {
@@ -111,7 +119,7 @@ impl LayoutEngine<'_> {
         Ok(Some(image))
     }
 
-    fn layout_document(&mut self, document: &Document) -> Result<(), String> {
+    fn layout_document(&mut self, document: &Document) -> Result<i32, String> {
         let root = document.render_root();
         let root_style = ComputedStyle::root_defaults();
         let mut ancestors = Vec::new();
@@ -149,22 +157,14 @@ impl LayoutEngine<'_> {
         };
         self.positioned_containing_blocks.clear();
         self.positioned_containing_blocks.push(rect);
-        if let Some(color) = resolve_canvas_background(
+        self.canvas_background_color = resolve_canvas_background(
             document,
             self.styles,
             &root_style,
             &body_style,
             self.viewport.width_px,
             self.viewport.height_px,
-        ) {
-            self.list.commands.push(DisplayCommand::Rect(DrawRect {
-                x_px: rect.x,
-                y_px: rect.y,
-                width_px: rect.width,
-                height_px: rect.height,
-                color,
-            }));
-        }
+        );
         let mut cursor_y = rect.y;
         self.layout_block_box(
             root,
@@ -175,7 +175,8 @@ impl LayoutEngine<'_> {
             &mut cursor_y,
             true,
             None,
-        )
+        )?;
+        Ok(cursor_y.max(self.viewport.height_px).max(0))
     }
 
     fn layout_block_box<'doc>(
@@ -383,6 +384,12 @@ impl LayoutEngine<'_> {
         if paint && style.opacity == 0 {
             paint = false;
         }
+        let is_fixed = paint && style.position == Position::Fixed;
+        if is_fixed {
+            self.fixed_depth = self.fixed_depth.saturating_add(1);
+            self.list.commands.push(DisplayCommand::PushFixed);
+        }
+
         let opacity = style.opacity;
         let needs_opacity_group = paint && opacity < 255;
         if needs_opacity_group {
@@ -578,6 +585,11 @@ impl LayoutEngine<'_> {
             self.list.commands.push(DisplayCommand::PopOpacity(opacity));
         }
 
+        if is_fixed {
+            self.list.commands.push(DisplayCommand::PopFixed);
+            self.fixed_depth = self.fixed_depth.saturating_sub(1);
+        }
+
         Ok(())
     }
 
@@ -593,6 +605,17 @@ impl LayoutEngine<'_> {
             commands: Vec<DisplayCommand>,
             links: Vec<LinkHitRegion>,
         }
+
+        let inherited_link_href = ancestors.iter().rev().find_map(|ancestor| {
+            if ancestor.name != "a" {
+                return None;
+            }
+            let href = ancestor.attributes.get("href")?.trim();
+            if href.is_empty() {
+                return None;
+            }
+            Some(Rc::<str>::from(href))
+        });
 
         let mut cursor_y = content_box.y;
         let mut inline_nodes: Vec<&'doc Node> = Vec::new();
@@ -622,7 +645,7 @@ impl LayoutEngine<'_> {
                             let (flow_box, new_y) =
                                 floats::flow_area_at_y(&floats, content_box, cursor_y);
                             cursor_y = new_y;
-                            let height = inline::layout_inline_nodes(
+                            let height = inline::layout_inline_nodes_with_link(
                                 self,
                                 &inline_nodes,
                                 parent_style,
@@ -630,6 +653,7 @@ impl LayoutEngine<'_> {
                                 flow_box,
                                 cursor_y,
                                 paint,
+                                inherited_link_href.clone(),
                             )?;
                             cursor_y = cursor_y.saturating_add(height);
                             inline_nodes.clear();
@@ -668,7 +692,7 @@ impl LayoutEngine<'_> {
                             let (flow_box, new_y) =
                                 floats::flow_area_at_y(&floats, content_box, cursor_y);
                             cursor_y = new_y;
-                            let height = inline::layout_inline_nodes(
+                            let height = inline::layout_inline_nodes_with_link(
                                 self,
                                 &inline_nodes,
                                 parent_style,
@@ -676,6 +700,7 @@ impl LayoutEngine<'_> {
                                 flow_box,
                                 cursor_y,
                                 paint,
+                                inherited_link_href.clone(),
                             )?;
                             cursor_y = cursor_y.saturating_add(height);
                             inline_nodes.clear();
@@ -691,7 +716,7 @@ impl LayoutEngine<'_> {
                             let (flow_box, new_y) =
                                 floats::flow_area_at_y(&floats, content_box, cursor_y);
                             cursor_y = new_y;
-                            let height = inline::layout_inline_nodes(
+                            let height = inline::layout_inline_nodes_with_link(
                                 self,
                                 &inline_nodes,
                                 parent_style,
@@ -699,6 +724,7 @@ impl LayoutEngine<'_> {
                                 flow_box,
                                 cursor_y,
                                 paint,
+                                inherited_link_href.clone(),
                             )?;
                             cursor_y = cursor_y.saturating_add(height);
                             inline_nodes.clear();
@@ -760,15 +786,12 @@ impl LayoutEngine<'_> {
                 }
             }
 
-            if cursor_y >= self.viewport.height_px {
-                break;
-            }
         }
 
-        if !inline_nodes.is_empty() && cursor_y < self.viewport.height_px {
+        if !inline_nodes.is_empty() {
             let (flow_box, new_y) = floats::flow_area_at_y(&floats, content_box, cursor_y);
             cursor_y = new_y;
-            let height = inline::layout_inline_nodes(
+            let height = inline::layout_inline_nodes_with_link(
                 self,
                 &inline_nodes,
                 parent_style,
@@ -776,6 +799,7 @@ impl LayoutEngine<'_> {
                 flow_box,
                 cursor_y,
                 paint,
+                inherited_link_href,
             )?;
             cursor_y = cursor_y.saturating_add(height);
         }

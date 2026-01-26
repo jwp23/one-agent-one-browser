@@ -76,9 +76,6 @@ pub(super) fn layout_table<'doc>(
 
     let mut y = content_box.y;
     for row in &grid.rows {
-        if y >= engine.viewport.height_px {
-            break;
-        }
         let row_style = engine.styles.compute_style_in_viewport(
             row.element,
             table_style,

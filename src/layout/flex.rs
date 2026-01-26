@@ -317,10 +317,6 @@ fn layout_flex_column_container<'doc>(
     let gap = style.flex_gap_px.max(0);
 
     for (idx, item) in items.iter().enumerate() {
-        if cursor_y >= engine.viewport.height_px {
-            break;
-        }
-
         let border_width = resolve_column_item_width(content_box.width, item);
         let border_height =
             measure_item_border_height(engine, style, ancestors, item, border_width, content_box.width)?;

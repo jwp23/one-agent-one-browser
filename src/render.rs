@@ -124,6 +124,8 @@ pub enum DisplayCommand {
     Svg(DrawSvg),
     PushOpacity(u8),
     PopOpacity(u8),
+    PushFixed,
+    PopFixed,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -138,6 +140,7 @@ pub struct LinkHitRegion {
     pub y_px: i32,
     pub width_px: i32,
     pub height_px: i32,
+    pub is_fixed: bool,
 }
 
 impl LinkHitRegion {

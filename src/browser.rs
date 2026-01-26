@@ -8,6 +8,10 @@ use crate::url::Url;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod render_helpers;
+
+use self::render_helpers::{clip_rect_to_viewport, fill_linear_gradient_rect_clipped};
+
 const STYLES_DEBOUNCE: Duration = Duration::from_millis(80);
 
 pub struct BrowserApp {
@@ -17,6 +21,7 @@ pub struct BrowserApp {
     style_sources: Vec<StylesheetSource>,
     styles_viewport: Option<Viewport>,
     cached_layout: Option<CachedLayout>,
+    scroll_y_px: i32,
     url_loader: Option<UrlLoader>,
     base: Option<PageBase>,
     resources: Option<ResourceManager>,
@@ -28,6 +33,8 @@ struct CachedLayout {
     viewport: Viewport,
     display_list: DisplayList,
     link_regions: Vec<LinkHitRegion>,
+    document_height_px: i32,
+    canvas_background_color: Option<crate::geom::Color>,
 }
 
 #[derive(Clone)]
@@ -73,6 +80,7 @@ impl BrowserApp {
             style_sources: Vec::new(),
             styles_viewport: None,
             cached_layout: None,
+            scroll_y_px: 0,
             url_loader: Some(loader),
             base: Some(PageBase::Url(base_url.clone())),
             resources: Some(ResourceManager::from_url(base_url)),
@@ -107,6 +115,7 @@ impl BrowserApp {
                     self.styles = StyleComputer::empty();
                     self.styles_viewport = None;
                     self.cached_layout = None;
+                    self.scroll_y_px = 0;
                     needs_redraw = true;
                     continue;
                 }
@@ -187,62 +196,191 @@ impl BrowserApp {
                 viewport,
                 display_list: output.display_list,
                 link_regions: output.link_regions,
+                document_height_px: output.document_height_px,
+                canvas_background_color: output.canvas_background_color,
             });
         }
 
         painter.clear()?;
 
         if let Some(cached) = &self.cached_layout {
+            let viewport_width_px = viewport.width_px.max(0);
+            let viewport_height_px = viewport.height_px.max(0);
+
+            let max_scroll_y_px = cached
+                .document_height_px
+                .saturating_sub(viewport_height_px)
+                .max(0);
+            if self.scroll_y_px > max_scroll_y_px {
+                self.scroll_y_px = max_scroll_y_px;
+            }
+            if self.scroll_y_px < 0 {
+                self.scroll_y_px = 0;
+            }
+            let scroll_y_px = self.scroll_y_px;
+
+            if let Some(color) = cached.canvas_background_color {
+                painter.fill_rect(0, 0, viewport_width_px, viewport_height_px, color)?;
+            }
+
+            let mut fixed_depth = 0usize;
+
             for cmd in &cached.display_list.commands {
                 match cmd {
-                    DisplayCommand::Rect(rect) => painter.fill_rect(
-                        rect.x_px,
-                        rect.y_px,
-                        rect.width_px,
-                        rect.height_px,
-                        rect.color,
-                    )?,
-                    DisplayCommand::LinearGradientRect(rect) => {
-                        fill_linear_gradient_rect(painter, rect)?;
+                    DisplayCommand::PushFixed => {
+                        fixed_depth = fixed_depth.saturating_add(1);
+                    }
+                    DisplayCommand::PopFixed => {
+                        fixed_depth = fixed_depth.saturating_sub(1);
                     }
                     DisplayCommand::PushOpacity(opacity) => painter.push_opacity(*opacity)?,
                     DisplayCommand::PopOpacity(opacity) => painter.pop_opacity(*opacity)?,
-                    DisplayCommand::RoundedRect(rect) => painter.fill_rounded_rect(
-                        rect.x_px,
-                        rect.y_px,
-                        rect.width_px,
-                        rect.height_px,
-                        rect.radius_px,
-                        rect.color,
-                    )?,
-                    DisplayCommand::RoundedRectBorder(rect) => painter.stroke_rounded_rect(
-                        rect.x_px,
-                        rect.y_px,
-                        rect.width_px,
-                        rect.height_px,
-                        rect.radius_px,
-                        rect.border_width_px,
-                        rect.color,
-                    )?,
-                    DisplayCommand::Text(text) => {
-                        painter.draw_text(text.x_px, text.y_px, &text.text, text.style)?;
+                    DisplayCommand::Rect(rect) => {
+                        let y_px = if fixed_depth > 0 {
+                            rect.y_px
+                        } else {
+                            rect.y_px.saturating_sub(scroll_y_px)
+                        };
+                        if let Some((x, y, w, h)) = clip_rect_to_viewport(
+                            rect.x_px,
+                            y_px,
+                            rect.width_px,
+                            rect.height_px,
+                            viewport_width_px,
+                            viewport_height_px,
+                        ) {
+                            painter.fill_rect(x, y, w, h, rect.color)?;
+                        }
                     }
-                    DisplayCommand::Image(image) => painter.draw_image(
-                        image.x_px,
-                        image.y_px,
-                        image.width_px,
-                        image.height_px,
-                        image.image.as_ref(),
-                        image.opacity,
-                    )?,
-                    DisplayCommand::Svg(svg) => painter.draw_svg(
-                        svg.x_px,
-                        svg.y_px,
-                        svg.width_px,
-                        svg.height_px,
-                        svg.svg_xml.as_ref(),
-                        svg.opacity,
-                    )?,
+                    DisplayCommand::LinearGradientRect(rect) => {
+                        let y_px = if fixed_depth > 0 {
+                            rect.y_px
+                        } else {
+                            rect.y_px.saturating_sub(scroll_y_px)
+                        };
+                        let translated = crate::render::DrawLinearGradientRect {
+                            x_px: rect.x_px,
+                            y_px,
+                            width_px: rect.width_px,
+                            height_px: rect.height_px,
+                            direction: rect.direction,
+                            start_color: rect.start_color,
+                            end_color: rect.end_color,
+                        };
+                        if let Some((x, y, w, h)) = clip_rect_to_viewport(
+                            translated.x_px,
+                            translated.y_px,
+                            translated.width_px,
+                            translated.height_px,
+                            viewport_width_px,
+                            viewport_height_px,
+                        ) {
+                            fill_linear_gradient_rect_clipped(painter, &translated, x, y, w, h)?;
+                        }
+                    }
+                    DisplayCommand::RoundedRect(rect) => {
+                        let y_px = if fixed_depth > 0 {
+                            rect.y_px
+                        } else {
+                            rect.y_px.saturating_sub(scroll_y_px)
+                        };
+                        if rect.width_px > 0
+                            && rect.height_px > 0
+                            && y_px < viewport_height_px
+                            && y_px.saturating_add(rect.height_px) > 0
+                        {
+                            painter.fill_rounded_rect(
+                                rect.x_px,
+                                y_px,
+                                rect.width_px,
+                                rect.height_px,
+                                rect.radius_px,
+                                rect.color,
+                            )?;
+                        }
+                    }
+                    DisplayCommand::RoundedRectBorder(rect) => {
+                        let y_px = if fixed_depth > 0 {
+                            rect.y_px
+                        } else {
+                            rect.y_px.saturating_sub(scroll_y_px)
+                        };
+                        if rect.width_px > 0
+                            && rect.height_px > 0
+                            && y_px < viewport_height_px
+                            && y_px.saturating_add(rect.height_px) > 0
+                        {
+                            painter.stroke_rounded_rect(
+                                rect.x_px,
+                                y_px,
+                                rect.width_px,
+                                rect.height_px,
+                                rect.radius_px,
+                                rect.border_width_px,
+                                rect.color,
+                            )?;
+                        }
+                    }
+                    DisplayCommand::Text(text) => {
+                        let baseline_y_px = if fixed_depth > 0 {
+                            text.y_px
+                        } else {
+                            text.y_px.saturating_sub(scroll_y_px)
+                        };
+                        let margin_px = text.style.font_size_px.max(0).saturating_mul(4).max(128);
+                        let min_baseline_y_px = -margin_px;
+                        let max_baseline_y_px = viewport_height_px.saturating_add(margin_px);
+                        if baseline_y_px >= min_baseline_y_px && baseline_y_px <= max_baseline_y_px {
+                            let metrics = painter.font_metrics_px(text.style);
+                            let top = baseline_y_px.saturating_sub(metrics.ascent_px);
+                            let bottom = baseline_y_px.saturating_add(metrics.descent_px);
+                            if bottom > 0 && top < viewport_height_px {
+                                painter.draw_text(text.x_px, baseline_y_px, &text.text, text.style)?;
+                            }
+                        }
+                    }
+                    DisplayCommand::Image(image) => {
+                        let y_px = if fixed_depth > 0 {
+                            image.y_px
+                        } else {
+                            image.y_px.saturating_sub(scroll_y_px)
+                        };
+                        if image.width_px > 0
+                            && image.height_px > 0
+                            && y_px < viewport_height_px
+                            && y_px.saturating_add(image.height_px) > 0
+                        {
+                            painter.draw_image(
+                                image.x_px,
+                                y_px,
+                                image.width_px,
+                                image.height_px,
+                                image.image.as_ref(),
+                                image.opacity,
+                            )?;
+                        }
+                    }
+                    DisplayCommand::Svg(svg) => {
+                        let y_px = if fixed_depth > 0 {
+                            svg.y_px
+                        } else {
+                            svg.y_px.saturating_sub(scroll_y_px)
+                        };
+                        if svg.width_px > 0
+                            && svg.height_px > 0
+                            && y_px < viewport_height_px
+                            && y_px.saturating_add(svg.height_px) > 0
+                        {
+                            painter.draw_svg(
+                                svg.x_px,
+                                y_px,
+                                svg.width_px,
+                                svg.height_px,
+                                svg.svg_xml.as_ref(),
+                                svg.opacity,
+                            )?;
+                        }
+                    }
                 }
             }
         }
@@ -269,7 +407,14 @@ impl BrowserApp {
             .link_regions
             .iter()
             .rev()
-            .find(|region| region.contains_point(x_px, y_px))
+            .find(|region| {
+                let hit_y_px = if region.is_fixed {
+                    y_px
+                } else {
+                    y_px.saturating_add(self.scroll_y_px)
+                };
+                region.contains_point(x_px, hit_y_px)
+            })
             .map(|region| region.href.clone())
         else {
             return Ok(TickResult::default());
@@ -282,71 +427,39 @@ impl BrowserApp {
             pending_resources: 0,
         })
     }
+
+    fn mouse_wheel(&mut self, delta_y_px: i32, viewport: Viewport) -> Result<TickResult, String> {
+        if delta_y_px == 0 {
+            return Ok(TickResult {
+                needs_redraw: false,
+                ready_for_screenshot: true,
+                pending_resources: 0,
+            });
+        }
+
+        let next_unclamped = self.scroll_y_px.saturating_add(delta_y_px).max(0);
+        let max_scroll_y_px = self
+            .cached_layout
+            .as_ref()
+            .filter(|cached| cached.viewport == viewport)
+            .map(|cached| {
+                cached
+                    .document_height_px
+                    .saturating_sub(viewport.height_px.max(0))
+                    .max(0)
+            })
+            .unwrap_or(i32::MAX);
+        let next = next_unclamped.min(max_scroll_y_px);
+        let changed = next != self.scroll_y_px;
+        self.scroll_y_px = next;
+        Ok(TickResult {
+            needs_redraw: changed,
+            ready_for_screenshot: true,
+            pending_resources: 0,
+        })
+    }
 }
 
-fn fill_linear_gradient_rect(
-    painter: &mut dyn Painter,
-    rect: &crate::render::DrawLinearGradientRect,
-) -> Result<(), String> {
-    if rect.width_px <= 0 || rect.height_px <= 0 {
-        return Ok(());
-    }
-
-    let (start, end) = match rect.direction {
-        crate::style::GradientDirection::TopToBottom => (rect.start_color, rect.end_color),
-        crate::style::GradientDirection::BottomToTop => (rect.end_color, rect.start_color),
-        crate::style::GradientDirection::LeftToRight => (rect.start_color, rect.end_color),
-        crate::style::GradientDirection::RightToLeft => (rect.end_color, rect.start_color),
-    };
-
-    let den = match rect.direction {
-        crate::style::GradientDirection::TopToBottom | crate::style::GradientDirection::BottomToTop => {
-            rect.height_px.saturating_sub(1)
-        }
-        crate::style::GradientDirection::LeftToRight | crate::style::GradientDirection::RightToLeft => {
-            rect.width_px.saturating_sub(1)
-        }
-    };
-    if den <= 0 {
-        painter.fill_rect(rect.x_px, rect.y_px, rect.width_px, rect.height_px, start)?;
-        return Ok(());
-    }
-
-    fn lerp_channel(start: u8, end: u8, num: i32, den: i32) -> u8 {
-        let start = start as i32;
-        let end = end as i32;
-        let num = num.clamp(0, den);
-        ((start * (den - num) + end * num + den / 2) / den)
-            .clamp(0, 255) as u8
-    }
-
-    match rect.direction {
-        crate::style::GradientDirection::TopToBottom | crate::style::GradientDirection::BottomToTop => {
-            for y in 0..rect.height_px {
-                let color = crate::geom::Color {
-                    r: lerp_channel(start.r, end.r, y, den),
-                    g: lerp_channel(start.g, end.g, y, den),
-                    b: lerp_channel(start.b, end.b, y, den),
-                    a: lerp_channel(start.a, end.a, y, den),
-                };
-                painter.fill_rect(rect.x_px, rect.y_px.saturating_add(y), rect.width_px, 1, color)?;
-            }
-        }
-        crate::style::GradientDirection::LeftToRight | crate::style::GradientDirection::RightToLeft => {
-            for x in 0..rect.width_px {
-                let color = crate::geom::Color {
-                    r: lerp_channel(start.r, end.r, x, den),
-                    g: lerp_channel(start.g, end.g, x, den),
-                    b: lerp_channel(start.b, end.b, x, den),
-                    a: lerp_channel(start.a, end.a, x, den),
-                };
-                painter.fill_rect(rect.x_px.saturating_add(x), rect.y_px, 1, rect.height_px, color)?;
-            }
-        }
-    }
-
-    Ok(())
-}
 
 impl BrowserApp {
     fn navigate_href(&mut self, href: &str) -> Result<(), String> {
@@ -418,6 +531,7 @@ impl BrowserApp {
         self.style_sources = style_sources;
         self.styles_viewport = None;
         self.cached_layout = None;
+        self.scroll_y_px = 0;
         self.url_loader = None;
         self.base = Some(PageBase::FileDir(base_dir));
         self.resources = match &self.base {
@@ -480,6 +594,7 @@ impl BrowserApp {
             style_sources,
             styles_viewport: None,
             cached_layout: None,
+            scroll_y_px: 0,
             url_loader: None,
             base: None,
             resources: None,
@@ -787,6 +902,10 @@ impl crate::app::App for BrowserApp {
 
     fn mouse_down(&mut self, x_px: i32, y_px: i32, viewport: Viewport) -> Result<TickResult, String> {
         BrowserApp::mouse_down(self, x_px, y_px, viewport)
+    }
+
+    fn mouse_wheel(&mut self, delta_y_px: i32, viewport: Viewport) -> Result<TickResult, String> {
+        BrowserApp::mouse_wheel(self, delta_y_px, viewport)
     }
 }
 
