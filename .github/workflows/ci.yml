@@ -20,6 +20,27 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install make --no-progress
 
+      - name: System deps (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installed = Get-AppxPackage -Name Microsoft.WebpImageExtension -ErrorAction SilentlyContinue
+          if ($null -ne $installed) {
+            Write-Host "WebP Image Extensions already installed: $($installed.PackageFullName)"
+            exit 0
+          }
+
+          winget --version
+          winget source list --disable-interactivity
+          winget install --id 9PG2DK419DRG --source msstore --accept-source-agreements --accept-package-agreements --disable-interactivity
+
+          $installed = Get-AppxPackage -Name Microsoft.WebpImageExtension -ErrorAction SilentlyContinue
+          if ($null -eq $installed) {
+            throw "WebP Image Extensions install succeeded but package 'Microsoft.WebpImageExtension' is not present."
+          }
+          Write-Host "WebP Image Extensions installed: $($installed.PackageFullName)"
+
       - name: System deps (Linux)
         if: runner.os == 'Linux'
         run: |
