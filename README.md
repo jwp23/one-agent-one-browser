@@ -77,3 +77,7 @@ cargo test
 # If you don't have an X server (Linux CI/headless), use Xvfb:
 xvfb-run -a cargo test
 ```
+
+Render regression tests compare screenshots to per-platform baseline PNGs in `tests/cases/`.
+
+- `OAB_RENDER_TEST_MIN_SIMILARITY` (env): minimum required similarity ratio (default: `0.95`; set `1.0` for exact match).

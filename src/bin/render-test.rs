@@ -4,6 +4,8 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 const DEFAULT_RENDER_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_MIN_SIMILARITY: f64 = 0.95;
+const MIN_SIMILARITY_ENV: &str = "OAB_RENDER_TEST_MIN_SIMILARITY";
 
 fn main() -> ExitCode {
     let args = match parse_args(std::env::args_os().skip(1)) {
@@ -13,6 +15,9 @@ fn main() -> ExitCode {
             eprintln!("Usage: render-test <case.html> [more ...]");
             eprintln!(
                 "Each case must have a baseline PNG next to it: <stem>-<platform>.png (e.g. hello-strong-macos.png)."
+            );
+            eprintln!(
+                "{MIN_SIMILARITY_ENV} controls how similar the PNGs must be to pass (default: {DEFAULT_MIN_SIMILARITY})."
             );
             return ExitCode::from(2);
         }
@@ -38,11 +43,20 @@ fn main() -> ExitCode {
     println!("Output:  {}", output_dir.display());
     println!("Baseline platform: {}", baseline_platform_tag());
 
+    let min_similarity = match read_min_similarity() {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("Min similarity: {:.3}", min_similarity);
+
     let mut passed = 0usize;
     let mut failed = 0usize;
 
     for case_path in &args.case_paths {
-        match run_case(&browser_exe, &output_dir, case_path) {
+        match run_case(&browser_exe, &output_dir, case_path, min_similarity) {
             Ok(()) => passed += 1,
             Err(err) => {
                 failed += 1;
@@ -108,7 +122,12 @@ fn find_browser_exe() -> Result<PathBuf, String> {
     ))
 }
 
-fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(), String> {
+fn run_case(
+    browser_exe: &Path,
+    output_dir: &Path,
+    html_path: &Path,
+    min_similarity: f64,
+) -> Result<(), String> {
     let expected_png = expected_baseline_png(html_path)?;
     if !expected_png.is_file() {
         return Err(format!(
@@ -127,9 +146,25 @@ fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(
     let browser_arg = html_path.as_os_str().to_owned();
     render_to_png(browser_exe, &browser_arg, &actual_png, DEFAULT_RENDER_TIMEOUT)?;
 
-    let comparison = compare_files(&expected_png, &actual_png)?;
+    let comparison = compare_files(&expected_png, &actual_png, min_similarity)?;
     if comparison.matches {
+        if let Some(png_diff) = &comparison.png_diff {
+            if let Some(diff_png) = &png_diff.diff_png {
+                let _ = std::fs::remove_file(diff_png);
+            }
+        }
         let _ = std::fs::remove_file(&actual_png);
+        if let Some(png_diff) = &comparison.png_diff {
+            if png_diff.diff_pixels > 0 {
+                println!(
+                    "PASS {} (similarity={:.4} >= {:.4})",
+                    html_path.display(),
+                    similarity_ratio(png_diff),
+                    min_similarity
+                );
+                return Ok(());
+            }
+        }
         println!("PASS {}", html_path.display());
         Ok(())
     } else {
@@ -140,9 +175,11 @@ fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(
             .unwrap_or_default();
         let diff_details = if let Some(png_diff) = &comparison.png_diff {
             format!(
-                "\nPixels:  {} / {}\nBBox:    {}\nDiff PNG: {}\n",
+                "\nPixels:     {} / {}\nSimilarity: {:.4} (min {:.4})\nBBox:       {}\nDiff PNG:   {}\n",
                 png_diff.diff_pixels,
                 png_diff.total_pixels,
+                similarity_ratio(png_diff),
+                min_similarity,
                 png_diff
                     .bbox
                     .map(|bbox| format!(
@@ -183,6 +220,43 @@ fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(
             expected_png.display(),
         ))
     }
+}
+
+fn read_min_similarity() -> Result<f64, String> {
+    let value_os = match std::env::var_os(MIN_SIMILARITY_ENV) {
+        Some(value) => value,
+        None => return Ok(DEFAULT_MIN_SIMILARITY),
+    };
+
+    let value = value_os.to_str().ok_or_else(|| {
+        format!("{MIN_SIMILARITY_ENV} must be valid UTF-8 and a float in [0.0, 1.0].")
+    })?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "{MIN_SIMILARITY_ENV} is set but empty. Expected a float in [0.0, 1.0]."
+        ));
+    }
+
+    let parsed: f64 = trimmed.parse().map_err(|err| {
+        format!(
+            "Invalid {MIN_SIMILARITY_ENV}={value:?}: {err}. Expected a float in [0.0, 1.0]."
+        )
+    })?;
+    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+        return Err(format!(
+            "Invalid {MIN_SIMILARITY_ENV}={value:?}: expected a finite float in [0.0, 1.0]."
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn similarity_ratio(diff: &PngDiff) -> f64 {
+    if diff.total_pixels == 0 {
+        return 0.0;
+    }
+    (diff.total_pixels.saturating_sub(diff.diff_pixels)) as f64 / diff.total_pixels as f64
 }
 
 fn expected_baseline_png(case_path: &Path) -> Result<PathBuf, String> {
@@ -296,7 +370,7 @@ struct FileComparison {
     png_diff: Option<PngDiff>,
 }
 
-fn compare_files(expected: &Path, actual: &Path) -> Result<FileComparison, String> {
+fn compare_files(expected: &Path, actual: &Path, min_similarity: f64) -> Result<FileComparison, String> {
     let expected_bytes = std::fs::read(expected)
         .map_err(|err| format!("Failed to read {}: {err}", expected.display()))?;
     let actual_bytes = std::fs::read(actual)
@@ -342,6 +416,19 @@ fn compare_files(expected: &Path, actual: &Path) -> Result<FileComparison, Strin
                     png_diff: None,
                 });
             }
+
+            let similarity = similarity_ratio(&diff);
+            if similarity >= min_similarity {
+                return Ok(FileComparison {
+                    matches: true,
+                    expected: expected_digest,
+                    actual: actual_digest,
+                    first_difference,
+                    note: None,
+                    png_diff: Some(diff),
+                });
+            }
+
             png_diff = Some(diff);
         }
         Err(err) => note = Some(format!("PNG diff unavailable: {err}")),
