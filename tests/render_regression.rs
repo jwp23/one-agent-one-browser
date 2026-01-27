@@ -48,11 +48,12 @@ fn render_regression_suite() {
             .join("hn-frontpage-2026-01-16.html"),
     ];
 
-    #[cfg(target_os = "macos")]
-    cases.extend([
-        cases_dir.join("blog-layout-sidebar.html"),
-        cases_dir.join("pill-tags-counts.html"),
-    ]);
+    if cfg!(target_os = "macos") {
+        cases.extend([
+            cases_dir.join("blog-layout-sidebar.html"),
+            cases_dir.join("pill-tags-counts.html"),
+        ]);
+    }
 
     let mut cmd = Command::new(&harness);
     cmd.args(&cases);

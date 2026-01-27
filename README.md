@@ -11,7 +11,7 @@ This is an experiment to see if an agent using LLMs, could build a functional br
 Platform:
 
 - Linux/X11 (requires an X server and `$DISPLAY`).
-- Windows 10/11
+- Windows 10 (1703+) or Windows 11
 - macOS 11+ (double-check)
 
 ### System dependencies
