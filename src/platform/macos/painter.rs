@@ -69,6 +69,9 @@ const BITMAP_INFO_BGRA_PREMULTIPLIED: c_uint =
 
 const BLEND_MODE_NORMAL: c_int = 0;
 
+const PATH_DRAW_MODE_FILL: c_int = 0;
+const PATH_DRAW_MODE_STROKE: c_int = 2;
+
 const LINE_CAP_BUTT: c_int = 0;
 const LINE_JOIN_MITER: c_int = 0;
 
@@ -646,7 +649,7 @@ impl Painter for MacPainter {
             let path = CGPathCreateWithRoundedRect(rect, radius, radius, &IDENTITY_TRANSFORM);
             if !path.is_null() {
                 CGContextAddPath(self.ctx, path);
-                CGContextDrawPath(self.ctx, 0);
+                CGContextDrawPath(self.ctx, PATH_DRAW_MODE_FILL);
                 CGPathRelease(path);
             }
         }
@@ -686,7 +689,7 @@ impl Painter for MacPainter {
             let path = CGPathCreateWithRoundedRect(rect, radius, radius, &IDENTITY_TRANSFORM);
             if !path.is_null() {
                 CGContextAddPath(self.ctx, path);
-                CGContextDrawPath(self.ctx, 1);
+                CGContextDrawPath(self.ctx, PATH_DRAW_MODE_STROKE);
                 CGPathRelease(path);
             }
         }
