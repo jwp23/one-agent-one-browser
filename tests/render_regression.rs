@@ -1,5 +1,3 @@
-#![cfg(not(target_os = "macos"))]
-
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -10,7 +8,7 @@ fn render_regression_suite() {
         .join("tests")
         .join("cases");
 
-    let cases = [
+    let mut cases = vec![
         cases_dir.join("hello-strong.html"),
         cases_dir.join("long-word.html"),
         cases_dir.join("multi-paragraph.html"),
@@ -43,13 +41,18 @@ fn render_regression_suite() {
         cases_dir.join("padding-top-percent.html"),
         cases_dir.join("input-controls.html"),
         cases_dir.join("blog-test.html"),
-        cases_dir.join("simonwillison-kakapo-cam.url"),
         cases_dir.join("hn-frontpage.html"),
         cases_dir.join("medium-home.html"),
         cases_dir
             .join("hn-frontpage-2026-01-16")
             .join("hn-frontpage-2026-01-16.html"),
     ];
+
+    #[cfg(target_os = "macos")]
+    cases.extend([
+        cases_dir.join("blog-layout-sidebar.html"),
+        cases_dir.join("pill-tags-counts.html"),
+    ]);
 
     let mut cmd = Command::new(&harness);
     cmd.args(&cases);

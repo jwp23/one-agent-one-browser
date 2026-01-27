@@ -1,0 +1,130 @@
+<style>
+  body {
+    margin: 0;
+    background: #ffffff;
+    color: #111111;
+    font: 18px/1.4 system-ui, -apple-system, sans-serif;
+  }
+
+  .topbar {
+    background: #6b3fa0;
+    color: #ffffff;
+    padding: 14px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .topbar a {
+    color: #ffffff;
+    text-decoration: none;
+    font-weight: 600;
+  }
+
+  .page {
+    padding: 24px 28px;
+  }
+
+  .columns {
+    display: flex;
+    align-items: flex-start;
+  }
+
+  .main {
+    width: 660px;
+  }
+
+  .sidebar {
+    width: 280px;
+    margin-left: 28px;
+  }
+
+  h1 {
+    margin: 0 0 10px;
+    font-size: 28px;
+    line-height: 1.2;
+  }
+
+  h1 a {
+    color: #004bdb;
+    text-decoration: none;
+  }
+
+  p {
+    margin: 0 0 14px;
+  }
+
+  .pills {
+    margin: 10px 0 16px;
+  }
+
+  .pill {
+    display: inline-block;
+    background: #f1f1f4;
+    border: 1px solid #d0d0d8;
+    border-radius: 999px;
+    padding: 6px 10px;
+    margin-right: 8px;
+    font-size: 12px;
+    color: #333333;
+  }
+
+  .pill .count {
+    color: #666666;
+    margin-left: 6px;
+  }
+
+  .card {
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 16px;
+    background: #fafafa;
+  }
+
+  .card h2 {
+    margin: 0 0 10px;
+    font-size: 20px;
+  }
+
+  .button {
+    display: inline-block;
+    background: #6b3fa0;
+    color: #ffffff;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+</style>
+
+<div class="topbar">
+  <a href="#">Example Weblog</a>
+  <a href="#">Subscribe</a>
+</div>
+
+<div class="page">
+  <div class="columns">
+    <div class="main">
+      <h1><a href="#">Kākāpō layout test</a> — sidebar, pills, button</h1>
+      <div class="pills">
+        <span class="pill">layout<span class="count">56</span></span>
+        <span class="pill">unicode<span class="count">5</span></span>
+        <span class="pill">buttons<span class="count">2</span></span>
+      </div>
+      <p>
+        This is a small, offline regression fixture that exercises common blog layout primitives
+        without any remote resources.
+      </p>
+      <p><a href="#">Inline link</a> inside a paragraph should be visible and not break line layout.</p>
+    </div>
+
+    <aside class="sidebar">
+      <div class="card">
+        <h2>Monthly briefing</h2>
+        <p>Sponsor this project and get an email digest.</p>
+        <a class="button" href="#">Sponsor &amp; subscribe</a>
+      </div>
+    </aside>
+  </div>
+</div>
+

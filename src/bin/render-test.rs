@@ -10,9 +10,10 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(err) => {
             eprintln!("{err}\n");
-            eprintln!("Usage: render-test <case.html|case.url> [more ...]");
-            eprintln!("Each case must have a baseline PNG next to it: same path with a .png extension.");
-            eprintln!("A .url case file contains a single URL (first non-empty, non-comment line).");
+            eprintln!("Usage: render-test <case.html> [more ...]");
+            eprintln!(
+                "Each case must have a baseline PNG next to it: <stem>-<platform>.png (e.g. hello-strong-macos.png)."
+            );
             return ExitCode::from(2);
         }
     };
@@ -35,6 +36,7 @@ fn main() -> ExitCode {
 
     println!("Browser: {}", browser_exe.display());
     println!("Output:  {}", output_dir.display());
+    println!("Baseline platform: {}", baseline_platform_tag());
 
     let mut passed = 0usize;
     let mut failed = 0usize;
@@ -107,38 +109,22 @@ fn find_browser_exe() -> Result<PathBuf, String> {
 }
 
 fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(), String> {
-    let expected_png = html_path.with_extension("png");
-    let case_target = parse_case_target(html_path)?;
+    let expected_png = expected_baseline_png(html_path)?;
     if !expected_png.is_file() {
-        return Err(match &case_target {
-            CaseTarget::File => format!(
-                "FAIL {}\nMissing baseline PNG: {}\nHint: generate it with:\n  {} {} --screenshot={}\n",
-                html_path.display(),
-                expected_png.display(),
-                browser_exe.display(),
-                html_path.display(),
-                expected_png.display(),
-            ),
-            CaseTarget::Url(url) => format!(
-                "FAIL {}\nMissing baseline PNG: {}\nURL: {url}\nHint: generate it with:\n  {} \"{url}\" --screenshot={}\n",
-                html_path.display(),
-                expected_png.display(),
-                browser_exe.display(),
-                expected_png.display(),
-            ),
-        });
+        return Err(format!(
+            "FAIL {}\nMissing baseline PNG: {}\nHint: generate it with:\n  {} {} --screenshot={}\n",
+            html_path.display(),
+            expected_png.display(),
+            browser_exe.display(),
+            html_path.display(),
+            expected_png.display(),
+        ));
     }
 
     let actual_png = output_dir.join(actual_filename_for_html(html_path)?);
 
     println!("Case: {}", html_path.display());
-    if let CaseTarget::Url(url) = &case_target {
-        println!("URL:  {url}");
-    }
-    let browser_arg = match &case_target {
-        CaseTarget::File => OsString::from(html_path),
-        CaseTarget::Url(url) => OsString::from(url),
-    };
+    let browser_arg = html_path.as_os_str().to_owned();
     render_to_png(browser_exe, &browser_arg, &actual_png, DEFAULT_RENDER_TIMEOUT)?;
 
     let comparison = compare_files(&expected_png, &actual_png)?;
@@ -196,6 +182,34 @@ fn run_case(browser_exe: &Path, output_dir: &Path, html_path: &Path) -> Result<(
             actual_png.display(),
             expected_png.display(),
         ))
+    }
+}
+
+fn expected_baseline_png(case_path: &Path) -> Result<PathBuf, String> {
+    let parent = case_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = case_path
+        .file_stem()
+        .ok_or_else(|| format!("Invalid case path: {}", case_path.display()))?
+        .to_string_lossy();
+    Ok(parent.join(format!("{stem}-{}.png", baseline_platform_tag())))
+}
+
+fn baseline_platform_tag() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        return "linux-x11";
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return "macos";
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return "windows";
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        return "unknown";
     }
 }
 
@@ -264,27 +278,6 @@ fn render_to_png(
 
         std::thread::sleep(Duration::from_millis(50));
     }
-}
-
-#[derive(Debug)]
-enum CaseTarget {
-    File,
-    Url(String),
-}
-
-fn parse_case_target(case_path: &Path) -> Result<CaseTarget, String> {
-    if case_path.extension().and_then(|s| s.to_str()) != Some("url") {
-        return Ok(CaseTarget::File);
-    }
-
-    let raw = std::fs::read_to_string(case_path)
-        .map_err(|err| format!("Failed to read {}: {err}", case_path.display()))?;
-    let url = raw
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('#'))
-        .ok_or_else(|| format!("{} does not contain a URL", case_path.display()))?;
-    Ok(CaseTarget::Url(url.to_owned()))
 }
 
 #[derive(Clone, Copy, Debug)]
