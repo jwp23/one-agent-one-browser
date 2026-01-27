@@ -16,7 +16,11 @@ Platform:
 
 ### System dependencies
 
-This project uses FFI to link against common system libraries. The exact package names vary across distros, but you generally need: X11/Xft/Cairo, librsvg, libcurl, libpng, libjpeg-turbo, and libwebp.
+This project uses system libraries/frameworks via FFI.
+
+- Linux/X11: X11/Xft/Cairo, librsvg, libcurl, libpng, libjpeg-turbo, libwebp.
+- Windows 10/11: WinHTTP, WIC (PNG/JPEG/WebP), Direct2D/DirectWrite. If WebP decode fails, install Microsoft "WebP Image Extensions".
+- macOS: system frameworks (CoreGraphics/CoreText/ImageIO/QuickLook).
 
 Arch Linux (Wayland via XWayland):
 
@@ -52,7 +56,7 @@ cargo run -- https://example.com
 # Save a PNG screenshot and exit once the page is ready
 cargo run -- test-file.html --screenshot out.png
 
-# Headless mode (no mapped window; still requires an X server, e.g. via xvfb-run)
+# Headless mode (Linux/X11: still requires an X server, e.g. via xvfb-run)
 cargo run -- --headless test-file.html --screenshot out.png
 ```
 
@@ -61,12 +65,15 @@ cargo run -- --headless test-file.html --screenshot out.png
 - `<target>` (optional): path to an HTML file, or an `http(s)://...` URL.
 - `--screenshot <path>` / `--screenshot=<path>`: write a PNG screenshot and exit.
 - `--headless`: don't map a window; useful for automation/tests.
+- `--width <px>` / `--width=<px>`: initial viewport width in CSS pixels (default: 1024).
+- `--height <px>` / `--height=<px>`: initial viewport height in CSS pixels (default: 768).
+- `OAB_SCALE` (env): override the DPI scale factor (e.g. `1.25` or `125%`).
 
 ## Tests
 
 ```sh
 cargo test
 
-# If you don't have an X server (CI/headless), use Xvfb:
+# If you don't have an X server (Linux CI/headless), use Xvfb:
 xvfb-run -a cargo test
 ```
