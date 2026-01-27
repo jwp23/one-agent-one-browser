@@ -32,7 +32,7 @@ Ubuntu (Wayland via XWayland):
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y xwayland libx11-6 libxft2 libcairo2 librsvg2-2 libcurl4 libpng16-16 libturbojpeg0 libwebp7
+sudo apt-get install -y xwayland libx11-dev libxft-dev libcairo2-dev librsvg2-dev libglib2.0-dev libcurl4-openssl-dev libpng-dev libjpeg-turbo8-dev libturbojpeg0-dev libwebp-dev
 ```
 
 RHEL (Wayland via XWayland):
