@@ -52,6 +52,8 @@ jobs:
 
       - name: Test (Linux)
         if: runner.os == 'Linux'
+        env:
+          FONTCONFIG_FILE: ${{ github.workspace }}/tests/fontconfig/fonts.conf
         run: xvfb-run -a make test
 
       - name: Test
