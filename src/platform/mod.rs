@@ -2,6 +2,8 @@
 mod x11;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 use crate::app::App;
 use std::path::PathBuf;
@@ -21,9 +23,12 @@ pub fn run_window(title: &str, options: WindowOptions, app: &mut impl App) -> Re
     #[cfg(target_os = "macos")]
     return macos::run_window(title, options, app);
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    return windows::run_window(title, options, app);
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = (title, options, app);
-        Err("Unsupported platform: this demo currently only supports Linux/X11 and macOS".to_owned())
+        Err("Unsupported platform: this demo currently only supports Linux/X11, macOS, and Windows".to_owned())
     }
 }

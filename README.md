@@ -8,7 +8,11 @@ This is an experiment to see if an agent using LLMs, could build a functional br
 
 ## Running
 
-Platform: Linux/X11 only (requires an X server and `$DISPLAY`).
+Platform:
+
+- Linux/X11 (requires an X server and `$DISPLAY`).
+- Windows 10/11
+- macOS 11+ (double-check)
 
 ### System dependencies
 

@@ -52,6 +52,22 @@ impl Url {
         &self.full
     }
 
+    pub fn scheme(&self) -> Scheme {
+        self.scheme
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub fn path_and_query(&self) -> &str {
+        &self.path_and_query
+    }
+
     pub fn resolve(&self, reference: &str) -> Option<Url> {
         let reference = reference.trim();
         if reference.is_empty() {

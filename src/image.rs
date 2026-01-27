@@ -98,7 +98,12 @@ fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     decode_imageio_argb32(data)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    crate::win::wic::decode_png_argb32(data)
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     use core::ffi::{c_int, c_void};
 
@@ -224,7 +229,12 @@ fn decode_jpeg_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     decode_imageio_argb32(data)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn decode_jpeg_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    crate::win::wic::decode_jpeg_argb32(data)
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn decode_jpeg_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     use core::ffi::{c_char, c_int, c_ulong, c_void};
 
@@ -353,7 +363,12 @@ fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     decode_imageio_argb32(data)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
+    crate::win::wic::decode_webp_argb32(data)
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn decode_webp_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     use core::ffi::{c_int, c_void};
 
@@ -575,7 +590,7 @@ fn decode_imageio_argb32(data: &[u8]) -> Result<Argb32Image, String> {
     Argb32Image::new(width, height, bgra)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn premultiply_rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; rgba.len()];
     for (src, dst) in rgba.chunks_exact(4).zip(out.chunks_exact_mut(4)) {

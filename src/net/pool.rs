@@ -139,7 +139,7 @@ fn worker_loop(shared_rx: Arc<Mutex<mpsc::Receiver<Job>>>, event_tx: mpsc::Sende
 
         match job {
             Job::Fetch { id, url } => {
-                let result = super::curl::fetch_url_bytes(&url);
+                let result = super::fetch_url_bytes(&url);
                 let _ = event_tx.send(FetchEvent { id, url, result });
             }
         }
