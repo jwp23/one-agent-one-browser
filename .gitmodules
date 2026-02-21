@@ -7,3 +7,6 @@
 [submodule "vendor/css-spec"]
 	path = vendor/css-spec
 	url = https://github.com/w3c/csswg-drafts.git
+[submodule "vendor/mdn"]
+	path = vendor/mdn
+	url = git@github.com:mdn/content.git
