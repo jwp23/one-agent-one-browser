@@ -77,7 +77,13 @@ unsafe extern "C" {
         blue: c_double,
         alpha: c_double,
     );
-    fn cairo_rectangle(cr: *mut cairo_t, x: c_double, y: c_double, width: c_double, height: c_double);
+    fn cairo_rectangle(
+        cr: *mut cairo_t,
+        x: c_double,
+        y: c_double,
+        width: c_double,
+        height: c_double,
+    );
     fn cairo_fill(cr: *mut cairo_t);
     fn cairo_new_path(cr: *mut cairo_t);
 
@@ -99,7 +105,12 @@ unsafe extern "C" {
     fn cairo_restore(cr: *mut cairo_t);
     fn cairo_translate(cr: *mut cairo_t, tx: c_double, ty: c_double);
     fn cairo_scale(cr: *mut cairo_t, sx: c_double, sy: c_double);
-    fn cairo_set_source_surface(cr: *mut cairo_t, surface: *mut cairo_surface_t, x: c_double, y: c_double);
+    fn cairo_set_source_surface(
+        cr: *mut cairo_t,
+        surface: *mut cairo_surface_t,
+        x: c_double,
+        y: c_double,
+    );
     fn cairo_paint(cr: *mut cairo_t);
     fn cairo_paint_with_alpha(cr: *mut cairo_t, alpha: c_double);
     fn cairo_push_group(cr: *mut cairo_t);
@@ -113,7 +124,11 @@ unsafe extern "C" {
     );
     fn cairo_set_font_size(cr: *mut cairo_t, size: c_double);
     fn cairo_show_text(cr: *mut cairo_t, utf8: *const c_char);
-    fn cairo_text_extents(cr: *mut cairo_t, utf8: *const c_char, extents: *mut cairo_text_extents_t);
+    fn cairo_text_extents(
+        cr: *mut cairo_t,
+        utf8: *const c_char,
+        extents: *mut cairo_text_extents_t,
+    );
 
     fn cairo_image_surface_create_for_data(
         data: *mut u8,
@@ -188,13 +203,7 @@ impl CairoCanvas {
             return Err(format!("Invalid Cairo surface size: {width}x{height}"));
         }
         let surface = unsafe {
-            cairo_xlib_surface_create(
-                display,
-                drawable,
-                visual,
-                width as c_int,
-                height as c_int,
-            )
+            cairo_xlib_surface_create(display, drawable, visual, width as c_int, height as c_int)
         };
         if surface.is_null() {
             return Err("cairo_xlib_surface_create returned null".to_owned());
@@ -202,7 +211,10 @@ impl CairoCanvas {
         let status = unsafe { cairo_surface_status(surface) };
         if status != CAIRO_STATUS_SUCCESS {
             unsafe { cairo_surface_destroy(surface) };
-            return Err(format!("cairo surface error: {}", cairo_status_message(status)));
+            return Err(format!(
+                "cairo surface error: {}",
+                cairo_status_message(status)
+            ));
         }
 
         let cr = unsafe { cairo_create(surface) };
@@ -213,7 +225,10 @@ impl CairoCanvas {
         let status = unsafe { cairo_status(cr) };
         if status != CAIRO_STATUS_SUCCESS {
             unsafe { cairo_surface_destroy(surface) };
-            return Err(format!("cairo context error: {}", cairo_status_message(status)));
+            return Err(format!(
+                "cairo context error: {}",
+                cairo_status_message(status)
+            ));
         }
 
         Ok(Self {
@@ -299,7 +314,13 @@ impl CairoCanvas {
         }
     }
 
-    pub fn draw_text(&mut self, x_px: i32, y_px: i32, text: &str, style: TextStyle) -> Result<(), String> {
+    pub fn draw_text(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        text: &str,
+        style: TextStyle,
+    ) -> Result<(), String> {
         if self.cr.is_null() {
             return Ok(());
         }
@@ -398,14 +419,7 @@ impl CairoCanvas {
                 f64::from(color.b) / 255.0,
                 f64::from(color.a) / 255.0,
             );
-            rounded_rect_path(
-                self.cr,
-                x_px,
-                y_px,
-                width_px,
-                height_px,
-                radius_px,
-            );
+            rounded_rect_path(self.cr, x_px, y_px, width_px, height_px, radius_px);
             cairo_fill(self.cr);
             cairo_new_path(self.cr);
             cairo_surface_flush(self.surface);
@@ -442,14 +456,7 @@ impl CairoCanvas {
                 f64::from(color.a) / 255.0,
             );
             cairo_set_line_width(self.cr, f64::from(stroke_px));
-            rounded_rect_path(
-                self.cr,
-                x_px,
-                y_px,
-                width_px,
-                height_px,
-                radius_px,
-            );
+            rounded_rect_path(self.cr, x_px, y_px, width_px, height_px, radius_px);
             cairo_stroke(self.cr);
             cairo_new_path(self.cr);
             cairo_surface_flush(self.surface);
@@ -524,7 +531,10 @@ impl CairoCanvas {
         let status = unsafe { cairo_surface_status(surface) };
         if status != CAIRO_STATUS_SUCCESS {
             unsafe { cairo_surface_destroy(surface) };
-            return Err(format!("cairo surface error: {}", cairo_status_message(status)));
+            return Err(format!(
+                "cairo surface error: {}",
+                cairo_status_message(status)
+            ));
         }
         Ok(surface)
     }
@@ -568,9 +578,8 @@ impl CairoCanvas {
         let svg_xml = svg_xml.as_ref();
 
         let mut parse_error: *mut GError = std::ptr::null_mut();
-        let handle = unsafe {
-            rsvg_handle_new_from_data(svg_xml.as_ptr(), svg_xml.len(), &mut parse_error)
-        };
+        let handle =
+            unsafe { rsvg_handle_new_from_data(svg_xml.as_ptr(), svg_xml.len(), &mut parse_error) };
 
         if handle.is_null() {
             let message = gerror_message_and_free(parse_error);
@@ -646,7 +655,9 @@ fn cairo_status_message(status: cairo_status_t) -> String {
     if ptr.is_null() {
         return format!("cairo status {status}");
     }
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn gerror_message_and_free(error: *mut GError) -> String {
@@ -732,7 +743,14 @@ fn start_tag_insert_pos(input: &str, start: usize, end: usize) -> usize {
     }
 }
 
-fn rounded_rect_path(cr: *mut cairo_t, x_px: i32, y_px: i32, width_px: i32, height_px: i32, radius_px: i32) {
+fn rounded_rect_path(
+    cr: *mut cairo_t,
+    x_px: i32,
+    y_px: i32,
+    width_px: i32,
+    height_px: i32,
+    radius_px: i32,
+) {
     let x = f64::from(x_px);
     let y = f64::from(y_px);
     let w = f64::from(width_px);
@@ -750,14 +768,7 @@ fn rounded_rect_path(cr: *mut cairo_t, x_px: i32, y_px: i32, width_px: i32, heig
     unsafe {
         cairo_move_to(cr, x + r, y);
         cairo_line_to(cr, right - r, y);
-        cairo_arc(
-            cr,
-            right - r,
-            y + r,
-            r,
-            -std::f64::consts::FRAC_PI_2,
-            0.0,
-        );
+        cairo_arc(cr, right - r, y + r, r, -std::f64::consts::FRAC_PI_2, 0.0);
         cairo_line_to(cr, right, bottom - r);
         cairo_arc(
             cr,

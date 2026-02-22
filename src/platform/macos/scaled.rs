@@ -61,8 +61,13 @@ impl Painter for ScaledPainter<'_> {
     ) -> Result<(), String> {
         let (x_device_px, width_device_px) = self.scale.css_span_to_device_px(x_px, width_px);
         let (y_device_px, height_device_px) = self.scale.css_span_to_device_px(y_px, height_px);
-        self.inner
-            .fill_rect(x_device_px, y_device_px, width_device_px, height_device_px, color)
+        self.inner.fill_rect(
+            x_device_px,
+            y_device_px,
+            width_device_px,
+            height_device_px,
+            color,
+        )
     }
 
     fn fill_rounded_rect(
@@ -171,4 +176,3 @@ impl Painter for ScaledPainter<'_> {
         self.inner.flush()
     }
 }
-

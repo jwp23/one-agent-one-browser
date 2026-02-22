@@ -260,8 +260,11 @@ unsafe extern "C" {
 
     pub fn XFreePixmap(display: *mut Display, pixmap: Pixmap) -> c_int;
 
-    pub fn XInternAtom(display: *mut Display, atom_name: *const c_char, only_if_exists: Bool)
-        -> Atom;
+    pub fn XInternAtom(
+        display: *mut Display,
+        atom_name: *const c_char,
+        only_if_exists: Bool,
+    ) -> Atom;
     pub fn XSetWMProtocols(
         display: *mut Display,
         window: Window,

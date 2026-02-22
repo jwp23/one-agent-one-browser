@@ -65,7 +65,9 @@ fn parse_args(args: &[OsString]) -> Result<Args, String> {
 
         match s {
             "--out" => {
-                let next = iter.next().ok_or_else(|| "Missing value for --out".to_owned())?;
+                let next = iter
+                    .next()
+                    .ok_or_else(|| "Missing value for --out".to_owned())?;
                 if out_path.is_some() {
                     return Err("Duplicate --out flag".to_owned());
                 }
@@ -112,4 +114,3 @@ fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
     }
     out
 }
-

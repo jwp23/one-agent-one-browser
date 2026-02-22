@@ -10,7 +10,8 @@ fn blog_test_core_styles_match_expectations() {
 
     let (post_link, post_link_ancestors) = find_first_element(&doc, |el| {
         el.name == "a"
-            && el.attributes
+            && el
+                .attributes
                 .get("href")
                 .is_some_and(|href| href == "/cursor-implied-success-without-evidence/")
     })
@@ -100,4 +101,3 @@ fn compute_style_for_element(
     }
     styles.compute_style(element, &parent_style, ancestors)
 }
-

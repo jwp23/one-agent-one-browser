@@ -85,8 +85,12 @@ unsafe extern "system" {
         send_timeout_ms: i32,
         receive_timeout_ms: i32,
     ) -> Bool;
-    fn WinHttpSetOption(handle: HInternet, option: DWORD, buffer: *const c_void, size: DWORD)
-        -> Bool;
+    fn WinHttpSetOption(
+        handle: HInternet,
+        option: DWORD,
+        buffer: *const c_void,
+        size: DWORD,
+    ) -> Bool;
 }
 
 #[link(name = "kernel32")]
@@ -104,8 +108,7 @@ unsafe extern "system" {
 }
 
 pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let mut current =
-        Url::parse(url).map_err(|err| format!("Invalid URL {url:?}: {err}"))?;
+    let mut current = Url::parse(url).map_err(|err| format!("Invalid URL {url:?}: {err}"))?;
 
     let session = WinHttpHandle::open("one-agent-one-browser/0.1")?;
     session.set_timeouts(5_000, 5_000, 15_000, 15_000)?;
@@ -118,12 +121,18 @@ pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, String> {
                 return Err(format!("Too many redirects fetching {}", current.as_str()));
             }
 
-            let location = response
-                .location
-                .ok_or_else(|| format!("Redirect without Location header fetching {}", current.as_str()))?;
-            let next = current
-                .resolve(location.trim())
-                .ok_or_else(|| format!("Failed to resolve redirect {location:?} from {}", current.as_str()))?;
+            let location = response.location.ok_or_else(|| {
+                format!(
+                    "Redirect without Location header fetching {}",
+                    current.as_str()
+                )
+            })?;
+            let next = current.resolve(location.trim()).ok_or_else(|| {
+                format!(
+                    "Failed to resolve redirect {location:?} from {}",
+                    current.as_str()
+                )
+            })?;
             current = next;
             continue;
         }
@@ -284,7 +293,7 @@ impl WinHttpConnection {
     ) -> Result<WinHttpRequest, String> {
         let handle = unsafe {
             WinHttpOpenRequest(
-                self.0 .0,
+                self.0.0,
                 verb.as_ptr(),
                 path.as_ptr(),
                 std::ptr::null(),
@@ -310,7 +319,7 @@ impl WinHttpRequest {
         let policy: DWORD = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
         let ok = unsafe {
             WinHttpSetOption(
-                self.0 .0,
+                self.0.0,
                 WINHTTP_OPTION_REDIRECT_POLICY,
                 (&policy as *const DWORD).cast::<c_void>(),
                 std::mem::size_of::<DWORD>() as DWORD,
@@ -330,7 +339,7 @@ impl WinHttpRequest {
         let flags: DWORD = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
         let ok = unsafe {
             WinHttpSetOption(
-                self.0 .0,
+                self.0.0,
                 WINHTTP_OPTION_DECOMPRESSION,
                 (&flags as *const DWORD).cast::<c_void>(),
                 std::mem::size_of::<DWORD>() as DWORD,
@@ -363,7 +372,7 @@ impl WinHttpRequest {
 
         let ok = unsafe {
             WinHttpSendRequest(
-                self.0 .0,
+                self.0.0,
                 headers_ptr,
                 headers_len,
                 std::ptr::null_mut(),
@@ -383,7 +392,7 @@ impl WinHttpRequest {
     }
 
     fn receive_response(&self) -> Result<(), String> {
-        let ok = unsafe { WinHttpReceiveResponse(self.0 .0, std::ptr::null_mut()) };
+        let ok = unsafe { WinHttpReceiveResponse(self.0.0, std::ptr::null_mut()) };
         if ok == TRUE {
             Ok(())
         } else {
@@ -399,7 +408,7 @@ impl WinHttpRequest {
         let mut len: DWORD = std::mem::size_of::<DWORD>() as DWORD;
         let ok = unsafe {
             WinHttpQueryHeaders(
-                self.0 .0,
+                self.0.0,
                 WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                 std::ptr::null(),
                 (&mut status as *mut DWORD).cast::<c_void>(),
@@ -421,7 +430,7 @@ impl WinHttpRequest {
         let mut needed_bytes: DWORD = 0;
         let ok = unsafe {
             WinHttpQueryHeaders(
-                self.0 .0,
+                self.0.0,
                 info_level,
                 std::ptr::null(),
                 std::ptr::null_mut(),
@@ -450,7 +459,7 @@ impl WinHttpRequest {
 
         let ok = unsafe {
             WinHttpQueryHeaders(
-                self.0 .0,
+                self.0.0,
                 info_level,
                 std::ptr::null(),
                 buf.as_mut_ptr().cast::<c_void>(),
@@ -477,7 +486,7 @@ impl WinHttpRequest {
         let mut out: Vec<u8> = Vec::new();
         loop {
             let mut available: DWORD = 0;
-            let ok = unsafe { WinHttpQueryDataAvailable(self.0 .0, &mut available) };
+            let ok = unsafe { WinHttpQueryDataAvailable(self.0.0, &mut available) };
             if ok != TRUE {
                 return Err(format!(
                     "WinHttpQueryDataAvailable failed: {}",
@@ -492,16 +501,14 @@ impl WinHttpRequest {
                 .try_into()
                 .map_err(|_| "Response chunk size out of range".to_owned())?;
             if out.len().saturating_add(chunk_len) > max_bytes {
-                return Err(format!(
-                    "Response exceeds maximum size ({max_bytes} bytes)"
-                ));
+                return Err(format!("Response exceeds maximum size ({max_bytes} bytes)"));
             }
 
             let mut chunk = vec![0u8; chunk_len];
             let mut read: DWORD = 0;
             let ok = unsafe {
                 WinHttpReadData(
-                    self.0 .0,
+                    self.0.0,
                     chunk.as_mut_ptr().cast::<c_void>(),
                     available,
                     &mut read,

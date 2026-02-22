@@ -70,4 +70,3 @@ pub(crate) fn create_istream_from_bytes(bytes: &[u8]) -> Result<ComPtr<IStream>,
 
     Ok(ComPtr::from_raw(stream))
 }
-

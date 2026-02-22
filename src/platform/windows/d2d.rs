@@ -1,5 +1,5 @@
 use crate::win::com;
-use crate::win::com::{ComPtr, GUID, HResultError, HRESULT};
+use crate::win::com::{ComPtr, GUID, HRESULT, HResultError};
 use core::ffi::c_void;
 
 pub(super) enum ID2D1Factory1 {}
@@ -177,7 +177,10 @@ pub(super) fn create_factory1() -> Result<ComPtr<ID2D1Factory1>, String> {
         )
     };
     if !com::succeeded(hr) {
-        return Err(format!("D2D1CreateFactory failed: {}", com::hresult_string(hr)));
+        return Err(format!(
+            "D2D1CreateFactory failed: {}",
+            com::hresult_string(hr)
+        ));
     }
     if out.is_null() {
         return Err("D2D1CreateFactory returned null".to_owned());
@@ -191,13 +194,12 @@ pub(super) fn factory_create_device(
 ) -> Result<ComPtr<ID2D1Device>, HResultError> {
     let mut device: *mut ID2D1Device = std::ptr::null_mut();
     let hr = unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut ID2D1Device) -> HRESULT =
-            std::mem::transmute(vtbl_entry(factory.as_ptr().cast::<c_void>(), 17));
-        f(
-            factory.as_ptr().cast::<c_void>(),
-            dxgi_device,
-            &mut device,
-        )
+        let f: unsafe extern "system" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut *mut ID2D1Device,
+        ) -> HRESULT = std::mem::transmute(vtbl_entry(factory.as_ptr().cast::<c_void>(), 17));
+        f(factory.as_ptr().cast::<c_void>(), dxgi_device, &mut device)
     };
     if !com::succeeded(hr) {
         return Err(HResultError {
@@ -219,8 +221,11 @@ pub(super) fn device_create_device_context(
 ) -> Result<ComPtr<ID2D1DeviceContext5>, HResultError> {
     let mut ctx: *mut ID2D1DeviceContext = std::ptr::null_mut();
     let hr = unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, u32, *mut *mut ID2D1DeviceContext) -> HRESULT =
-            std::mem::transmute(vtbl_entry(device.as_ptr().cast::<c_void>(), 4));
+        let f: unsafe extern "system" fn(
+            *mut c_void,
+            u32,
+            *mut *mut ID2D1DeviceContext,
+        ) -> HRESULT = std::mem::transmute(vtbl_entry(device.as_ptr().cast::<c_void>(), 4));
         f(device.as_ptr().cast::<c_void>(), 0, &mut ctx)
     };
     if !com::succeeded(hr) {
@@ -281,7 +286,11 @@ pub(super) fn ctx_end_draw(ctx: &ComPtr<ID2D1DeviceContext5>) -> Result<(), HRes
     let hr = unsafe {
         let f: unsafe extern "system" fn(*mut c_void, *mut u64, *mut u64) -> HRESULT =
             std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 49));
-        f(ctx.as_ptr().cast::<c_void>(), std::ptr::null_mut(), std::ptr::null_mut())
+        f(
+            ctx.as_ptr().cast::<c_void>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
     };
     if !com::succeeded(hr) {
         return Err(HResultError {
@@ -400,11 +409,16 @@ pub(super) fn ctx_create_solid_color_brush(
     Ok(ComPtr::from_raw(brush))
 }
 
-pub(super) fn ctx_create_layer(ctx: &ComPtr<ID2D1DeviceContext5>) -> Result<ComPtr<ID2D1Layer>, HResultError> {
+pub(super) fn ctx_create_layer(
+    ctx: &ComPtr<ID2D1DeviceContext5>,
+) -> Result<ComPtr<ID2D1Layer>, HResultError> {
     let mut layer: *mut ID2D1Layer = std::ptr::null_mut();
     let hr = unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, *const D2D1_SIZE_F, *mut *mut ID2D1Layer) -> HRESULT =
-            std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 13));
+        let f: unsafe extern "system" fn(
+            *mut c_void,
+            *const D2D1_SIZE_F,
+            *mut *mut ID2D1Layer,
+        ) -> HRESULT = std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 13));
         f(ctx.as_ptr().cast::<c_void>(), std::ptr::null(), &mut layer)
     };
     if !com::succeeded(hr) {
@@ -454,11 +468,7 @@ pub(super) fn ctx_fill_rectangle(
     unsafe {
         let f: unsafe extern "system" fn(*mut c_void, *const D2D1_RECT_F, *mut c_void) =
             std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 17));
-        f(
-            ctx.as_ptr().cast::<c_void>(),
-            rect,
-            brush.cast::<c_void>(),
-        );
+        f(ctx.as_ptr().cast::<c_void>(), rect, brush.cast::<c_void>());
     }
 }
 
@@ -470,11 +480,7 @@ pub(super) fn ctx_fill_rounded_rectangle(
     unsafe {
         let f: unsafe extern "system" fn(*mut c_void, *const D2D1_ROUNDED_RECT, *mut c_void) =
             std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 19));
-        f(
-            ctx.as_ptr().cast::<c_void>(),
-            rect,
-            brush.cast::<c_void>(),
-        );
+        f(ctx.as_ptr().cast::<c_void>(), rect, brush.cast::<c_void>());
     }
 }
 
@@ -485,8 +491,13 @@ pub(super) fn ctx_draw_rounded_rectangle(
     stroke_width: f32,
 ) {
     unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, *const D2D1_ROUNDED_RECT, *mut c_void, f32, *mut c_void) =
-            std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 18));
+        let f: unsafe extern "system" fn(
+            *mut c_void,
+            *const D2D1_ROUNDED_RECT,
+            *mut c_void,
+            f32,
+            *mut c_void,
+        ) = std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 18));
         f(
             ctx.as_ptr().cast::<c_void>(),
             rect,
@@ -558,9 +569,18 @@ pub(super) fn ctx_create_svg_document(
 ) -> Result<ComPtr<ID2D1SvgDocument>, HResultError> {
     let mut doc: *mut ID2D1SvgDocument = std::ptr::null_mut();
     let hr = unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, *mut c_void, D2D1_SIZE_F, *mut *mut ID2D1SvgDocument) -> HRESULT =
-            std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 115));
-        f(ctx.as_ptr().cast::<c_void>(), svg_stream, viewport_size, &mut doc)
+        let f: unsafe extern "system" fn(
+            *mut c_void,
+            *mut c_void,
+            D2D1_SIZE_F,
+            *mut *mut ID2D1SvgDocument,
+        ) -> HRESULT = std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 115));
+        f(
+            ctx.as_ptr().cast::<c_void>(),
+            svg_stream,
+            viewport_size,
+            &mut doc,
+        )
     };
     if !com::succeeded(hr) {
         return Err(HResultError {
@@ -577,7 +597,10 @@ pub(super) fn ctx_create_svg_document(
     Ok(ComPtr::from_raw(doc))
 }
 
-pub(super) fn ctx_draw_svg_document(ctx: &ComPtr<ID2D1DeviceContext5>, doc: &ComPtr<ID2D1SvgDocument>) {
+pub(super) fn ctx_draw_svg_document(
+    ctx: &ComPtr<ID2D1DeviceContext5>,
+    doc: &ComPtr<ID2D1SvgDocument>,
+) {
     unsafe {
         let f: unsafe extern "system" fn(*mut c_void, *mut c_void) =
             std::mem::transmute(vtbl_entry(ctx.as_ptr().cast::<c_void>(), 116));
@@ -585,10 +608,17 @@ pub(super) fn ctx_draw_svg_document(ctx: &ComPtr<ID2D1DeviceContext5>, doc: &Com
     }
 }
 
-pub(super) fn bitmap_copy_from_bitmap(dst: &ComPtr<ID2D1Bitmap1>, src: &ComPtr<ID2D1Bitmap1>) -> Result<(), HResultError> {
+pub(super) fn bitmap_copy_from_bitmap(
+    dst: &ComPtr<ID2D1Bitmap1>,
+    src: &ComPtr<ID2D1Bitmap1>,
+) -> Result<(), HResultError> {
     let hr = unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, *const c_void, *mut c_void, *const c_void) -> HRESULT =
-            std::mem::transmute(vtbl_entry(dst.as_ptr().cast::<c_void>(), 8));
+        let f: unsafe extern "system" fn(
+            *mut c_void,
+            *const c_void,
+            *mut c_void,
+            *const c_void,
+        ) -> HRESULT = std::mem::transmute(vtbl_entry(dst.as_ptr().cast::<c_void>(), 8));
         f(
             dst.as_ptr().cast::<c_void>(),
             std::ptr::null(),

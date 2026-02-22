@@ -12,7 +12,9 @@ impl CssLength {
         let reference_px = reference_px.max(0);
         match self {
             CssLength::Px(px) => px,
-            CssLength::Percent(percent) => ((reference_px as f32) * (percent / 100.0)).round() as i32,
+            CssLength::Percent(percent) => {
+                ((reference_px as f32) * (percent / 100.0)).round() as i32
+            }
             CssLength::Calc { percent, px } => {
                 ((reference_px as f32) * (percent / 100.0) + px).round() as i32
             }
@@ -130,7 +132,8 @@ fn parse_calc_expression(
             continue;
         }
 
-        let value = parse_css_length_px_f32_with_viewport(term, viewport_width_px, viewport_height_px)?;
+        let value =
+            parse_css_length_px_f32_with_viewport(term, viewport_width_px, viewport_height_px)?;
         px = px + sign * value;
     }
 

@@ -89,4 +89,3 @@ fn records_link_hit_regions_for_flex_item_anchor() {
             .any(|region| region.href.as_ref() == "/posts/")
     );
 }
-

@@ -58,12 +58,10 @@ pub(super) fn fill_linear_gradient_rect_clipped(
     };
 
     let den = match rect.direction {
-        crate::style::GradientDirection::TopToBottom | crate::style::GradientDirection::BottomToTop => {
-            rect.height_px.saturating_sub(1)
-        }
-        crate::style::GradientDirection::LeftToRight | crate::style::GradientDirection::RightToLeft => {
-            rect.width_px.saturating_sub(1)
-        }
+        crate::style::GradientDirection::TopToBottom
+        | crate::style::GradientDirection::BottomToTop => rect.height_px.saturating_sub(1),
+        crate::style::GradientDirection::LeftToRight
+        | crate::style::GradientDirection::RightToLeft => rect.width_px.saturating_sub(1),
     };
     if den <= 0 {
         painter.fill_rect(clip_x_px, clip_y_px, clip_width_px, clip_height_px, start)?;
@@ -74,12 +72,12 @@ pub(super) fn fill_linear_gradient_rect_clipped(
         let start = start as i32;
         let end = end as i32;
         let num = num.clamp(0, den);
-        ((start * (den - num) + end * num + den / 2) / den)
-            .clamp(0, 255) as u8
+        ((start * (den - num) + end * num + den / 2) / den).clamp(0, 255) as u8
     }
 
     match rect.direction {
-        crate::style::GradientDirection::TopToBottom | crate::style::GradientDirection::BottomToTop => {
+        crate::style::GradientDirection::TopToBottom
+        | crate::style::GradientDirection::BottomToTop => {
             let start_y_in_rect = clip_y_px.saturating_sub(rect.y_px);
             for y in 0..clip_height_px {
                 let y_in_rect = start_y_in_rect.saturating_add(y);
@@ -89,10 +87,17 @@ pub(super) fn fill_linear_gradient_rect_clipped(
                     b: lerp_channel(start.b, end.b, y_in_rect, den),
                     a: lerp_channel(start.a, end.a, y_in_rect, den),
                 };
-                painter.fill_rect(clip_x_px, clip_y_px.saturating_add(y), clip_width_px, 1, color)?;
+                painter.fill_rect(
+                    clip_x_px,
+                    clip_y_px.saturating_add(y),
+                    clip_width_px,
+                    1,
+                    color,
+                )?;
             }
         }
-        crate::style::GradientDirection::LeftToRight | crate::style::GradientDirection::RightToLeft => {
+        crate::style::GradientDirection::LeftToRight
+        | crate::style::GradientDirection::RightToLeft => {
             let start_x_in_rect = clip_x_px.saturating_sub(rect.x_px);
             for x in 0..clip_width_px {
                 let x_in_rect = start_x_in_rect.saturating_add(x);
@@ -102,7 +107,13 @@ pub(super) fn fill_linear_gradient_rect_clipped(
                     b: lerp_channel(start.b, end.b, x_in_rect, den),
                     a: lerp_channel(start.a, end.a, x_in_rect, den),
                 };
-                painter.fill_rect(clip_x_px.saturating_add(x), clip_y_px, 1, clip_height_px, color)?;
+                painter.fill_rect(
+                    clip_x_px.saturating_add(x),
+                    clip_y_px,
+                    1,
+                    clip_height_px,
+                    color,
+                )?;
             }
         }
     }

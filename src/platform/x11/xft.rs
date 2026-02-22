@@ -299,10 +299,7 @@ impl XftRenderer {
             self.color_cache.insert(key, xft_color);
         }
 
-        Ok(self
-            .color_cache
-            .get(&key)
-            .expect("color was just inserted") as *const XftColor)
+        Ok(self.color_cache.get(&key).expect("color was just inserted") as *const XftColor)
     }
 
     fn font_for(&self, style: TextStyle) -> *mut XftFont {
@@ -355,7 +352,11 @@ impl XftRenderer {
     }
 }
 
-fn open_xft_font(display: *mut Display, screen: c_int, key: FontKey) -> Result<*mut XftFont, String> {
+fn open_xft_font(
+    display: *mut Display,
+    screen: c_int,
+    key: FontKey,
+) -> Result<*mut XftFont, String> {
     let family = match key.family {
         FontFamily::SansSerif => "Verdana",
         FontFamily::Serif => "serif",
@@ -364,7 +365,8 @@ fn open_xft_font(display: *mut Display, screen: c_int, key: FontKey) -> Result<*
     let weight = if key.bold { "bold" } else { "regular" };
     let size_px = key.size_px.max(1);
     let pattern = format!("{family}:pixelsize={size_px}:weight={weight}");
-    let pattern = CString::new(pattern).map_err(|_| "Font pattern contains a NUL byte".to_owned())?;
+    let pattern =
+        CString::new(pattern).map_err(|_| "Font pattern contains a NUL byte".to_owned())?;
     let font = unsafe { XftFontOpenName(display, screen, pattern.as_ptr()) };
     if font.is_null() {
         return Err("XftFontOpenName failed".to_owned());

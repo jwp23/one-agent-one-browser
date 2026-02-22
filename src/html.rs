@@ -184,7 +184,10 @@ impl<'a> Parser<'a> {
         }
 
         self.cursor += "<!--".len();
-        if let Some(end_offset) = self.input.get(self.cursor..).and_then(|rest| rest.find("-->"))
+        if let Some(end_offset) = self
+            .input
+            .get(self.cursor..)
+            .and_then(|rest| rest.find("-->"))
         {
             self.cursor += end_offset + "-->".len();
         } else {
@@ -255,7 +258,9 @@ enum Fragment {
         attributes: Attributes,
         self_closing: bool,
     },
-    EndTag { name: String },
+    EndTag {
+        name: String,
+    },
     Text(String),
 }
 
@@ -456,15 +461,13 @@ mod tests {
     fn decodes_entities_in_text() {
         let doc = parse_document("<p>&lt; &amp; &gt; &#x27; &#39;</p>");
         let p = doc.find_first_element_by_name("p").expect("p exists");
-        assert_eq!(
-            p.children,
-            vec![Node::Text("< & > ' '".to_owned())]
-        );
+        assert_eq!(p.children, vec![Node::Text("< & > ' '".to_owned())]);
     }
 
     #[test]
     fn parses_style_text_without_consuming_following_body() {
-        let doc = parse_document("<head><style>/* <tag> */ body{}</style></head><body><p>ok</p></body>");
+        let doc =
+            parse_document("<head><style>/* <tag> */ body{}</style></head><body><p>ok</p></body>");
         assert!(doc.find_first_element_by_name("body").is_some());
         assert!(doc.find_first_element_by_name("p").is_some());
     }

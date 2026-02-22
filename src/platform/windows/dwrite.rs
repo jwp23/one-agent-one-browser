@@ -1,5 +1,5 @@
 use crate::win::com;
-use crate::win::com::{ComPtr, GUID, HResultError, HRESULT};
+use crate::win::com::{ComPtr, GUID, HRESULT, HResultError};
 use core::ffi::c_void;
 
 type BOOL = i32;
@@ -65,9 +65,13 @@ pub(super) fn create_factory() -> Result<ComPtr<IDWriteFactory>, String> {
     com::ensure_initialized()?;
 
     let mut out: *mut c_void = std::ptr::null_mut();
-    let hr = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWRITE_FACTORY, &mut out) };
+    let hr =
+        unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWRITE_FACTORY, &mut out) };
     if !com::succeeded(hr) {
-        return Err(format!("DWriteCreateFactory failed: {}", com::hresult_string(hr)));
+        return Err(format!(
+            "DWriteCreateFactory failed: {}",
+            com::hresult_string(hr)
+        ));
     }
     if out.is_null() {
         return Err("DWriteCreateFactory returned null".to_owned());
@@ -168,7 +172,9 @@ pub(super) fn create_text_layout(
     Ok(ComPtr::from_raw(layout))
 }
 
-pub(super) fn text_layout_get_metrics(layout: &ComPtr<IDWriteTextLayout>) -> Result<DWRITE_TEXT_METRICS, HResultError> {
+pub(super) fn text_layout_get_metrics(
+    layout: &ComPtr<IDWriteTextLayout>,
+) -> Result<DWRITE_TEXT_METRICS, HResultError> {
     let mut metrics = DWRITE_TEXT_METRICS::default();
     let hr = unsafe {
         let f: unsafe extern "system" fn(*mut c_void, *mut DWRITE_TEXT_METRICS) -> HRESULT =
@@ -184,7 +190,9 @@ pub(super) fn text_layout_get_metrics(layout: &ComPtr<IDWriteTextLayout>) -> Res
     Ok(metrics)
 }
 
-pub(super) fn text_layout_get_line_metrics(layout: &ComPtr<IDWriteTextLayout>) -> Result<Vec<DWRITE_LINE_METRICS>, HResultError> {
+pub(super) fn text_layout_get_line_metrics(
+    layout: &ComPtr<IDWriteTextLayout>,
+) -> Result<Vec<DWRITE_LINE_METRICS>, HResultError> {
     let mut needed: u32 = 0;
     let hr = unsafe {
         let f: unsafe extern "system" fn(
@@ -193,7 +201,12 @@ pub(super) fn text_layout_get_line_metrics(layout: &ComPtr<IDWriteTextLayout>) -
             u32,
             *mut u32,
         ) -> HRESULT = std::mem::transmute(vtbl_entry(layout.as_ptr().cast::<c_void>(), 59));
-        f(layout.as_ptr().cast::<c_void>(), std::ptr::null_mut(), 0, &mut needed)
+        f(
+            layout.as_ptr().cast::<c_void>(),
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        )
     };
 
     if com::succeeded(hr) && needed == 0 {

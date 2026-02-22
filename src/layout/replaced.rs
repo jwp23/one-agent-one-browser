@@ -4,7 +4,7 @@ use crate::render::{DisplayCommand, DrawImage, DrawSvg, DrawText};
 use crate::style::ComputedStyle;
 use std::rc::Rc;
 
-use super::{inline, LayoutEngine};
+use super::{LayoutEngine, inline};
 
 impl LayoutEngine<'_> {
     pub(super) fn paint_replaced_content(
@@ -102,12 +102,11 @@ impl LayoutEngine<'_> {
         let ascent_px = metrics.ascent_px.max(1);
         let descent_px = metrics.descent_px.max(0);
         let text_height_px = ascent_px.saturating_add(descent_px).max(1);
-        let y_offset = content_box
-            .height
-            .saturating_sub(text_height_px)
-            .max(0)
-            / 2;
-        let baseline_y = content_box.y.saturating_add(y_offset).saturating_add(ascent_px);
+        let y_offset = content_box.height.saturating_sub(text_height_px).max(0) / 2;
+        let baseline_y = content_box
+            .y
+            .saturating_add(y_offset)
+            .saturating_add(ascent_px);
 
         let mut x_px = content_box.x;
         if center_text {

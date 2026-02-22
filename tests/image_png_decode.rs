@@ -4,9 +4,9 @@ use one_agent_one_browser::browser::BrowserApp;
 use one_agent_one_browser::geom::Color;
 use one_agent_one_browser::image::{Argb32Image, RgbImage};
 use one_agent_one_browser::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
-use support::http::{HttpTestServer, Route};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use support::http::{HttpTestServer, Route};
 
 #[test]
 fn png_images_decode_and_render() {
@@ -59,8 +59,8 @@ fn make_test_png_bytes() -> Result<Vec<u8>, String> {
     let path = temp_path("png");
     let temp = TempPath(path.clone());
     one_agent_one_browser::png::write_rgb_png(&path, &image)?;
-    let bytes = std::fs::read(&path)
-        .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
     drop(temp);
     Ok(bytes)
 }
@@ -198,4 +198,3 @@ impl Painter for CountingPainter {
         Ok(())
     }
 }
-

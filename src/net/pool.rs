@@ -1,5 +1,5 @@
 use crate::debug;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestId(u64);
@@ -66,7 +66,11 @@ impl FetchPool {
                 debug::log(
                     debug::Target::Net,
                     debug::Level::Error,
-                    format_args!("req! p={} id={} url={url} err=pool_down", self.label, id.as_u64()),
+                    format_args!(
+                        "req! p={} id={} url={url} err=pool_down",
+                        self.label,
+                        id.as_u64()
+                    ),
                 );
             }
             return Err("Failed to enqueue fetch: pool is shut down".to_owned());

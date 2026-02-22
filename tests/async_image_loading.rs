@@ -4,8 +4,8 @@ use one_agent_one_browser::browser::BrowserApp;
 use one_agent_one_browser::geom::Color;
 use one_agent_one_browser::image::Argb32Image;
 use one_agent_one_browser::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
-use support::http::{HttpTestServer, Route};
 use std::time::{Duration, Instant};
+use support::http::{HttpTestServer, Route};
 
 #[test]
 fn image_fetch_does_not_block_render_and_pops_in_later() {

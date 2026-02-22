@@ -24,7 +24,10 @@ impl UrlLoader {
         })
     }
 
-    pub(super) fn fetch_stylesheets(&mut self, document: &Document) -> Result<Vec<StylesheetSlot>, String> {
+    pub(super) fn fetch_stylesheets(
+        &mut self,
+        document: &Document,
+    ) -> Result<Vec<StylesheetSlot>, String> {
         let mut refs = Vec::new();
         collect_stylesheet_refs(&document.root, &self.base_url, &mut refs)?;
 
@@ -97,7 +100,9 @@ impl StylesheetSlot {
     }
 }
 
-pub(super) fn stylesheet_sources_from_loader(slots: &[StylesheetSlot]) -> Vec<super::StylesheetSource> {
+pub(super) fn stylesheet_sources_from_loader(
+    slots: &[StylesheetSlot],
+) -> Vec<super::StylesheetSource> {
     let mut out = Vec::new();
     for slot in slots {
         match slot {
@@ -122,14 +127,8 @@ pub(super) fn stylesheet_sources_from_loader(slots: &[StylesheetSlot]) -> Vec<su
 }
 
 enum StylesheetRef {
-    Inline {
-        css: String,
-        media: Option<String>,
-    },
-    External {
-        url: String,
-        media: Option<String>,
-    },
+    Inline { css: String, media: Option<String> },
+    External { url: String, media: Option<String> },
 }
 
 fn collect_stylesheet_refs(
@@ -180,4 +179,3 @@ fn collect_stylesheet_refs(
 
     Ok(())
 }
-

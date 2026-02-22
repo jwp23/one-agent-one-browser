@@ -102,7 +102,10 @@ fn find_browser_exe() -> Result<PathBuf, String> {
     let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("debug")
-        .join(format!("one-agent-one-browser{}", std::env::consts::EXE_SUFFIX));
+        .join(format!(
+            "one-agent-one-browser{}",
+            std::env::consts::EXE_SUFFIX
+        ));
     if fallback.is_file() {
         return Ok(fallback);
     }
@@ -110,7 +113,10 @@ fn find_browser_exe() -> Result<PathBuf, String> {
     let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("release")
-        .join(format!("one-agent-one-browser{}", std::env::consts::EXE_SUFFIX));
+        .join(format!(
+            "one-agent-one-browser{}",
+            std::env::consts::EXE_SUFFIX
+        ));
     if fallback.is_file() {
         return Ok(fallback);
     }
@@ -144,7 +150,12 @@ fn run_case(
 
     println!("Case: {}", html_path.display());
     let browser_arg = html_path.as_os_str().to_owned();
-    render_to_png(browser_exe, &browser_arg, &actual_png, DEFAULT_RENDER_TIMEOUT)?;
+    render_to_png(
+        browser_exe,
+        &browser_arg,
+        &actual_png,
+        DEFAULT_RENDER_TIMEOUT,
+    )?;
 
     let comparison = compare_files(&expected_png, &actual_png, min_similarity)?;
     if comparison.matches {
@@ -239,9 +250,7 @@ fn read_min_similarity() -> Result<f64, String> {
     }
 
     let parsed: f64 = trimmed.parse().map_err(|err| {
-        format!(
-            "Invalid {MIN_SIMILARITY_ENV}={value:?}: {err}. Expected a float in [0.0, 1.0]."
-        )
+        format!("Invalid {MIN_SIMILARITY_ENV}={value:?}: {err}. Expected a float in [0.0, 1.0].")
     })?;
     if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
         return Err(format!(
@@ -370,7 +379,11 @@ struct FileComparison {
     png_diff: Option<PngDiff>,
 }
 
-fn compare_files(expected: &Path, actual: &Path, min_similarity: f64) -> Result<FileComparison, String> {
+fn compare_files(
+    expected: &Path,
+    actual: &Path,
+    min_similarity: f64,
+) -> Result<FileComparison, String> {
     let expected_bytes = std::fs::read(expected)
         .map_err(|err| format!("Failed to read {}: {err}", expected.display()))?;
     let actual_bytes = std::fs::read(actual)
@@ -594,7 +607,10 @@ fn read_png_rgb(path: &Path) -> Result<PngImage, String> {
         .get(0..8)
         .ok_or_else(|| format!("{} is too small to be a PNG", path.display()))?;
     if signature != SIGNATURE {
-        return Err(format!("{} is not a PNG (invalid signature)", path.display()));
+        return Err(format!(
+            "{} is not a PNG (invalid signature)",
+            path.display()
+        ));
     }
 
     let mut offset = 8usize;

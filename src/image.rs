@@ -156,7 +156,9 @@ fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(image.message.len());
-        let message = std::str::from_utf8(&image.message[..end]).unwrap_or("").trim();
+        let message = std::str::from_utf8(&image.message[..end])
+            .unwrap_or("")
+            .trim();
         if message.is_empty() {
             prefix.to_owned()
         } else {
@@ -186,7 +188,10 @@ fn decode_png_argb32(data: &[u8]) -> Result<Argb32Image, String> {
         )
     };
     if ok == 0 {
-        return Err(error_message("png_image_begin_read_from_memory failed", &guard.image));
+        return Err(error_message(
+            "png_image_begin_read_from_memory failed",
+            &guard.image,
+        ));
     }
 
     let width = guard.image.width;
@@ -541,7 +546,8 @@ fn decode_imageio_argb32(data: &[u8]) -> Result<Argb32Image, String> {
 
     let bytes_per_row = width
         .checked_mul(4)
-        .ok_or_else(|| "Decoded image row stride overflow".to_owned())? as usize;
+        .ok_or_else(|| "Decoded image row stride overflow".to_owned())?
+        as usize;
     let expected_len = (height as usize)
         .checked_mul(bytes_per_row)
         .ok_or_else(|| "Decoded image buffer overflow".to_owned())?;
@@ -600,8 +606,7 @@ fn premultiply_rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
         let a = src[3] as u16;
 
         let premul = |channel: u16| -> u8 {
-            ((channel.saturating_mul(a).saturating_add(127)) / 255)
-                .min(255) as u8
+            ((channel.saturating_mul(a).saturating_add(127)) / 255).min(255) as u8
         };
 
         let a8 = a.min(255) as u8;

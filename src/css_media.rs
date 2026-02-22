@@ -9,11 +9,7 @@ pub fn media_query_matches(media: &str, viewport: Viewport) -> bool {
     split_commas(media)
         .filter_map(|part| {
             let part = part.trim();
-            if part.is_empty() {
-                None
-            } else {
-                Some(part)
-            }
+            if part.is_empty() { None } else { Some(part) }
         })
         .any(|part| media_query_part_matches(part, viewport))
 }
@@ -216,7 +212,13 @@ mod tests {
 
     #[test]
     fn matches_empty_media_as_true() {
-        assert!(media_query_matches("", Viewport { width_px: 10, height_px: 10 }));
+        assert!(media_query_matches(
+            "",
+            Viewport {
+                width_px: 10,
+                height_px: 10
+            }
+        ));
     }
 
     #[test]
@@ -266,4 +268,3 @@ mod tests {
         ));
     }
 }
-

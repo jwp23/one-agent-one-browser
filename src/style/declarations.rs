@@ -5,9 +5,9 @@ use super::parse::{
     parse_css_font_family, parse_css_length_px,
 };
 use super::{
-    AutoEdges, BorderStyle, CascadePriority, CssEdges, CssLength, Display, Float, FlexAlignItems,
-    FlexDirection, FlexJustifyContent, FlexWrap, LetterSpacing, Position, StyleBuilder, TextAlign,
-    TextTransform, Visibility,
+    AutoEdges, BorderStyle, CascadePriority, CssEdges, CssLength, Display, FlexAlignItems,
+    FlexDirection, FlexJustifyContent, FlexWrap, Float, LetterSpacing, Position, StyleBuilder,
+    TextAlign, TextTransform, Visibility,
 };
 
 pub(super) fn apply_declaration(
@@ -222,7 +222,13 @@ pub(super) fn apply_declaration(
         }
         "padding-bottom" => {
             if let Some(length) = builder.parse_css_length(value) {
-                builder.apply_padding_component(|e| CssEdges { bottom: length, ..e }, priority);
+                builder.apply_padding_component(
+                    |e| CssEdges {
+                        bottom: length,
+                        ..e
+                    },
+                    priority,
+                );
             }
         }
         "border" => {

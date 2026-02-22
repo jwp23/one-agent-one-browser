@@ -6,7 +6,7 @@ use crate::style::{
 };
 use std::rc::Rc;
 
-use super::{inline, table, LayoutEngine};
+use super::{LayoutEngine, inline, table};
 
 fn compute_style<'doc>(
     engine: &LayoutEngine<'_>,
@@ -36,7 +36,9 @@ pub(super) fn layout_flex_row<'doc>(
     }
 
     match style.flex_direction {
-        FlexDirection::Row => layout_flex_row_container(engine, element, style, ancestors, content_box, paint),
+        FlexDirection::Row => {
+            layout_flex_row_container(engine, element, style, ancestors, content_box, paint)
+        }
         FlexDirection::Column => {
             layout_flex_column_container(engine, element, style, ancestors, content_box, paint)
         }
@@ -75,8 +77,12 @@ fn layout_flex_row_container<'doc>(
     }
 
     let height = match style.flex_wrap {
-        FlexWrap::NoWrap => layout_flex_row_single_line(engine, style, ancestors, content_box, paint, &items),
-        FlexWrap::Wrap => layout_flex_row_wrapped(engine, style, ancestors, content_box, paint, &items),
+        FlexWrap::NoWrap => {
+            layout_flex_row_single_line(engine, style, ancestors, content_box, paint, &items)
+        }
+        FlexWrap::Wrap => {
+            layout_flex_row_wrapped(engine, style, ancestors, content_box, paint, &items)
+        }
     }?;
 
     layout_positioned_children(engine, element, style, ancestors, content_box, paint)?;
@@ -93,10 +99,22 @@ fn layout_flex_row_single_line<'doc>(
 ) -> Result<i32, String> {
     let mut sizes = Vec::with_capacity(items.len());
     for item in items {
-        let main_size = measure_item_main_size_row(engine, container_style, ancestors, item, content_box.width)?;
+        let main_size = measure_item_main_size_row(
+            engine,
+            container_style,
+            ancestors,
+            item,
+            content_box.width,
+        )?;
         let border_width = main_size.clamp(0, content_box.width);
-        let border_height =
-            measure_item_border_height(engine, container_style, ancestors, item, border_width, content_box.width)?;
+        let border_height = measure_item_border_height(
+            engine,
+            container_style,
+            ancestors,
+            item,
+            border_width,
+            content_box.width,
+        )?;
         sizes.push(Size {
             width: border_width,
             height: border_height,
@@ -170,7 +188,13 @@ fn layout_flex_row_wrapped<'doc>(
 
     let mut measured_main: Vec<i32> = Vec::with_capacity(items.len());
     for item in items {
-        measured_main.push(measure_item_main_size_row(engine, container_style, ancestors, item, content_box.width)?);
+        measured_main.push(measure_item_main_size_row(
+            engine,
+            container_style,
+            ancestors,
+            item,
+            content_box.width,
+        )?);
     }
 
     for (idx, item) in items.iter().enumerate() {
@@ -179,7 +203,11 @@ fn layout_flex_row_wrapped<'doc>(
             .left
             .saturating_add(measured_main[idx].max(0))
             .saturating_add(item.margin.right);
-        let addition = if idx == line_start { outer } else { gap.saturating_add(outer) };
+        let addition = if idx == line_start {
+            outer
+        } else {
+            gap.saturating_add(outer)
+        };
         if line_used > 0 && line_used.saturating_add(addition) > content_box.width {
             let height = layout_flex_row_line(
                 engine,
@@ -240,8 +268,14 @@ fn layout_flex_row_line<'doc>(
     let mut sizes = Vec::with_capacity(line_items.len());
     for (item, &main_size) in line_items.iter().zip(measured_main_sizes) {
         let border_width = main_size.clamp(0, line_box.width);
-        let border_height =
-            measure_item_border_height(engine, container_style, ancestors, item, border_width, line_box.width)?;
+        let border_height = measure_item_border_height(
+            engine,
+            container_style,
+            ancestors,
+            item,
+            border_width,
+            line_box.width,
+        )?;
         sizes.push(Size {
             width: border_width,
             height: border_height,
@@ -318,8 +352,14 @@ fn layout_flex_column_container<'doc>(
 
     for (idx, item) in items.iter().enumerate() {
         let border_width = resolve_column_item_width(content_box.width, item);
-        let border_height =
-            measure_item_border_height(engine, style, ancestors, item, border_width, content_box.width)?;
+        let border_height = measure_item_border_height(
+            engine,
+            style,
+            ancestors,
+            item,
+            border_width,
+            content_box.width,
+        )?;
 
         let aligned_x = align_column_cross_start(
             style.flex_align_items,
@@ -374,7 +414,11 @@ fn align_cross_start(
         FlexAlignItems::Start => line_y.saturating_add(margin_top),
         FlexAlignItems::Center => {
             let remaining = line_height
-                .saturating_sub(margin_top.saturating_add(item_height).saturating_add(margin_bottom))
+                .saturating_sub(
+                    margin_top
+                        .saturating_add(item_height)
+                        .saturating_add(margin_bottom),
+                )
                 .max(0);
             line_y
                 .saturating_add(margin_top)
@@ -382,11 +426,13 @@ fn align_cross_start(
         }
         FlexAlignItems::End => {
             let remaining = line_height
-                .saturating_sub(margin_top.saturating_add(item_height).saturating_add(margin_bottom))
+                .saturating_sub(
+                    margin_top
+                        .saturating_add(item_height)
+                        .saturating_add(margin_bottom),
+                )
                 .max(0);
-            line_y
-                .saturating_add(margin_top)
-                .saturating_add(remaining)
+            line_y.saturating_add(margin_top).saturating_add(remaining)
         }
     }
 }
@@ -415,7 +461,9 @@ fn align_column_cross_start(
             .saturating_add(remaining / 2);
     }
     if margin_auto_left {
-        return container_x.saturating_add(margin_left).saturating_add(remaining);
+        return container_x
+            .saturating_add(margin_left)
+            .saturating_add(remaining);
     }
     if margin_auto_right {
         return container_x.saturating_add(margin_left);
@@ -426,7 +474,9 @@ fn align_column_cross_start(
         FlexAlignItems::Center => container_x
             .saturating_add(margin_left)
             .saturating_add(remaining / 2),
-        FlexAlignItems::End => container_x.saturating_add(margin_left).saturating_add(remaining),
+        FlexAlignItems::End => container_x
+            .saturating_add(margin_left)
+            .saturating_add(remaining),
     }
 }
 
@@ -504,15 +554,13 @@ fn measure_item_main_size_row<'doc>(
         width.resolve_px(max_width)
     } else {
         match item.node {
-            FlexNode::Text(node) => inline::measure_inline_nodes(
-                engine,
-                &[node],
-                parent_style,
-                ancestors,
-                max_width,
-            )?
-            .width,
-            FlexNode::Element(el) => measure_element_max_content_width(engine, el, &item.style, ancestors, max_width)?,
+            FlexNode::Text(node) => {
+                inline::measure_inline_nodes(engine, &[node], parent_style, ancestors, max_width)?
+                    .width
+            }
+            FlexNode::Element(el) => {
+                measure_element_max_content_width(engine, el, &item.style, ancestors, max_width)?
+            }
         }
     };
 
@@ -539,7 +587,9 @@ pub(super) fn measure_element_max_content_width<'doc>(
     }
 
     if style.display == Display::Flex {
-        return measure_flex_container_max_content_width(engine, element, style, ancestors, max_width);
+        return measure_flex_container_max_content_width(
+            engine, element, style, ancestors, max_width,
+        );
     }
 
     if super::inline::is_replaced_element(element) {
@@ -558,15 +608,12 @@ pub(super) fn measure_element_max_content_width<'doc>(
     if is_block {
         for child in &element.children {
             width_px = width_px.max(measure_node_max_content_width(
-                engine,
-                child,
-                style,
-                ancestors,
-                max_width,
+                engine, child, style, ancestors, max_width,
             )?);
         }
     } else {
-        width_px = measure_inline_children_width(engine, &element.children, style, ancestors, max_width)?;
+        width_px =
+            measure_inline_children_width(engine, &element.children, style, ancestors, max_width)?;
     }
     ancestors.pop();
 
@@ -603,14 +650,9 @@ fn measure_flex_container_max_content_width<'doc>(
                 if text.trim().is_empty() {
                     continue;
                 }
-                let width = inline::measure_inline_nodes(
-                    engine,
-                    &[child],
-                    style,
-                    ancestors,
-                    max_width,
-                )?
-                .width;
+                let width =
+                    inline::measure_inline_nodes(engine, &[child], style, ancestors, max_width)?
+                        .width;
                 (width, 0i32, 0i32)
             }
             Node::Element(el) => {
@@ -624,7 +666,13 @@ fn measure_flex_container_max_content_width<'doc>(
                 } else if let Some(width) = child_style.width_px {
                     width.resolve_px(max_width).max(0)
                 } else {
-                    measure_element_max_content_width(engine, el, &child_style, ancestors, max_width)?
+                    measure_element_max_content_width(
+                        engine,
+                        el,
+                        &child_style,
+                        ancestors,
+                        max_width,
+                    )?
                 };
 
                 if let Some(min) = child_style.min_width_px {
@@ -634,7 +682,11 @@ fn measure_flex_container_max_content_width<'doc>(
                     width = width.min(max.resolve_px(max_width).max(0));
                 }
 
-                (width.min(max_width), child_style.margin.left, child_style.margin.right)
+                (
+                    width.min(max_width),
+                    child_style.margin.left,
+                    child_style.margin.right,
+                )
             }
         };
 
@@ -675,7 +727,9 @@ fn measure_node_max_content_width<'doc>(
     max_width: i32,
 ) -> Result<i32, String> {
     match node {
-        Node::Text(text) => measure_text_run_width(engine, text, engine.text_style_for(parent_style)),
+        Node::Text(text) => {
+            measure_text_run_width(engine, text, engine.text_style_for(parent_style))
+        }
         Node::Element(el) => {
             let style = compute_style(engine, el, parent_style, ancestors);
             if style.display == Display::None {
@@ -702,8 +756,12 @@ fn measure_inline_children_width<'doc>(
     for child in children {
         match child {
             Node::Text(text) => {
-                let (segment_width, space_after) =
-                    measure_text_run_width_with_pending_space(engine, text, engine.text_style_for(parent_style), pending_space)?;
+                let (segment_width, space_after) = measure_text_run_width_with_pending_space(
+                    engine,
+                    text,
+                    engine.text_style_for(parent_style),
+                    pending_space,
+                )?;
                 total = total.saturating_add(segment_width);
                 pending_space = space_after;
             }
@@ -713,7 +771,8 @@ fn measure_inline_children_width<'doc>(
                     continue;
                 }
                 let width = if super::inline::is_replaced_element(el) {
-                    let size = super::inline::measure_replaced_element_outer_size(el, &style, max_width)?;
+                    let size =
+                        super::inline::measure_replaced_element_outer_size(el, &style, max_width)?;
                     size.width
                         .saturating_sub(style.margin.left.saturating_add(style.margin.right))
                         .max(0)
@@ -724,7 +783,11 @@ fn measure_inline_children_width<'doc>(
                 };
 
                 if pending_space && width > 0 {
-                    total = total.saturating_add(engine.measurer.text_width_px(" ", engine.text_style_for(parent_style))?);
+                    total = total.saturating_add(
+                        engine
+                            .measurer
+                            .text_width_px(" ", engine.text_style_for(parent_style))?,
+                    );
                 }
                 pending_space = false;
 
@@ -739,7 +802,11 @@ fn measure_inline_children_width<'doc>(
     Ok(total.max(0).min(max_width))
 }
 
-fn measure_text_run_width(engine: &LayoutEngine<'_>, text: &str, style: crate::render::TextStyle) -> Result<i32, String> {
+fn measure_text_run_width(
+    engine: &LayoutEngine<'_>,
+    text: &str,
+    style: crate::render::TextStyle,
+) -> Result<i32, String> {
     let mut width = 0i32;
     let mut first = true;
     for word in text.split_whitespace() {
@@ -853,7 +920,8 @@ fn compute_main_positions<'doc>(
             .saturating_add(size.width)
             .saturating_add(item.margin.right);
     }
-    total_outer = total_outer.saturating_add(gap.saturating_mul((items.len().saturating_sub(1)) as i32));
+    total_outer =
+        total_outer.saturating_add(gap.saturating_mul((items.len().saturating_sub(1)) as i32));
 
     let remaining = max_width.saturating_sub(total_outer).max(0);
 
@@ -865,7 +933,10 @@ fn compute_main_positions<'doc>(
             if items.len() <= 1 {
                 (0, gap)
             } else {
-                (0, gap.saturating_add(remaining / (items.len().saturating_sub(1)) as i32))
+                (
+                    0,
+                    gap.saturating_add(remaining / (items.len().saturating_sub(1)) as i32),
+                )
             }
         }
     };
@@ -896,14 +967,10 @@ fn measure_item_border_height<'doc>(
 ) -> Result<i32, String> {
     let border_width = border_width.max(0);
     match item.node {
-        FlexNode::Text(node) => inline::measure_inline_nodes(
-            engine,
-            &[node],
-            parent_style,
-            ancestors,
-            border_width,
-        )
-        .map(|s| s.height.max(0)),
+        FlexNode::Text(node) => {
+            inline::measure_inline_nodes(engine, &[node], parent_style, ancestors, border_width)
+                .map(|s| s.height.max(0))
+        }
         FlexNode::Element(_el) => {
             let border_height = layout_item_box(
                 engine,
@@ -955,7 +1022,10 @@ fn layout_item_box<'doc>(
     let opacity = item.style.opacity;
     let needs_opacity_group = paint && opacity < 255;
     if needs_opacity_group {
-        engine.list.commands.push(crate::render::DisplayCommand::PushOpacity(opacity));
+        engine
+            .list
+            .commands
+            .push(crate::render::DisplayCommand::PushOpacity(opacity));
     }
 
     if paint {
@@ -963,10 +1033,7 @@ fn layout_item_box<'doc>(
     }
 
     let border = item.style.border_width;
-    let padding = item
-        .style
-        .padding
-        .resolve_px(padding_reference_width_px);
+    let padding = item.style.padding.resolve_px(padding_reference_width_px);
     let content_box = border_box.inset(super::add_edges(border, padding));
 
     let content_height = match item.node {
@@ -1003,34 +1070,45 @@ fn layout_item_box<'doc>(
                     engine.push_positioned_containing_block(border_box, border);
                     pushed_positioning = true;
                 }
-            ancestors.push(el);
-            let height = match item.style.display {
-                Display::Table => table::layout_table(engine, el, &item.style, ancestors, content_box, paint)?.height,
-                Display::Flex => layout_flex_row(engine, el, &item.style, ancestors, content_box, paint)?,
-                Display::None => 0,
-                _ => {
-                    if el.name == "a" {
-                        let nodes: Vec<&Node> = el.children.iter().collect();
-                        inline::layout_inline_nodes_with_link(
-                            engine,
-                            &nodes,
-                            &item.style,
-                            ancestors,
-                            content_box,
-                            content_box.y,
-                            paint,
-                            anchor_href(el),
-                        )?
-                    } else {
-                        engine.layout_flow_children(&el.children, &item.style, ancestors, content_box, paint)?
+                ancestors.push(el);
+                let height = match item.style.display {
+                    Display::Table => {
+                        table::layout_table(engine, el, &item.style, ancestors, content_box, paint)?
+                            .height
                     }
-                }
-            };
-            ancestors.pop();
+                    Display::Flex => {
+                        layout_flex_row(engine, el, &item.style, ancestors, content_box, paint)?
+                    }
+                    Display::None => 0,
+                    _ => {
+                        if el.name == "a" {
+                            let nodes: Vec<&Node> = el.children.iter().collect();
+                            inline::layout_inline_nodes_with_link(
+                                engine,
+                                &nodes,
+                                &item.style,
+                                ancestors,
+                                content_box,
+                                content_box.y,
+                                paint,
+                                anchor_href(el),
+                            )?
+                        } else {
+                            engine.layout_flow_children(
+                                &el.children,
+                                &item.style,
+                                ancestors,
+                                content_box,
+                                paint,
+                            )?
+                        }
+                    }
+                };
+                ancestors.pop();
                 if pushed_positioning {
                     let _ = engine.positioned_containing_blocks.pop();
                 }
-            height
+                height
             }
         }
     };
@@ -1072,7 +1150,10 @@ fn layout_item_box<'doc>(
     }
 
     if needs_opacity_group {
-        engine.list.commands.push(crate::render::DisplayCommand::PopOpacity(opacity));
+        engine
+            .list
+            .commands
+            .push(crate::render::DisplayCommand::PopOpacity(opacity));
     }
 
     Ok(border_height)

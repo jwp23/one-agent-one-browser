@@ -190,8 +190,13 @@ pub trait Painter: TextMeasurer {
         border_width_px: i32,
         color: Color,
     ) -> Result<(), String>;
-    fn draw_text(&mut self, x_px: i32, y_px: i32, text: &str, style: TextStyle)
-        -> Result<(), String>;
+    fn draw_text(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        text: &str,
+        style: TextStyle,
+    ) -> Result<(), String>;
     fn draw_image(
         &mut self,
         x_px: i32,

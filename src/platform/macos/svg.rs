@@ -73,7 +73,8 @@ fn rasterize_svg_via_quicklook(
         height: height_px as CGFloat,
     };
 
-    let image = unsafe { QLThumbnailImageCreate(std::ptr::null(), url, max_size, std::ptr::null()) };
+    let image =
+        unsafe { QLThumbnailImageCreate(std::ptr::null(), url, max_size, std::ptr::null()) };
     unsafe { CFRelease(url as CFTypeRef) };
 
     if image.is_null() {

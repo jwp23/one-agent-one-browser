@@ -1,7 +1,11 @@
 use crate::css::{PseudoClass, Rule, Selector, Specificity};
 use crate::dom::Element;
 
-pub(super) fn match_rule(rule: &Rule, element: &Element, ancestors: &[&Element]) -> Option<(Specificity, u32)> {
+pub(super) fn match_rule(
+    rule: &Rule,
+    element: &Element,
+    ancestors: &[&Element],
+) -> Option<(Specificity, u32)> {
     let mut best: Option<Specificity> = None;
     for selector in &rule.selectors {
         if selector_matches(selector, element, ancestors) {
@@ -17,7 +21,11 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
         return false;
     }
 
-    if !compound_matches(&selector.parts[selector.parts.len() - 1], element, ancestors) {
+    if !compound_matches(
+        &selector.parts[selector.parts.len() - 1],
+        element,
+        ancestors,
+    ) {
         return false;
     }
 
@@ -26,7 +34,11 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
         let mut matched = false;
         while ancestor_index > 0 {
             ancestor_index -= 1;
-            if compound_matches(part, ancestors[ancestor_index], &ancestors[..ancestor_index]) {
+            if compound_matches(
+                part,
+                ancestors[ancestor_index],
+                &ancestors[..ancestor_index],
+            ) {
                 matched = true;
                 break;
             }
@@ -39,7 +51,11 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
     true
 }
 
-fn compound_matches(selector: &crate::css::CompoundSelector, element: &Element, ancestors: &[&Element]) -> bool {
+fn compound_matches(
+    selector: &crate::css::CompoundSelector,
+    element: &Element,
+    ancestors: &[&Element],
+) -> bool {
     if selector.unsupported {
         return false;
     }
@@ -92,7 +108,11 @@ fn pseudo_matches(pseudo: PseudoClass, element: &Element, ancestors: &[&Element]
     }
 }
 
-fn nth_child_matches(element: &Element, ancestors: &[&Element], pattern: crate::css::NthChildPattern) -> bool {
+fn nth_child_matches(
+    element: &Element,
+    ancestors: &[&Element],
+    pattern: crate::css::NthChildPattern,
+) -> bool {
     let Some(parent) = ancestors.last() else {
         return false;
     };

@@ -64,4 +64,3 @@ fn start_tag_insert_pos(input: &str, start: usize, end: usize) -> usize {
         end
     }
 }
-

@@ -1,7 +1,7 @@
+use super::WindowOptions;
 use super::painter::MacPainter;
 use super::scale::ScaleFactor;
 use super::scaled::ScaledPainter;
-use super::WindowOptions;
 use crate::app::App;
 use crate::render::Viewport;
 use core::ffi::{c_char, c_double, c_long, c_ulong, c_void};
@@ -211,7 +211,9 @@ pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
 
         if capture_now {
             let Some(path) = screenshot_path.take() else {
-                return Err("Internal error: capture_now set but screenshot path missing".to_owned());
+                return Err(
+                    "Internal error: capture_now set but screenshot path missing".to_owned(),
+                );
             };
             let rgb = painter.capture_back_buffer_rgb()?;
             crate::png::write_rgb_png(&path, &rgb)?;
@@ -232,7 +234,10 @@ pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
                 has_rendered_ready_state = true;
                 if capture_after_render {
                     let Some(path) = screenshot_path.take() else {
-                        return Err("Internal error: capture_after_render set but screenshot path missing".to_owned());
+                        return Err(
+                            "Internal error: capture_after_render set but screenshot path missing"
+                                .to_owned(),
+                        );
                     };
                     let rgb = painter.capture_back_buffer_rgb()?;
                     crate::png::write_rgb_png(&path, &rgb)?;
@@ -263,8 +268,7 @@ impl CocoaApp {
 
         let app_cls = class(b"NSApplication\0");
         let app: Id = unsafe {
-            let f: unsafe extern "C" fn(Id, Sel) -> Id =
-                std::mem::transmute(objc_msg_send_ptr());
+            let f: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msg_send_ptr());
             f(app_cls, sel(b"sharedApplication\0"))
         };
         if app.is_null() {
@@ -280,8 +284,7 @@ impl CocoaApp {
 
         let window = create_window(initial_width_css, initial_height_css, title)?;
         let view = unsafe {
-            let f: unsafe extern "C" fn(Id, Sel) -> Id =
-                std::mem::transmute(objc_msg_send_ptr());
+            let f: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msg_send_ptr());
             f(window, sel(b"contentView\0"))
         };
         if view.is_null() {
@@ -295,8 +298,7 @@ impl CocoaApp {
         }
 
         let layer = unsafe {
-            let f: unsafe extern "C" fn(Id, Sel) -> Id =
-                std::mem::transmute(objc_msg_send_ptr());
+            let f: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msg_send_ptr());
             f(view, sel(b"layer\0"))
         };
         if layer.is_null() {
@@ -455,8 +457,7 @@ impl AutoreleasePool {
     fn new() -> Self {
         unsafe {
             let cls = class(b"NSAutoreleasePool\0");
-            let f: unsafe extern "C" fn(Id, Sel) -> Id =
-                std::mem::transmute(objc_msg_send_ptr());
+            let f: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msg_send_ptr());
             let pool = f(cls, sel(b"new\0"));
             Self(pool)
         }
@@ -478,7 +479,8 @@ impl Drop for AutoreleasePool {
 fn create_window(width_css: i32, height_css: i32, title: &str) -> Result<Id, String> {
     let window_cls = class(b"NSWindow\0");
 
-    let alloc: unsafe extern "C" fn(Id, Sel) -> Id = unsafe { std::mem::transmute(objc_msg_send_ptr()) };
+    let alloc: unsafe extern "C" fn(Id, Sel) -> Id =
+        unsafe { std::mem::transmute(objc_msg_send_ptr()) };
     let window = unsafe { alloc(window_cls, sel(b"alloc\0")) };
     if window.is_null() {
         return Err("NSWindow.alloc returned null".to_owned());
@@ -511,15 +513,24 @@ fn create_window(width_css: i32, height_css: i32, title: &str) -> Result<Id, Str
     }
 
     let title = nsstring(title)?;
-    let set_title: unsafe extern "C" fn(Id, Sel, Id) = unsafe { std::mem::transmute(objc_msg_send_ptr()) };
+    let set_title: unsafe extern "C" fn(Id, Sel, Id) =
+        unsafe { std::mem::transmute(objc_msg_send_ptr()) };
     unsafe { set_title(window, sel(b"setTitle:\0"), title) };
     unsafe { CFRelease(title as *const c_void) };
 
-    let released: unsafe extern "C" fn(Id, Sel, ObjcBool) = unsafe { std::mem::transmute(objc_msg_send_ptr()) };
+    let released: unsafe extern "C" fn(Id, Sel, ObjcBool) =
+        unsafe { std::mem::transmute(objc_msg_send_ptr()) };
     unsafe { released(window, sel(b"setReleasedWhenClosed:\0"), NO) };
 
-    let make_key: unsafe extern "C" fn(Id, Sel, Id) = unsafe { std::mem::transmute(objc_msg_send_ptr()) };
-    unsafe { make_key(window, sel(b"makeKeyAndOrderFront:\0"), std::ptr::null_mut()) };
+    let make_key: unsafe extern "C" fn(Id, Sel, Id) =
+        unsafe { std::mem::transmute(objc_msg_send_ptr()) };
+    unsafe {
+        make_key(
+            window,
+            sel(b"makeKeyAndOrderFront:\0"),
+            std::ptr::null_mut(),
+        )
+    };
 
     Ok(window)
 }

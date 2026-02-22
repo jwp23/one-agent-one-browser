@@ -193,7 +193,10 @@ mod tests {
     fn resolves_relative_path_against_file_like_path() {
         let base = Url::parse("https://news.ycombinator.com/front?day=2026-01-16").unwrap();
         let resolved = base.resolve("news.css?t=abc").unwrap();
-        assert_eq!(resolved.as_str(), "https://news.ycombinator.com/news.css?t=abc");
+        assert_eq!(
+            resolved.as_str(),
+            "https://news.ycombinator.com/news.css?t=abc"
+        );
     }
 
     #[test]

@@ -45,15 +45,20 @@ fn run_window_with_display<A: App>(
     title: &str,
     options: WindowOptions,
     app: &mut A,
-) -> Result<(), String>
-{
+) -> Result<(), String> {
     let screen = unsafe { XDefaultScreen(display) };
     let scale = ScaleFactor::detect(display, screen);
     let visual = unsafe { XDefaultVisual(display, screen) };
     if visual.is_null() {
         return Err("XDefaultVisual returned null".to_owned());
     }
-    let visual_masks = unsafe { ((*visual).red_mask, (*visual).green_mask, (*visual).blue_mask) };
+    let visual_masks = unsafe {
+        (
+            (*visual).red_mask,
+            (*visual).green_mask,
+            (*visual).blue_mask,
+        )
+    };
     let colormap = unsafe { XDefaultColormap(display, screen) };
     let root_window = unsafe { XRootWindow(display, screen) };
     let black_pixel = unsafe { XBlackPixel(display, screen) };
@@ -137,7 +142,8 @@ fn run_window_with_display<A: App>(
         XSetBackground(display, gc, white_pixel);
     }
 
-    let back_buffer = unsafe { XCreatePixmap(display, window, initial_width, initial_height, depth) };
+    let back_buffer =
+        unsafe { XCreatePixmap(display, window, initial_width, initial_height, depth) };
     if back_buffer == 0 {
         return Err("XCreatePixmap failed".to_owned());
     }
@@ -236,8 +242,10 @@ fn run_window_with_display<A: App>(
                         }
                     }
                     EVENT_TYPE_KEY_PRESS => {
-                        let key: &XKeyEvent = unsafe { &*(event.inner.as_ptr() as *const XKeyEvent) };
-                        let keysym = unsafe { XLookupKeysym(key as *const XKeyEvent as *mut XKeyEvent, 0) };
+                        let key: &XKeyEvent =
+                            unsafe { &*(event.inner.as_ptr() as *const XKeyEvent) };
+                        let keysym =
+                            unsafe { XLookupKeysym(key as *const XKeyEvent as *mut XKeyEvent, 0) };
                         if keysym == KEYSYM_ESCAPE {
                             should_exit = true;
                             break;
@@ -280,7 +288,8 @@ fn run_window_with_display<A: App>(
 
             let wants_screenshot = screenshot_path.is_some();
             let should_complete_headless = headless && !wants_screenshot;
-            let should_complete_screenshot = wants_screenshot && ready_for_screenshot && has_rendered_ready_state;
+            let should_complete_screenshot =
+                wants_screenshot && ready_for_screenshot && has_rendered_ready_state;
 
             let mut capture_now = false;
             let mut capture_after_render = false;
@@ -288,7 +297,8 @@ fn run_window_with_display<A: App>(
 
             if ready_for_screenshot && (wants_screenshot || headless) && !has_rendered_ready_state {
                 needs_redraw = true;
-            } else if ready_for_screenshot && should_wait_for_resources && has_rendered_ready_state {
+            } else if ready_for_screenshot && should_wait_for_resources && has_rendered_ready_state
+            {
                 resource_wait_started.get_or_insert(Instant::now());
             } else if ready_for_screenshot && has_rendered_ready_state {
                 resource_wait_started = None;
@@ -312,7 +322,9 @@ fn run_window_with_display<A: App>(
 
             if capture_now {
                 let Some(path) = screenshot_path.take() else {
-                    return Err("Internal error: capture_now set but screenshot path missing".to_owned());
+                    return Err(
+                        "Internal error: capture_now set but screenshot path missing".to_owned(),
+                    );
                 };
                 unsafe {
                     XSync(display, 0);
@@ -387,14 +399,8 @@ impl TextMeasurer for ScaledPainter<'_> {
         let scaled_style = self.scale_style(style);
         let metrics = self.inner.font_metrics_px(scaled_style);
         FontMetricsPx {
-            ascent_px: self
-                .scale
-                .device_delta_to_css_px(metrics.ascent_px)
-                .max(1),
-            descent_px: self
-                .scale
-                .device_delta_to_css_px(metrics.descent_px)
-                .max(0),
+            ascent_px: self.scale.device_delta_to_css_px(metrics.ascent_px).max(1),
+            descent_px: self.scale.device_delta_to_css_px(metrics.descent_px).max(0),
         }
     }
 

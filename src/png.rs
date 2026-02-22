@@ -1,5 +1,5 @@
 use crate::image::RgbImage;
-use std::io::{Write, BufWriter};
+use std::io::{BufWriter, Write};
 
 const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 const COLOR_TYPE_TRUECOLOR: u8 = 2;
@@ -101,11 +101,7 @@ fn zlib_compress_stored(uncompressed: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn write_chunk(
-    writer: &mut impl Write,
-    chunk_type: [u8; 4],
-    data: &[u8],
-) -> Result<(), String> {
+fn write_chunk(writer: &mut impl Write, chunk_type: [u8; 4], data: &[u8]) -> Result<(), String> {
     let len_u32: u32 = data
         .len()
         .try_into()
@@ -170,4 +166,3 @@ impl Adler32 {
         (self.s2 << 16) | self.s1
     }
 }
-

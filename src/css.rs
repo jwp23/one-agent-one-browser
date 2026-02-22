@@ -50,9 +50,9 @@ pub struct Selector {
 
 impl Selector {
     pub fn specificity(&self) -> Specificity {
-        self.parts
-            .iter()
-            .fold(Specificity::default(), |acc, part| acc.add(part.specificity()))
+        self.parts.iter().fold(Specificity::default(), |acc, part| {
+            acc.add(part.specificity())
+        })
     }
 }
 
@@ -590,7 +590,10 @@ fn parse_pseudo_class(name: &str) -> Option<PseudoClass> {
 }
 
 fn parse_nth_child_pattern(input: &str) -> Option<NthChildPattern> {
-    let normalized = input.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    let normalized = input
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
     let value = normalized.to_ascii_lowercase();
     if value.is_empty() {
         return None;
@@ -812,7 +815,10 @@ mod tests {
              body { color: #000000; }",
         );
         assert_eq!(sheet.rules.len(), 1);
-        assert_eq!(sheet.rules[0].selectors[0].parts[0].tag.as_deref(), Some("body"));
+        assert_eq!(
+            sheet.rules[0].selectors[0].parts[0].tag.as_deref(),
+            Some("body")
+        );
     }
 
     #[test]
@@ -833,7 +839,10 @@ mod tests {
         assert_eq!(selector.parts[0].tag.as_deref(), Some("input"));
         assert_eq!(selector.parts[0].attributes.len(), 1);
         assert_eq!(selector.parts[0].attributes[0].name, "type");
-        assert_eq!(selector.parts[0].attributes[0].value.as_deref(), Some("submit"));
+        assert_eq!(
+            selector.parts[0].attributes[0].value.as_deref(),
+            Some("submit")
+        );
     }
 
     #[test]
