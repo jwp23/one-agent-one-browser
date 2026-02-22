@@ -121,6 +121,7 @@ fn layout_flex_row_single_line<'doc>(
         });
     }
 
+    distribute_flex_shrink_row(container_style, items, content_box.width, &mut sizes);
     distribute_flex_grow_row(container_style, items, content_box.width, &mut sizes);
 
     let mut outer_heights: Vec<i32> = Vec::with_capacity(items.len());
@@ -660,6 +661,12 @@ fn measure_flex_container_max_content_width<'doc>(
                 if child_style.display == Display::None {
                     continue;
                 }
+                if matches!(
+                    child_style.position,
+                    crate::style::Position::Absolute | crate::style::Position::Fixed
+                ) {
+                    continue;
+                }
 
                 let mut width = if let Some(basis) = child_style.flex_basis_px {
                     basis.max(0)
@@ -735,6 +742,12 @@ fn measure_node_max_content_width<'doc>(
             if style.display == Display::None {
                 return Ok(0);
             }
+            if matches!(
+                style.position,
+                crate::style::Position::Absolute | crate::style::Position::Fixed
+            ) {
+                return Ok(0);
+            }
             if let Some(width) = style.width_px {
                 return Ok(width.resolve_px(max_width).max(0).min(max_width));
             }
@@ -768,6 +781,12 @@ fn measure_inline_children_width<'doc>(
             Node::Element(el) => {
                 let style = compute_style(engine, el, parent_style, ancestors);
                 if style.display == Display::None {
+                    continue;
+                }
+                if matches!(
+                    style.position,
+                    crate::style::Position::Absolute | crate::style::Position::Fixed
+                ) {
                     continue;
                 }
                 let width = if super::inline::is_replaced_element(el) {
@@ -898,6 +917,105 @@ fn distribute_flex_grow_row<'doc>(
         };
         distributed = distributed.saturating_add(extra);
         size.width = size.width.saturating_add(extra).min(max_width);
+    }
+}
+
+fn distribute_flex_shrink_row<'doc>(
+    container_style: &ComputedStyle,
+    items: &[FlexItem<'doc>],
+    max_width: i32,
+    sizes: &mut [Size],
+) {
+    let max_width = max_width.max(0);
+    if max_width <= 0 || items.is_empty() || sizes.is_empty() {
+        return;
+    }
+
+    let gap = container_style.flex_gap_px.max(0);
+    let mut total_outer = gap.saturating_mul((items.len().saturating_sub(1)) as i32);
+    for (item, size) in items.iter().zip(sizes.iter()) {
+        total_outer = total_outer
+            .saturating_add(item.margin.left)
+            .saturating_add(size.width.max(0))
+            .saturating_add(item.margin.right);
+    }
+
+    if total_outer <= max_width {
+        return;
+    }
+
+    let mut overflow = total_outer.saturating_sub(max_width);
+    let min_widths: Vec<i32> = items
+        .iter()
+        .map(|item| {
+            item.style
+                .min_width_px
+                .map(|value| value.resolve_px(max_width).max(0))
+                .unwrap_or(0)
+        })
+        .collect();
+
+    while overflow > 0 {
+        let active_indices: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let min_width = min_widths[idx];
+                if item.style.flex_shrink > 0 && sizes[idx].width > min_width {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if active_indices.is_empty() {
+            break;
+        }
+
+        let total_factor: i64 = active_indices
+            .iter()
+            .map(|idx| {
+                let shrink = items[*idx].style.flex_shrink.max(0) as i64;
+                let basis = sizes[*idx].width.max(1) as i64;
+                shrink.saturating_mul(basis)
+            })
+            .sum();
+        if total_factor <= 0 {
+            break;
+        }
+
+        let mut reduced_this_round = 0i32;
+        for (position, idx) in active_indices.iter().enumerate() {
+            let idx = *idx;
+            let min_width = min_widths[idx];
+            let max_reducible = sizes[idx].width.saturating_sub(min_width).max(0);
+            if max_reducible <= 0 {
+                continue;
+            }
+
+            let factor = (items[idx].style.flex_shrink.max(0) as i64)
+                .saturating_mul(sizes[idx].width.max(1) as i64);
+            let mut reduction = if position + 1 == active_indices.len() {
+                overflow.saturating_sub(reduced_this_round)
+            } else {
+                ((overflow as i64).saturating_mul(factor) / total_factor) as i32
+            };
+            if reduction <= 0 && position + 1 == active_indices.len() {
+                reduction = overflow.saturating_sub(reduced_this_round);
+            }
+
+            let actual = reduction.clamp(0, max_reducible);
+            if actual <= 0 {
+                continue;
+            }
+            sizes[idx].width = sizes[idx].width.saturating_sub(actual).max(min_width);
+            reduced_this_round = reduced_this_round.saturating_add(actual);
+        }
+
+        if reduced_this_round <= 0 {
+            break;
+        }
+        overflow = overflow.saturating_sub(reduced_this_round);
     }
 }
 
@@ -1079,6 +1197,14 @@ fn layout_item_box<'doc>(
                     Display::Flex => {
                         layout_flex_row(engine, el, &item.style, ancestors, content_box, paint)?
                     }
+                    Display::Grid => super::grid::layout_grid(
+                        engine,
+                        el,
+                        &item.style,
+                        ancestors,
+                        content_box,
+                        paint,
+                    )?,
                     Display::None => 0,
                     _ => {
                         if el.name == "a" {

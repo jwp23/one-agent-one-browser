@@ -3,7 +3,8 @@ use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_htm
 use super::{
     AutoEdges, BorderStyle, ComputedStyle, CssEdges, CssLength, Display, FlexAlignItems,
     FlexDirection, FlexJustifyContent, FlexWrap, Float, FontFamily, LineHeight, LinearGradient,
-    Position, TextAlign, TextTransform, Visibility, custom_properties, declarations, length,
+    Position, TextAlign, TextTransform, Visibility, WhiteSpace, custom_properties, declarations,
+    length,
 };
 use crate::css::{Rule, Specificity};
 use crate::dom::Element;
@@ -88,6 +89,7 @@ pub(super) struct StyleBuilder {
     underline: Option<Cascaded<bool>>,
     text_align: Option<Cascaded<TextAlign>>,
     text_transform: Option<Cascaded<TextTransform>>,
+    white_space: Option<Cascaded<WhiteSpace>>,
     line_height: Option<Cascaded<LineHeight>>,
     margin: Option<Cascaded<Edges>>,
     margin_auto: Option<Cascaded<AutoEdges>>,
@@ -109,6 +111,9 @@ pub(super) struct StyleBuilder {
     flex_shrink: Option<Cascaded<i32>>,
     flex_basis_px: Option<Cascaded<Option<i32>>>,
     flex_gap_px: Option<Cascaded<i32>>,
+    grid_area: Option<Cascaded<Option<String>>>,
+    grid_template_columns: Option<Cascaded<Option<String>>>,
+    grid_template_areas: Option<Cascaded<Option<String>>>,
 }
 
 impl StyleBuilder {
@@ -138,6 +143,7 @@ impl StyleBuilder {
             underline: None,
             text_align: None,
             text_transform: None,
+            white_space: None,
             line_height: None,
             margin: None,
             margin_auto: None,
@@ -159,6 +165,9 @@ impl StyleBuilder {
             flex_shrink: None,
             flex_basis_px: None,
             flex_gap_px: None,
+            grid_area: None,
+            grid_template_columns: None,
+            grid_template_areas: None,
         }
     }
 
@@ -234,6 +243,10 @@ impl StyleBuilder {
                 .text_transform
                 .map(|v| v.value)
                 .unwrap_or(self.base.text_transform),
+            white_space: self
+                .white_space
+                .map(|v| v.value)
+                .unwrap_or(self.base.white_space),
             line_height: self
                 .line_height
                 .map(|v| v.value)
@@ -309,6 +322,18 @@ impl StyleBuilder {
                 .flex_gap_px
                 .map(|v| v.value)
                 .unwrap_or(self.base.flex_gap_px),
+            grid_area: self
+                .grid_area
+                .map(|v| v.value)
+                .unwrap_or_else(|| self.base.grid_area.clone()),
+            grid_template_columns: self
+                .grid_template_columns
+                .map(|v| v.value)
+                .unwrap_or_else(|| self.base.grid_template_columns.clone()),
+            grid_template_areas: self
+                .grid_template_areas
+                .map(|v| v.value)
+                .unwrap_or_else(|| self.base.grid_template_areas.clone()),
         }
     }
 
@@ -614,6 +639,10 @@ impl StyleBuilder {
         apply_cascade(&mut self.text_transform, value, priority);
     }
 
+    pub(super) fn apply_white_space(&mut self, value: WhiteSpace, priority: CascadePriority) {
+        apply_cascade(&mut self.white_space, value, priority);
+    }
+
     pub(super) fn apply_line_height(&mut self, value: LineHeight, priority: CascadePriority) {
         apply_cascade(&mut self.line_height, value, priority);
     }
@@ -706,6 +735,26 @@ impl StyleBuilder {
         apply_cascade(&mut self.flex_gap_px, value, priority);
     }
 
+    pub(super) fn apply_grid_area(&mut self, value: Option<String>, priority: CascadePriority) {
+        apply_cascade(&mut self.grid_area, value, priority);
+    }
+
+    pub(super) fn apply_grid_template_columns(
+        &mut self,
+        value: Option<String>,
+        priority: CascadePriority,
+    ) {
+        apply_cascade(&mut self.grid_template_columns, value, priority);
+    }
+
+    pub(super) fn apply_grid_template_areas(
+        &mut self,
+        value: Option<String>,
+        priority: CascadePriority,
+    ) {
+        apply_cascade(&mut self.grid_template_areas, value, priority);
+    }
+
     pub(super) fn apply_padding_component(
         &mut self,
         update: impl FnOnce(CssEdges) -> CssEdges,
@@ -788,7 +837,7 @@ impl StyleBuilder {
     }
 }
 
-fn apply_cascade<T: Copy>(slot: &mut Option<Cascaded<T>>, value: T, priority: CascadePriority) {
+fn apply_cascade<T>(slot: &mut Option<Cascaded<T>>, value: T, priority: CascadePriority) {
     let should_set = match slot.as_ref() {
         Some(existing) => priority >= existing.priority,
         None => true,

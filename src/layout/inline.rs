@@ -1,7 +1,7 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
 use crate::render::{DisplayCommand, DrawText, FontMetricsPx, LinkHitRegion, TextStyle};
-use crate::style::{ComputedStyle, Display, TextAlign, Visibility};
+use crate::style::{ComputedStyle, Display, TextAlign, Visibility, WhiteSpace};
 use std::rc::Rc;
 
 use super::LayoutEngine;
@@ -624,6 +624,7 @@ fn layout_tokens<'doc>(
         .line_height
         .resolve_px(parent_style.font_size_px)
         .map(|value| value.max(1));
+    let nowrap = parent_style.white_space == WhiteSpace::NoWrap;
     let mut line = Line::new(explicit_line_height_px, base_metrics);
     let mut x_px = 0i32;
 
@@ -641,7 +642,7 @@ fn layout_tokens<'doc>(
                     continue;
                 }
                 let space_width_px = engine.measurer.text_width_px(" ", *style)?;
-                if x_px.saturating_add(space_width_px) > content_box.width {
+                if !nowrap && x_px.saturating_add(space_width_px) > content_box.width {
                     continue;
                 }
                 let metrics = engine.measurer.font_metrics_px(*style);
@@ -660,7 +661,8 @@ fn layout_tokens<'doc>(
                     continue;
                 }
                 let word_width_px = engine.measurer.text_width_px(text, *style)?;
-                if x_px != 0 && x_px.saturating_add(word_width_px) > content_box.width {
+                if !nowrap && x_px != 0 && x_px.saturating_add(word_width_px) > content_box.width
+                {
                     lines.push(std::mem::replace(
                         &mut line,
                         Line::new(explicit_line_height_px, base_metrics),
@@ -684,7 +686,7 @@ fn layout_tokens<'doc>(
                 x_px = x_px.saturating_add(size.width);
             }
             InlineToken::ElementBox(b) => {
-                if x_px != 0 && x_px.saturating_add(b.size.width) > content_box.width {
+                if !nowrap && x_px != 0 && x_px.saturating_add(b.size.width) > content_box.width {
                     lines.push(std::mem::replace(
                         &mut line,
                         Line::new(explicit_line_height_px, base_metrics),
@@ -861,6 +863,7 @@ fn measure_tokens<'doc>(
         .line_height
         .resolve_px(parent_style.font_size_px)
         .map(|value| value.max(1));
+    let nowrap = parent_style.white_space == WhiteSpace::NoWrap;
     let mut line = Line::new(explicit_line_height_px, base_metrics);
     let mut x_px = 0i32;
 
@@ -878,7 +881,7 @@ fn measure_tokens<'doc>(
                     continue;
                 }
                 let space_width_px = engine.measurer.text_width_px(" ", *style)?;
-                if x_px.saturating_add(space_width_px) > max_width {
+                if !nowrap && x_px.saturating_add(space_width_px) > max_width {
                     continue;
                 }
                 let metrics = engine.measurer.font_metrics_px(*style);
@@ -897,7 +900,7 @@ fn measure_tokens<'doc>(
                     continue;
                 }
                 let word_width_px = engine.measurer.text_width_px(text, *style)?;
-                if x_px != 0 && x_px.saturating_add(word_width_px) > max_width {
+                if !nowrap && x_px != 0 && x_px.saturating_add(word_width_px) > max_width {
                     lines.push(std::mem::replace(
                         &mut line,
                         Line::new(explicit_line_height_px, base_metrics),
@@ -921,7 +924,7 @@ fn measure_tokens<'doc>(
                 x_px = x_px.saturating_add(size.width);
             }
             InlineToken::ElementBox(b) => {
-                if x_px != 0 && x_px.saturating_add(b.size.width) > max_width {
+                if !nowrap && x_px != 0 && x_px.saturating_add(b.size.width) > max_width {
                     lines.push(std::mem::replace(
                         &mut line,
                         Line::new(explicit_line_height_px, base_metrics),

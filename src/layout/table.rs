@@ -26,14 +26,7 @@ pub(super) fn layout_table<'doc>(
         .unwrap_or(0)
         .max(0);
 
-    let mut rows: Vec<&'doc Element> = Vec::new();
-    for child in &table.children {
-        if let Node::Element(el) = child {
-            if el.name == "tr" {
-                rows.push(el);
-            }
-        }
-    }
+    let rows = collect_table_rows(table);
 
     let grid = build_grid(rows);
     let mut col_widths = vec![0i32; grid.columns];
@@ -213,7 +206,7 @@ fn build_grid<'doc>(rows: Vec<&'doc Element>) -> Grid<'doc> {
             let Node::Element(el) = child else {
                 continue;
             };
-            if el.name != "td" {
+            if el.name != "td" && el.name != "th" {
                 continue;
             }
             let colspan = el
@@ -240,6 +233,34 @@ fn build_grid<'doc>(rows: Vec<&'doc Element>) -> Grid<'doc> {
         columns: columns.max(1),
         rows: grid_rows,
     }
+}
+
+fn collect_table_rows<'doc>(table: &'doc Element) -> Vec<&'doc Element> {
+    let mut rows = Vec::new();
+    for child in &table.children {
+        let Node::Element(el) = child else {
+            continue;
+        };
+        if el.name == "tr" {
+            rows.push(el);
+            continue;
+        }
+        if is_table_row_group(el.name.as_str()) {
+            for grandchild in &el.children {
+                let Node::Element(row) = grandchild else {
+                    continue;
+                };
+                if row.name == "tr" {
+                    rows.push(row);
+                }
+            }
+        }
+    }
+    rows
+}
+
+fn is_table_row_group(name: &str) -> bool {
+    matches!(name, "tbody" | "thead" | "tfoot")
 }
 
 fn sum_table_width(col_widths: &[i32], cellspacing: i32) -> i32 {

@@ -1,5 +1,6 @@
 mod flex;
 mod floats;
+mod grid;
 mod helpers;
 mod inline;
 mod replaced;
@@ -40,6 +41,7 @@ pub fn layout_document(
         viewport,
         resources,
         image_cache: HashMap::new(),
+        svg_cache: HashMap::new(),
         list: DisplayList::default(),
         link_regions: Vec::new(),
         positioned_containing_blocks: Vec::new(),
@@ -61,6 +63,7 @@ struct LayoutEngine<'a> {
     viewport: Viewport,
     resources: &'a dyn ResourceLoader,
     image_cache: HashMap<String, Rc<Argb32Image>>,
+    svg_cache: HashMap<String, Rc<str>>,
     list: DisplayList,
     link_regions: Vec<LinkHitRegion>,
     positioned_containing_blocks: Vec<Rect>,
@@ -115,6 +118,30 @@ impl LayoutEngine<'_> {
         let image = Rc::new(decoded);
         self.image_cache.insert(src.to_owned(), image.clone());
         Ok(Some(image))
+    }
+
+    fn load_svg(&mut self, src: &str) -> Result<Option<Rc<str>>, String> {
+        let src = src.trim();
+        if src.is_empty() {
+            return Ok(None);
+        }
+        if let Some(existing) = self.svg_cache.get(src) {
+            return Ok(Some(existing.clone()));
+        }
+
+        let Some(bytes) = self.resources.load_bytes(src)? else {
+            return Ok(None);
+        };
+        if !crate::image::looks_like_svg_document(bytes.as_ref()) {
+            return Ok(None);
+        }
+
+        let text = String::from_utf8_lossy(bytes.as_ref());
+        let trimmed = text.trim_start();
+
+        let svg_xml: Rc<str> = Rc::from(trimmed.to_owned());
+        self.svg_cache.insert(src.to_owned(), svg_xml.clone());
+        Ok(Some(svg_xml))
     }
 
     fn layout_document(&mut self, document: &Document) -> Result<i32, String> {
@@ -299,6 +326,9 @@ impl LayoutEngine<'_> {
                 }
                 Display::Flex => {
                     flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?
+                }
+                Display::Grid => {
+                    grid::layout_grid(self, element, style, ancestors, content_box, paint)?
                 }
                 _ => self.layout_flow_children(
                     &element.children,
@@ -523,6 +553,9 @@ impl LayoutEngine<'_> {
                 }
                 Display::Flex => {
                     flex::layout_flex_row(self, element, style, ancestors, content_box, paint)?
+                }
+                Display::Grid => {
+                    grid::layout_grid(self, element, style, ancestors, content_box, paint)?
                 }
                 _ => self.layout_flow_children(
                     &element.children,

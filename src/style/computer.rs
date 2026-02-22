@@ -200,7 +200,7 @@ fn default_display_for_element(element: &Element) -> Display {
     if element.name == "tr" {
         return Display::TableRow;
     }
-    if element.name == "td" {
+    if element.name == "td" || element.name == "th" {
         return Display::TableCell;
     }
 
@@ -300,6 +300,7 @@ fn build_rule_index(stylesheets: &[Arc<Stylesheet>]) -> (Vec<RuleRef>, SelectorI
 mod tests {
     use super::*;
     use crate::geom::Color;
+    use crate::style::WhiteSpace;
 
     #[test]
     fn selector_matches_descendant() {
@@ -317,5 +318,102 @@ mod tests {
 
         let style = computer.compute_style(b, &root_style, &ancestors);
         assert_eq!(style.color, Color::WHITE);
+    }
+
+    #[test]
+    fn parses_grid_display_mode() {
+        let doc = crate::html::parse_document("<div class='layout'></div>");
+        let computer = StyleComputer::from_css(".layout { display: grid; }");
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let style = computer.compute_style(div, &root_style, &[]);
+        assert_eq!(style.display, Display::Grid);
+    }
+
+    #[test]
+    fn parses_column_gap_into_flex_gap() {
+        let doc = crate::html::parse_document("<div class='layout'></div>");
+        let computer = StyleComputer::from_css(".layout { display: grid; column-gap: 12px; }");
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let style = computer.compute_style(div, &root_style, &[]);
+        assert_eq!(style.flex_gap_px, 12);
+    }
+
+    #[test]
+    fn parses_white_space_nowrap() {
+        let doc = crate::html::parse_document("<div class='single-line'></div>");
+        let computer = StyleComputer::from_css(".single-line { white-space: nowrap; }");
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let style = computer.compute_style(div, &root_style, &[]);
+        assert_eq!(style.white_space, WhiteSpace::NoWrap);
+    }
+
+    #[test]
+    fn selector_matches_not_pseudo_class() {
+        let doc = crate::html::parse_document("<div class='button'>ok</div>");
+        let computer = StyleComputer::from_css(
+            ".button:not(.disabled) { color: #ffffff; } .button.disabled { color: #000000; }",
+        );
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let style = computer.compute_style(div, &root_style, &[]);
+        assert_eq!(style.color, crate::geom::Color::WHITE);
+    }
+
+    #[test]
+    fn selector_matches_checked_pseudo_class() {
+        let doc = crate::html::parse_document("<input checked>");
+        let computer = StyleComputer::from_css("input:checked { color: #ffffff; }");
+        let root_style = ComputedStyle::root_defaults();
+        let input = doc
+            .find_first_element_by_name("input")
+            .expect("input element exists");
+        let style = computer.compute_style(input, &root_style, &[]);
+        assert_eq!(style.color, crate::geom::Color::WHITE);
+    }
+
+    #[test]
+    fn selector_matches_not_checked_pseudo_class() {
+        let doc = crate::html::parse_document("<input>");
+        let computer = StyleComputer::from_css("input:not(:checked) { color: #ffffff; }");
+        let root_style = ComputedStyle::root_defaults();
+        let input = doc
+            .find_first_element_by_name("input")
+            .expect("input element exists");
+        let style = computer.compute_style(input, &root_style, &[]);
+        assert_eq!(style.color, crate::geom::Color::WHITE);
+    }
+
+    #[test]
+    fn selector_matches_general_sibling_combinator() {
+        let doc =
+            crate::html::parse_document("<div><input><span></span><div class='menu'>x</div></div>");
+        let computer = StyleComputer::from_css("input ~ .menu { color: #ffffff; }");
+        let root_style = ComputedStyle::root_defaults();
+        let menu = doc
+            .find_first_element_by_name("div")
+            .and_then(|div| {
+                div.children.iter().find_map(|child| match child {
+                    crate::dom::Node::Element(el) if el.attributes.has_class("menu") => Some(el),
+                    _ => None,
+                })
+            })
+            .expect("menu element exists");
+        let ancestors = vec![
+            doc.find_first_element_by_name("div")
+                .expect("root div exists"),
+        ];
+        let style = computer.compute_style(menu, &root_style, &ancestors);
+        assert_eq!(style.color, crate::geom::Color::WHITE);
     }
 }
