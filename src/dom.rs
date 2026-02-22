@@ -13,6 +13,14 @@ impl Document {
     pub fn find_first_element_by_name(&self, name: &str) -> Option<&Element> {
         self.root.find_first_element_by_name(name)
     }
+
+    pub fn find_first_element_by_id(&self, id: &str) -> Option<&Element> {
+        self.root.find_first_element_by_id(id)
+    }
+
+    pub fn find_first_element_by_id_mut(&mut self, id: &str) -> Option<&mut Element> {
+        self.root.find_first_element_by_id_mut(id)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -29,7 +37,8 @@ impl Attributes {
             "id" => self.id = Some(value),
             "class" => {
                 self.classes.clear();
-                self.classes.extend(value.split_whitespace().map(str::to_owned));
+                self.classes
+                    .extend(value.split_whitespace().map(str::to_owned));
             }
             "style" => self.style = Some(value),
             _ => self.others.push((name, value)),
@@ -101,6 +110,45 @@ impl Element {
             }
         }
         None
+    }
+
+    pub fn find_first_element_by_id(&self, id: &str) -> Option<&Element> {
+        if self.attributes.id.as_deref() == Some(id) {
+            return Some(self);
+        }
+
+        for child in &self.children {
+            let Node::Element(el) = child else {
+                continue;
+            };
+            if let Some(found) = el.find_first_element_by_id(id) {
+                return Some(found);
+            }
+        }
+
+        None
+    }
+
+    pub fn find_first_element_by_id_mut(&mut self, id: &str) -> Option<&mut Element> {
+        if self.attributes.id.as_deref() == Some(id) {
+            return Some(self);
+        }
+
+        for child in &mut self.children {
+            let Node::Element(el) = child else {
+                continue;
+            };
+            if let Some(found) = el.find_first_element_by_id_mut(id) {
+                return Some(found);
+            }
+        }
+
+        None
+    }
+
+    pub fn set_text_content(&mut self, text: String) {
+        self.children.clear();
+        self.children.push(Node::Text(text));
     }
 }
 

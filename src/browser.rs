@@ -13,7 +13,7 @@ mod render_helpers;
 mod url_loader;
 
 use self::render_helpers::{clip_rect_to_viewport, fill_linear_gradient_rect_clipped};
-use self::url_loader::{stylesheet_sources_from_loader, StylesheetSlot, UrlLoader};
+use self::url_loader::{StylesheetSlot, UrlLoader, stylesheet_sources_from_loader};
 
 const STYLES_DEBOUNCE: Duration = Duration::from_millis(80);
 
@@ -92,7 +92,11 @@ impl BrowserApp {
         let base_url = Url::parse(url)?;
         if debug::enabled(debug::Target::Nav, debug::Level::Info) {
             let url = debug::shorten(base_url.as_str(), 72);
-            debug::log(debug::Target::Nav, debug::Level::Info, format_args!("open url={url}"));
+            debug::log(
+                debug::Target::Nav,
+                debug::Level::Info,
+                format_args!("open url={url}"),
+            );
         }
         let title = base_url.as_str().to_owned();
         let loading_document = crate::html::parse_document("<p>Loading...</p>");
@@ -140,11 +144,15 @@ impl BrowserApp {
                                     format_args!("html! url={url} err={err}"),
                                 );
                             }
-                            return Err(format!("Failed to fetch {}: {err}", loader.base_url.as_str()));
+                            return Err(format!(
+                                "Failed to fetch {}: {err}",
+                                loader.base_url.as_str()
+                            ));
                         }
                     };
                     let html_source = String::from_utf8_lossy(&bytes).into_owned();
-                    let document = crate::html::parse_document(&html_source);
+                    let mut document = crate::html::parse_document(&html_source);
+                    crate::js::execute_inline_scripts(&mut document);
 
                     loader.stylesheets = loader.fetch_stylesheets(&document)?;
                     loader.html_loaded = true;
@@ -201,7 +209,11 @@ impl BrowserApp {
                             debug::log(
                                 debug::Target::Css,
                                 debug::Level::Debug,
-                                format_args!("css+ id={} url={url} bytes={}", event.id.as_u64(), bytes.len()),
+                                format_args!(
+                                    "css+ id={} url={url} bytes={}",
+                                    event.id.as_u64(),
+                                    bytes.len()
+                                ),
                             );
                         }
                     }
@@ -221,7 +233,11 @@ impl BrowserApp {
             }
 
             ready_for_screenshot = loader.ready_for_screenshot();
-            self.url_loader = if ready_for_screenshot { None } else { Some(loader) };
+            self.url_loader = if ready_for_screenshot {
+                None
+            } else {
+                Some(loader)
+            };
         }
 
         if self.styles_dirty {
@@ -278,8 +294,13 @@ impl BrowserApp {
 
             let layout_start = debug::enabled(debug::Target::Layout, debug::Level::Debug)
                 .then(std::time::Instant::now);
-            let output =
-                crate::layout::layout_document(&self.document, &self.styles, painter, viewport, resources)?;
+            let output = crate::layout::layout_document(
+                &self.document,
+                &self.styles,
+                painter,
+                viewport,
+                resources,
+            )?;
             if let Some(start) = layout_start {
                 let ms: u64 = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                 debug::log(
@@ -433,12 +454,18 @@ impl BrowserApp {
                         let margin_px = text.style.font_size_px.max(0).saturating_mul(4).max(128);
                         let min_baseline_y_px = -margin_px;
                         let max_baseline_y_px = viewport_height_px.saturating_add(margin_px);
-                        if baseline_y_px >= min_baseline_y_px && baseline_y_px <= max_baseline_y_px {
+                        if baseline_y_px >= min_baseline_y_px && baseline_y_px <= max_baseline_y_px
+                        {
                             let metrics = painter.font_metrics_px(text.style);
                             let top = baseline_y_px.saturating_sub(metrics.ascent_px);
                             let bottom = baseline_y_px.saturating_add(metrics.descent_px);
                             if bottom > 0 && top < viewport_height_px {
-                                painter.draw_text(text.x_px, baseline_y_px, &text.text, text.style)?;
+                                painter.draw_text(
+                                    text.x_px,
+                                    baseline_y_px,
+                                    &text.text,
+                                    text.style,
+                                )?;
                             }
                         }
                     }
@@ -563,7 +590,6 @@ impl BrowserApp {
     }
 }
 
-
 impl BrowserApp {
     fn maybe_push_history(&mut self, previous: Option<PageLocation>) {
         let Some(previous) = previous else {
@@ -613,7 +639,11 @@ impl BrowserApp {
                 Err(_) => {
                     if debug::enabled(debug::Target::Nav, debug::Level::Debug) {
                         let href = debug::shorten(href, 64);
-                        debug::log(debug::Target::Nav, debug::Level::Debug, format_args!("href? {href}"));
+                        debug::log(
+                            debug::Target::Nav,
+                            debug::Level::Debug,
+                            format_args!("href? {href}"),
+                        );
                     }
                     return Ok(());
                 }
@@ -647,7 +677,11 @@ impl BrowserApp {
     fn begin_url_navigation(&mut self, url: Url) -> Result<(), String> {
         if debug::enabled(debug::Target::Nav, debug::Level::Info) {
             let url = debug::shorten(url.as_str(), 72);
-            debug::log(debug::Target::Nav, debug::Level::Info, format_args!("nav url={url}"));
+            debug::log(
+                debug::Target::Nav,
+                debug::Level::Info,
+                format_args!("nav url={url}"),
+            );
         }
         let loader = UrlLoader::new(url.clone())?;
         self.title = url.as_str().to_owned();
@@ -687,7 +721,8 @@ impl BrowserApp {
             .parent()
             .map(std::path::Path::to_owned)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let document = crate::html::parse_document(&source);
+        let mut document = crate::html::parse_document(&source);
+        crate::js::execute_inline_scripts(&mut document);
         let resource_base = ResourceBase::FileDir(base_dir.clone());
         let style_sources = collect_page_stylesheet_sources(&document, Some(&resource_base))?;
 
@@ -755,7 +790,8 @@ impl BrowserApp {
         html_source: &str,
         base: Option<ResourceBase>,
     ) -> Result<Self, String> {
-        let document = crate::html::parse_document(html_source);
+        let mut document = crate::html::parse_document(html_source);
+        crate::js::execute_inline_scripts(&mut document);
         Self::from_document_with_base(title, document, base)
     }
 
@@ -907,7 +943,12 @@ impl crate::app::App for BrowserApp {
         BrowserApp::go_back(self)
     }
 
-    fn mouse_down(&mut self, x_px: i32, y_px: i32, viewport: Viewport) -> Result<TickResult, String> {
+    fn mouse_down(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        viewport: Viewport,
+    ) -> Result<TickResult, String> {
         BrowserApp::mouse_down(self, x_px, y_px, viewport)
     }
 
