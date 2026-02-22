@@ -81,7 +81,10 @@ fn run_browser_screenshot(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     #[cfg(target_os = "linux")]
-    cmd.env("OAB_LINUX_BACKEND", "x11");
+    cmd.env(
+        "OAB_LINUX_BACKEND",
+        std::env::var("OAB_TEST_LINUX_BACKEND").unwrap_or_else(|_| "x11".to_owned()),
+    );
 
     let mut child = cmd
         .spawn()
