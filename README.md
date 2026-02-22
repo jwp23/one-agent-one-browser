@@ -76,10 +76,23 @@ cargo run -- --headless test-file.html --screenshot out.png
 ```sh
 cargo test
 
-# If you don't have an X server (Linux CI/headless), use Xvfb:
-xvfb-run -a cargo test
+# Linux/X11 (works in headless CI via Xvfb)
+OAB_TEST_LINUX_BACKEND=x11 xvfb-run -a cargo test
+
+# Linux/Wayland (example with headless Weston)
+export XDG_RUNTIME_DIR="$(mktemp -d)"
+chmod 700 "$XDG_RUNTIME_DIR"
+weston --backend=headless-backend.so --socket=wayland-0 --idle-time=0 >/tmp/weston.log 2>&1 &
+WESTON_PID=$!
+trap 'kill "$WESTON_PID" || true; rm -rf "$XDG_RUNTIME_DIR"' EXIT
+export WAYLAND_DISPLAY=wayland-0
+export XDG_SESSION_TYPE=wayland
+OAB_TEST_LINUX_BACKEND=wayland cargo test
 ```
 
 Render regression tests compare screenshots to per-platform baseline PNGs in `tests/cases/`.
 
 - `OAB_RENDER_TEST_MIN_SIMILARITY` (env): minimum required similarity ratio (default: `0.95`; set `1.0` for exact match).
+- `OAB_TEST_LINUX_BACKEND` (env, Linux tests): `x11` (default) or `wayland`.
+
+GitHub Actions runs Linux tests on both backends (`x11` and `wayland`) using `ubuntu-latest`; no special runner image is required.
