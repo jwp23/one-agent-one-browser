@@ -3,6 +3,7 @@ pub mod browser;
 pub mod cli;
 pub mod css;
 pub mod css_media;
+pub mod css_supports;
 pub mod debug;
 pub mod dom;
 pub mod geom;

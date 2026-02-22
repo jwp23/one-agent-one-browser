@@ -46,6 +46,7 @@ pub struct Declaration {
 #[derive(Clone, Debug)]
 pub struct Selector {
     pub parts: Vec<CompoundSelector>,
+    pub combinators: Vec<Combinator>,
 }
 
 impl Selector {
@@ -54,6 +55,14 @@ impl Selector {
             acc.add(part.specificity())
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Combinator {
+    Descendant,
+    Child,
+    AdjacentSibling,
+    GeneralSibling,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,7 +82,7 @@ impl Specificity {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompoundSelector {
     pub tag: Option<String>,
     pub id: Option<String>,
@@ -85,36 +94,47 @@ pub struct CompoundSelector {
 
 impl CompoundSelector {
     pub fn specificity(&self) -> Specificity {
-        let mut specificity = Specificity::default();
-        if self.id.is_some() {
-            specificity.ids = 1;
-        }
-        specificity.classes = self
+        let mut ids = if self.id.is_some() { 1usize } else { 0usize };
+        let mut classes = self
             .classes
             .len()
             .saturating_add(self.attributes.len())
-            .saturating_add(self.pseudo_classes.len())
-            .min(u16::MAX as usize) as u16;
-        if self.tag.is_some() {
-            specificity.tags = 1;
+            .saturating_add(self.pseudo_classes.len());
+        let mut tags = if self.tag.is_some() { 1usize } else { 0usize };
+
+        for pseudo in &self.pseudo_classes {
+            if let PseudoClass::Not(selector) = pseudo {
+                classes = classes.saturating_sub(1);
+                let spec = selector.specificity();
+                ids = ids.saturating_add(spec.ids as usize);
+                classes = classes.saturating_add(spec.classes as usize);
+                tags = tags.saturating_add(spec.tags as usize);
+            }
         }
-        specificity
+
+        Specificity {
+            ids: ids.min(u16::MAX as usize) as u16,
+            classes: classes.min(u16::MAX as usize) as u16,
+            tags: tags.min(u16::MAX as usize) as u16,
+        }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttributeSelector {
     pub name: String,
     pub value: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PseudoClass {
     Link,
     Visited,
     Hover,
     Root,
+    Checked,
     NthChild(NthChildPattern),
+    Not(Box<CompoundSelector>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,6 +179,8 @@ impl<'a> Parser<'a> {
             if self.peek_char() == Some('@') {
                 if self.peek_media_at_rule() {
                     self.parse_media_at_rule(&mut rules, media.as_deref());
+                } else if self.peek_supports_at_rule() {
+                    self.parse_supports_at_rule(&mut rules, media.as_deref());
                 } else {
                     self.skip_at_rule();
                 }
@@ -240,6 +262,55 @@ impl<'a> Parser<'a> {
             order: self.order,
         };
         out.extend(nested.parse_rules(Some(combined)));
+        self.order = nested.order;
+    }
+
+    fn peek_supports_at_rule(&self) -> bool {
+        let rest = self.input[self.cursor..].as_bytes();
+        if rest.is_empty() || rest[0] != b'@' {
+            return false;
+        }
+        let keyword = b"supports";
+        let mut idx = 1usize;
+        for &expected in keyword {
+            let Some(&byte) = rest.get(idx) else {
+                return false;
+            };
+            if byte.to_ascii_lowercase() != expected {
+                return false;
+            }
+            idx += 1;
+        }
+        let after = rest.get(idx).copied().unwrap_or(b' ');
+        !(after.is_ascii_alphanumeric() || after == b'-' || after == b'_')
+    }
+
+    fn parse_supports_at_rule(&mut self, out: &mut Vec<Rule>, media: Option<&str>) {
+        if self.peek_char() != Some('@') {
+            return;
+        }
+        self.cursor += 1;
+        let _ = self.consume_until_word_end(); // "supports"
+
+        let Some(supports_text) = self.consume_until('{') else {
+            return;
+        };
+        if self.peek_char() != Some('{') {
+            return;
+        }
+        self.cursor += 1;
+
+        let inner_css = self.consume_block_contents();
+        if !crate::css_supports::supports_condition_matches(supports_text) {
+            return;
+        }
+
+        let mut nested = Parser {
+            input: inner_css,
+            cursor: 0,
+            order: self.order,
+        };
+        out.extend(nested.parse_rules(media.map(str::to_owned)));
         self.order = nested.order;
     }
 
@@ -405,18 +476,115 @@ fn parse_selector_group(input: &str) -> Vec<Selector> {
 }
 
 fn parse_selector(selector: &str) -> Selector {
-    let selector = if selector.contains('>') {
-        std::borrow::Cow::Owned(selector.replace('>', " > "))
-    } else {
-        std::borrow::Cow::Borrowed(selector)
+    let tokens = tokenize_selector(selector);
+    let mut parts = Vec::new();
+    let mut combinators = Vec::new();
+    let mut pending_combinator: Option<Combinator> = None;
+
+    for token in tokens {
+        match token {
+            SelectorToken::Combinator(combinator) => {
+                pending_combinator = Some(combinator);
+            }
+            SelectorToken::Compound(compound) => {
+                if !parts.is_empty() {
+                    combinators.push(pending_combinator.unwrap_or(Combinator::Descendant));
+                }
+                parts.push(parse_compound_selector(&compound));
+                pending_combinator = None;
+            }
+        }
+    }
+
+    Selector { parts, combinators }
+}
+
+#[derive(Clone, Debug)]
+enum SelectorToken {
+    Compound(String),
+    Combinator(Combinator),
+}
+
+fn tokenize_selector(selector: &str) -> Vec<SelectorToken> {
+    let mut tokens = Vec::new();
+    let mut buf = String::new();
+    let mut depth_brackets = 0usize;
+    let mut depth_parens = 0usize;
+    let mut quote: Option<char> = None;
+    let mut saw_whitespace_after_compound = false;
+
+    let flush_compound = |tokens: &mut Vec<SelectorToken>, buf: &mut String, saw_ws: &mut bool| {
+        let compound = buf.trim();
+        if compound.is_empty() {
+            buf.clear();
+            return;
+        }
+        if *saw_ws && matches!(tokens.last(), Some(SelectorToken::Compound(_))) {
+            tokens.push(SelectorToken::Combinator(Combinator::Descendant));
+        }
+        tokens.push(SelectorToken::Compound(compound.to_owned()));
+        buf.clear();
+        *saw_ws = false;
     };
-    let parts = selector
-        .split_whitespace()
-        .map(str::trim)
-        .filter(|p| !p.is_empty() && *p != ">")
-        .map(parse_compound_selector)
-        .collect();
-    Selector { parts }
+
+    for ch in selector.chars() {
+        if let Some(active_quote) = quote {
+            buf.push(ch);
+            if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                buf.push(ch);
+            }
+            '[' => {
+                depth_brackets = depth_brackets.saturating_add(1);
+                buf.push(ch);
+            }
+            ']' => {
+                depth_brackets = depth_brackets.saturating_sub(1);
+                buf.push(ch);
+            }
+            '(' => {
+                depth_parens = depth_parens.saturating_add(1);
+                buf.push(ch);
+            }
+            ')' => {
+                depth_parens = depth_parens.saturating_sub(1);
+                buf.push(ch);
+            }
+            '>' | '+' | '~' if depth_brackets == 0 && depth_parens == 0 => {
+                flush_compound(&mut tokens, &mut buf, &mut saw_whitespace_after_compound);
+                let combinator = match ch {
+                    '>' => Combinator::Child,
+                    '+' => Combinator::AdjacentSibling,
+                    '~' => Combinator::GeneralSibling,
+                    _ => Combinator::Descendant,
+                };
+                tokens.push(SelectorToken::Combinator(combinator));
+                saw_whitespace_after_compound = false;
+            }
+            ch if ch.is_whitespace() && depth_brackets == 0 && depth_parens == 0 => {
+                flush_compound(&mut tokens, &mut buf, &mut saw_whitespace_after_compound);
+                saw_whitespace_after_compound = true;
+            }
+            _ => {
+                if saw_whitespace_after_compound
+                    && matches!(tokens.last(), Some(SelectorToken::Combinator(_)))
+                {
+                    saw_whitespace_after_compound = false;
+                }
+                buf.push(ch);
+            }
+        }
+    }
+
+    flush_compound(&mut tokens, &mut buf, &mut saw_whitespace_after_compound);
+    tokens
 }
 
 fn parse_compound_selector(mut input: &str) -> CompoundSelector {
@@ -477,6 +645,15 @@ fn parse_compound_selector(mut input: &str) -> CompoundSelector {
                         };
                         selector.pseudo_classes.push(PseudoClass::NthChild(pattern));
                         input = remaining;
+                    } else if name == "not" {
+                        let Some(not_selector) = parse_not_selector(arg_text) else {
+                            selector.unsupported = true;
+                            break;
+                        };
+                        selector
+                            .pseudo_classes
+                            .push(PseudoClass::Not(Box::new(not_selector)));
+                        input = remaining;
                     } else {
                         selector.unsupported = true;
                         break;
@@ -503,6 +680,25 @@ fn parse_compound_selector(mut input: &str) -> CompoundSelector {
     }
 
     selector
+}
+
+fn parse_not_selector(input: &str) -> Option<CompoundSelector> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    if input
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '>' | '+' | '~' | ','))
+    {
+        return None;
+    }
+
+    let selector = parse_compound_selector(input);
+    if selector.unsupported {
+        return None;
+    }
+    Some(selector)
 }
 
 fn split_simple_name(input: &str) -> (&str, &str) {
@@ -585,6 +781,7 @@ fn parse_pseudo_class(name: &str) -> Option<PseudoClass> {
         "visited" => Some(PseudoClass::Visited),
         "hover" => Some(PseudoClass::Hover),
         "root" => Some(PseudoClass::Root),
+        "checked" => Some(PseudoClass::Checked),
         _ => None,
     }
 }
@@ -809,6 +1006,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_supported_supports_rules() {
+        let sheet = Stylesheet::parse(
+            "@supports (display:grid) { .a { display: grid; } }\n\
+             .b { display: block; }",
+        );
+        assert_eq!(sheet.rules.len(), 2);
+        assert_eq!(sheet.rules[0].selectors[0].parts[0].classes, vec!["a"]);
+        assert_eq!(sheet.rules[1].selectors[0].parts[0].classes, vec!["b"]);
+    }
+
+    #[test]
+    fn skips_unsupported_supports_rules() {
+        let sheet = Stylesheet::parse(
+            "@supports (mask-image:none) { .a { display: block; } }\n\
+             .b { display: block; }",
+        );
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].selectors[0].parts[0].classes, vec!["b"]);
+    }
+
+    #[test]
     fn ignores_at_rules_with_slashes_in_blocks() {
         let sheet = Stylesheet::parse(
             "@font-face { src: url('/static/font.woff2') format('woff2'); }\n\
@@ -826,6 +1044,7 @@ mod tests {
         let sheet = Stylesheet::parse(".title a:link { color: #000000; }");
         let selector = &sheet.rules[0].selectors[0];
         assert_eq!(selector.parts.len(), 2);
+        assert_eq!(selector.combinators, vec![Combinator::Descendant]);
         assert_eq!(selector.parts[0].classes, vec!["title".to_owned()]);
         assert_eq!(selector.parts[1].tag.as_deref(), Some("a"));
         assert_eq!(selector.parts[1].pseudo_classes, vec![PseudoClass::Link]);
@@ -877,5 +1096,63 @@ mod tests {
         let selector = &sheet.rules[0].selectors[0];
         assert_eq!(selector.parts.len(), 1);
         assert_eq!(selector.parts[0].pseudo_classes, vec![PseudoClass::Root]);
+    }
+
+    #[test]
+    fn parses_not_pseudo_class() {
+        let sheet = Stylesheet::parse(".button:not(.disabled) { color: #000000; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let selector = &sheet.rules[0].selectors[0];
+        assert_eq!(selector.parts.len(), 1);
+        assert_eq!(selector.parts[0].classes, vec!["button"]);
+        assert_eq!(selector.parts[0].pseudo_classes.len(), 1);
+        match &selector.parts[0].pseudo_classes[0] {
+            PseudoClass::Not(inner) => {
+                assert_eq!(inner.classes, vec!["disabled"]);
+            }
+            _ => panic!("expected :not selector"),
+        }
+    }
+
+    #[test]
+    fn parses_checked_pseudo_class() {
+        let sheet = Stylesheet::parse("input:checked { color: #000000; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let selector = &sheet.rules[0].selectors[0];
+        assert_eq!(selector.parts.len(), 1);
+        assert_eq!(selector.parts[0].tag.as_deref(), Some("input"));
+        assert_eq!(selector.parts[0].pseudo_classes, vec![PseudoClass::Checked]);
+    }
+
+    #[test]
+    fn parses_not_checked_pseudo_class() {
+        let sheet = Stylesheet::parse("input:not(:checked) { color: #000000; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let selector = &sheet.rules[0].selectors[0];
+        assert_eq!(selector.parts.len(), 1);
+        assert_eq!(selector.parts[0].tag.as_deref(), Some("input"));
+        assert_eq!(selector.parts[0].pseudo_classes.len(), 1);
+        match &selector.parts[0].pseudo_classes[0] {
+            PseudoClass::Not(inner) => {
+                assert_eq!(inner.pseudo_classes, vec![PseudoClass::Checked]);
+            }
+            _ => panic!("expected :not(:checked) selector"),
+        }
+    }
+
+    #[test]
+    fn parses_child_and_sibling_combinators() {
+        let sheet = Stylesheet::parse("div > span + a ~ b { color: #000000; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let selector = &sheet.rules[0].selectors[0];
+        assert_eq!(selector.parts.len(), 4);
+        assert_eq!(
+            selector.combinators,
+            vec![
+                Combinator::Child,
+                Combinator::AdjacentSibling,
+                Combinator::GeneralSibling
+            ]
+        );
     }
 }

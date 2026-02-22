@@ -1,5 +1,5 @@
-use crate::css::{PseudoClass, Rule, Selector, Specificity};
-use crate::dom::Element;
+use crate::css::{Combinator, PseudoClass, Rule, Selector, Specificity};
+use crate::dom::{Element, Node};
 
 pub(super) fn match_rule(
     rule: &Rule,
@@ -20,6 +20,9 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
     if selector.parts.is_empty() {
         return false;
     }
+    if selector.combinators.len() != selector.parts.len().saturating_sub(1) {
+        return false;
+    }
 
     if !compound_matches(
         &selector.parts[selector.parts.len() - 1],
@@ -29,26 +32,87 @@ fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Elemen
         return false;
     }
 
-    let mut ancestor_index = ancestors.len();
-    for part in selector.parts[..selector.parts.len() - 1].iter().rev() {
-        let mut matched = false;
-        while ancestor_index > 0 {
-            ancestor_index -= 1;
-            if compound_matches(
-                part,
-                ancestors[ancestor_index],
-                &ancestors[..ancestor_index],
-            ) {
-                matched = true;
-                break;
-            }
-        }
-        if !matched {
+    let mut current = element;
+    let mut current_ancestors = ancestors;
+
+    for index in (0..selector.parts.len() - 1).rev() {
+        let part = &selector.parts[index];
+        let combinator = selector.combinators[index];
+        let Some((next, next_ancestors)) =
+            match_combinator(part, combinator, current, current_ancestors)
+        else {
             return false;
-        }
+        };
+        current = next;
+        current_ancestors = next_ancestors;
     }
 
     true
+}
+
+fn match_combinator<'a>(
+    selector: &crate::css::CompoundSelector,
+    combinator: Combinator,
+    current: &'a Element,
+    ancestors: &'a [&'a Element],
+) -> Option<(&'a Element, &'a [&'a Element])> {
+    match combinator {
+        Combinator::Descendant => {
+            let mut ancestor_index = ancestors.len();
+            while ancestor_index > 0 {
+                ancestor_index -= 1;
+                let candidate = ancestors[ancestor_index];
+                if compound_matches(selector, candidate, &ancestors[..ancestor_index]) {
+                    return Some((candidate, &ancestors[..ancestor_index]));
+                }
+            }
+            None
+        }
+        Combinator::Child => {
+            let parent = ancestors.last().copied()?;
+            let parent_ancestors = &ancestors[..ancestors.len().saturating_sub(1)];
+            if compound_matches(selector, parent, parent_ancestors) {
+                Some((parent, parent_ancestors))
+            } else {
+                None
+            }
+        }
+        Combinator::GeneralSibling => {
+            let parent = ancestors.last().copied()?;
+            let mut last_match: Option<&Element> = None;
+            for child in &parent.children {
+                let Node::Element(sibling) = child else {
+                    continue;
+                };
+                if std::ptr::eq(sibling, current) {
+                    break;
+                }
+                if compound_matches(selector, sibling, ancestors) {
+                    last_match = Some(sibling);
+                }
+            }
+            last_match.map(|sibling| (sibling, ancestors))
+        }
+        Combinator::AdjacentSibling => {
+            let parent = ancestors.last().copied()?;
+            let mut previous: Option<&Element> = None;
+            for child in &parent.children {
+                let Node::Element(sibling) = child else {
+                    continue;
+                };
+                if std::ptr::eq(sibling, current) {
+                    break;
+                }
+                previous = Some(sibling);
+            }
+            let sibling = previous?;
+            if compound_matches(selector, sibling, ancestors) {
+                Some((sibling, ancestors))
+            } else {
+                None
+            }
+        }
+    }
 }
 
 fn compound_matches(
@@ -90,7 +154,7 @@ fn compound_matches(
     }
 
     for pseudo in &selector.pseudo_classes {
-        if !pseudo_matches(*pseudo, element, ancestors) {
+        if !pseudo_matches(pseudo, element, ancestors) {
             return false;
         }
     }
@@ -98,13 +162,15 @@ fn compound_matches(
     true
 }
 
-fn pseudo_matches(pseudo: PseudoClass, element: &Element, ancestors: &[&Element]) -> bool {
+fn pseudo_matches(pseudo: &PseudoClass, element: &Element, ancestors: &[&Element]) -> bool {
     match pseudo {
         PseudoClass::Link => element.name == "a" && element.attributes.get("href").is_some(),
         PseudoClass::Visited => false,
         PseudoClass::Hover => false,
         PseudoClass::Root => element.name == "html",
-        PseudoClass::NthChild(pattern) => nth_child_matches(element, ancestors, pattern),
+        PseudoClass::Checked => element.attributes.get("checked").is_some(),
+        PseudoClass::NthChild(pattern) => nth_child_matches(element, ancestors, *pattern),
+        PseudoClass::Not(inner) => !compound_matches(inner, element, ancestors),
     }
 }
 
