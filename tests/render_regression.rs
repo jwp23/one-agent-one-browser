@@ -61,6 +61,8 @@ fn render_regression_suite() {
 
     let mut cmd = Command::new(&harness);
     cmd.args(&cases);
+    #[cfg(target_os = "linux")]
+    cmd.env("OAB_LINUX_BACKEND", "x11");
 
     let output = cmd
         .output()
