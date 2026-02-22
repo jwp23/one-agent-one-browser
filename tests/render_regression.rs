@@ -55,6 +55,10 @@ fn render_regression_suite() {
         ]);
     }
 
+    if cfg!(target_os = "linux") {
+        cases.push(cases_dir.join("js-getelementbyid-textcontent.html"));
+    }
+
     let mut cmd = Command::new(&harness);
     cmd.args(&cases);
 

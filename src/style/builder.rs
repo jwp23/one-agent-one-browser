@@ -1,13 +1,13 @@
+use super::CustomProperties;
+use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px};
+use super::{
+    AutoEdges, BorderStyle, ComputedStyle, CssEdges, CssLength, Display, FlexAlignItems,
+    FlexDirection, FlexJustifyContent, FlexWrap, Float, FontFamily, LineHeight, LinearGradient,
+    Position, TextAlign, TextTransform, Visibility, custom_properties, declarations, length,
+};
 use crate::css::{Rule, Specificity};
 use crate::dom::Element;
 use crate::geom::{Color, Edges};
-use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px};
-use super::{
-    custom_properties, declarations, length, AutoEdges, BorderStyle, ComputedStyle, CssEdges, CssLength,
-    Display, Float, FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, FontFamily,
-    LineHeight, LinearGradient, Position, TextAlign, TextTransform, Visibility,
-};
-use super::CustomProperties;
 use std::collections::HashMap;
 
 pub(super) struct MatchedRule<'a> {
@@ -339,6 +339,49 @@ impl StyleBuilder {
             self.apply_bold(true, priority);
         }
 
+        match element.name.as_str() {
+            "h1" => {
+                self.apply_font_size_px(32, priority);
+                self.apply_bold(true, priority);
+                self.apply_margin(
+                    Edges {
+                        top: 21,
+                        right: 0,
+                        bottom: 21,
+                        left: 0,
+                    },
+                    priority,
+                );
+            }
+            "h2" => {
+                self.apply_font_size_px(24, priority);
+                self.apply_bold(true, priority);
+                self.apply_margin(
+                    Edges {
+                        top: 20,
+                        right: 0,
+                        bottom: 20,
+                        left: 0,
+                    },
+                    priority,
+                );
+            }
+            "h3" => {
+                self.apply_font_size_px(19, priority);
+                self.apply_bold(true, priority);
+                self.apply_margin(
+                    Edges {
+                        top: 19,
+                        right: 0,
+                        bottom: 19,
+                        left: 0,
+                    },
+                    priority,
+                );
+            }
+            _ => {}
+        }
+
         if element.name == "center" {
             self.apply_text_align(TextAlign::Center, priority);
         }
@@ -439,8 +482,10 @@ impl StyleBuilder {
     }
 
     pub(super) fn finalize_custom_properties(&mut self) {
-        self.custom_properties =
-            CustomProperties::merge(&self.base.custom_properties, &self.custom_properties_declared);
+        self.custom_properties = CustomProperties::merge(
+            &self.base.custom_properties,
+            &self.custom_properties_declared,
+        );
     }
 
     pub(super) fn apply_matched_styles(&mut self, matched: &[MatchedRule<'_>]) {
@@ -525,7 +570,11 @@ impl StyleBuilder {
         apply_cascade(&mut self.color, value, priority);
     }
 
-    pub(super) fn apply_background_color(&mut self, value: Option<Color>, priority: CascadePriority) {
+    pub(super) fn apply_background_color(
+        &mut self,
+        value: Option<Color>,
+        priority: CascadePriority,
+    ) {
         apply_cascade(&mut self.background_color, value, priority);
     }
 
@@ -625,7 +674,11 @@ impl StyleBuilder {
         apply_cascade(&mut self.flex_justify_content, value, priority);
     }
 
-    pub(super) fn apply_flex_align_items(&mut self, value: FlexAlignItems, priority: CascadePriority) {
+    pub(super) fn apply_flex_align_items(
+        &mut self,
+        value: FlexAlignItems,
+        priority: CascadePriority,
+    ) {
         apply_cascade(&mut self.flex_align_items, value, priority);
     }
 
