@@ -18,7 +18,7 @@ Platform:
 
 This project uses system libraries/frameworks via FFI.
 
-- Linux: Wayland client/protocol tooling (`wayland-scanner` + `xdg-shell.xml`) and/or X11/Xft, plus Cairo, librsvg, libcurl, libpng, libjpeg-turbo, libwebp.
+- Linux: Wayland client (xdg-shell protocol metadata is embedded in Rust) and/or X11/Xft, plus Cairo, librsvg, libcurl, libpng, libjpeg-turbo, libwebp.
 - Windows 10/11: WinHTTP, WIC (PNG/JPEG/WebP), Direct2D/DirectWrite. If WebP decode fails, install Microsoft "WebP Image Extensions".
 - macOS: system frameworks (CoreGraphics/CoreText/ImageIO/QuickLook).
 

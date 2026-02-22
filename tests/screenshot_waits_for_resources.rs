@@ -71,15 +71,19 @@ fn run_browser_screenshot(
     timeout: Duration,
 ) {
     let screenshot_arg = format!("--screenshot={}", screenshot_path.display());
-    let mut child = Command::new(browser_exe)
-        .env("OAB_SCALE", "1")
+    let mut cmd = Command::new(browser_exe);
+    cmd.env("OAB_SCALE", "1")
         .arg("--headless")
         .arg(format!("--width={width_px}"))
         .arg(format!("--height={height_px}"))
         .arg(url)
         .arg(screenshot_arg)
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    #[cfg(target_os = "linux")]
+    cmd.env("OAB_LINUX_BACKEND", "x11");
+
+    let mut child = cmd
         .spawn()
         .unwrap_or_else(|err| panic!("Failed to start {}: {err}", browser_exe.display()));
 
