@@ -54,7 +54,10 @@ pub(super) fn layout_table<'doc>(
             let min_width =
                 measure_cell_min_width(engine, cell.element, &cell_style, ancestors, cellpadding)?;
 
-            if let Some(width) = cell_style.width_px.map(|width| width.resolve_px(content_box.width)) {
+            if let Some(width) = cell_style
+                .width_px
+                .map(|width| width.resolve_px(content_box.width))
+            {
                 col_widths[cell.col_index] = col_widths[cell.col_index].max(width);
                 fixed[cell.col_index] = true;
             } else {
@@ -110,10 +113,14 @@ pub(super) fn layout_table<'doc>(
             let opacity = cell_style.opacity;
             let needs_opacity_group = cell_paint && opacity < 255;
             if needs_opacity_group {
-                engine.list.commands.push(DisplayCommand::PushOpacity(opacity));
+                engine
+                    .list
+                    .commands
+                    .push(DisplayCommand::PushOpacity(opacity));
             }
 
-            let span_width = cell_span_width(&col_widths, cell.col_index, cell.colspan, cellspacing);
+            let span_width =
+                cell_span_width(&col_widths, cell.col_index, cell.colspan, cellspacing);
 
             let cell_padding = Edges {
                 top: cellpadding,
@@ -146,8 +153,10 @@ pub(super) fn layout_table<'doc>(
                 cell_paint,
             )?;
             ancestors.pop();
-            let mut cell_height =
-                padding.top.saturating_add(content_height).saturating_add(padding.bottom);
+            let mut cell_height = padding
+                .top
+                .saturating_add(content_height)
+                .saturating_add(padding.bottom);
             if let Some(min_height) = cell_style.height_px {
                 cell_height = cell_height.max(min_height);
             }
@@ -157,7 +166,10 @@ pub(super) fn layout_table<'doc>(
             }
 
             if needs_opacity_group {
-                engine.list.commands.push(DisplayCommand::PopOpacity(opacity));
+                engine
+                    .list
+                    .commands
+                    .push(DisplayCommand::PopOpacity(opacity));
             }
 
             row_height = row_height.max(cell_height);
@@ -218,7 +230,10 @@ fn build_grid<'doc>(rows: Vec<&'doc Element>) -> Grid<'doc> {
             col_index = col_index.saturating_add(colspan);
         }
         columns = columns.max(col_index);
-        grid_rows.push(GridRow { element: row, cells });
+        grid_rows.push(GridRow {
+            element: row,
+            cells,
+        });
     }
 
     Grid {

@@ -235,13 +235,20 @@ impl SelectorIndex {
                 continue;
             };
             match selector_bucket_key(last) {
-                SelectorBucketKey::Id(id) => self.by_id.entry(id.to_owned()).or_default().push(rule_id),
+                SelectorBucketKey::Id(id) => {
+                    self.by_id.entry(id.to_owned()).or_default().push(rule_id)
+                }
                 SelectorBucketKey::Class(classes) => {
                     for class in classes {
-                        self.by_class.entry(class.to_owned()).or_default().push(rule_id);
+                        self.by_class
+                            .entry(class.to_owned())
+                            .or_default()
+                            .push(rule_id);
                     }
                 }
-                SelectorBucketKey::Tag(tag) => self.by_tag.entry(tag.to_owned()).or_default().push(rule_id),
+                SelectorBucketKey::Tag(tag) => {
+                    self.by_tag.entry(tag.to_owned()).or_default().push(rule_id)
+                }
                 SelectorBucketKey::Universal => self.universal.push(rule_id),
             }
         }

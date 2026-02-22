@@ -1,7 +1,7 @@
+use super::WindowOptions;
 use super::painter::WinPainter;
 use super::scale::ScaleFactor;
 use super::scaled::ScaledPainter;
-use super::WindowOptions;
 use crate::app::App;
 use crate::render::Viewport;
 use std::time::{Duration, Instant};
@@ -96,7 +96,9 @@ pub(super) fn run<A: App>(options: WindowOptions, app: &mut A) -> Result<(), Str
 
         if capture_now {
             let Some(path) = screenshot_path.take() else {
-                return Err("Internal error: capture_now set but screenshot path missing".to_owned());
+                return Err(
+                    "Internal error: capture_now set but screenshot path missing".to_owned(),
+                );
             };
             let rgb = painter.capture_back_buffer_rgb()?;
             crate::png::write_rgb_png(&path, &rgb)?;
@@ -113,7 +115,10 @@ pub(super) fn run<A: App>(options: WindowOptions, app: &mut A) -> Result<(), Str
                 has_rendered_ready_state = true;
                 if capture_after_render {
                     let Some(path) = screenshot_path.take() else {
-                        return Err("Internal error: capture_after_render set but screenshot path missing".to_owned());
+                        return Err(
+                            "Internal error: capture_after_render set but screenshot path missing"
+                                .to_owned(),
+                        );
                     };
                     let rgb = painter.capture_back_buffer_rgb()?;
                     crate::png::write_rgb_png(&path, &rgb)?;
@@ -129,4 +134,3 @@ pub(super) fn run<A: App>(options: WindowOptions, app: &mut A) -> Result<(), Str
 
     Ok(())
 }
-

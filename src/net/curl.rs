@@ -59,8 +59,7 @@ fn ensure_global_init() -> Result<(), String> {
 pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, String> {
     ensure_global_init()?;
 
-    let c_url =
-        CString::new(url).map_err(|_| "URL contains an unexpected NUL byte".to_owned())?;
+    let c_url = CString::new(url).map_err(|_| "URL contains an unexpected NUL byte".to_owned())?;
 
     let handle = unsafe { curl_easy_init() };
     if handle.is_null() {
@@ -75,8 +74,8 @@ pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, String> {
 
     let user_agent = CString::new("one-agent-one-browser/0.1")
         .map_err(|_| "User-Agent contains an unexpected NUL byte".to_owned())?;
-    let accept_encoding =
-        CString::new("").map_err(|_| "Accept-Encoding contains an unexpected NUL byte".to_owned())?;
+    let accept_encoding = CString::new("")
+        .map_err(|_| "Accept-Encoding contains an unexpected NUL byte".to_owned())?;
 
     let _cleanup = CurlHandle(handle);
     setopt_ptr(handle, CURLOPT_URL, c_url.as_ptr())?;
@@ -155,11 +154,7 @@ fn setopt_long(handle: *mut CURL, option: CURLoption, value: c_long) -> Result<(
     }
 }
 
-fn setopt_ptr<T>(
-    handle: *mut CURL,
-    option: CURLoption,
-    value: *const T,
-) -> Result<(), String> {
+fn setopt_ptr<T>(handle: *mut CURL, option: CURLoption, value: *const T) -> Result<(), String> {
     let code = unsafe { curl_easy_setopt(handle, option, value) };
     if code == CURLE_OK {
         Ok(())
@@ -168,11 +163,7 @@ fn setopt_ptr<T>(
     }
 }
 
-fn setopt_write_fn(
-    handle: *mut CURL,
-    option: CURLoption,
-    value: WriteFn,
-) -> Result<(), String> {
+fn setopt_write_fn(handle: *mut CURL, option: CURLoption, value: WriteFn) -> Result<(), String> {
     let code = unsafe { curl_easy_setopt(handle, option, value) };
     if code == CURLE_OK {
         Ok(())

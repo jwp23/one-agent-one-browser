@@ -109,10 +109,8 @@ impl Painter for NoopPainter {
 
 #[test]
 fn clicks_anchor_navigates_to_file() {
-    let root = std::env::temp_dir().join(format!(
-        "one-agent-one-browser-link-click-{}",
-        unique_id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("one-agent-one-browser-link-click-{}", unique_id()));
     std::fs::create_dir_all(&root).unwrap();
 
     let page1 = root.join("page1.html");
@@ -141,10 +139,8 @@ fn clicks_anchor_navigates_to_file() {
 
 #[test]
 fn mouse_back_navigates_to_previous_page() {
-    let root = std::env::temp_dir().join(format!(
-        "one-agent-one-browser-mouse-back-{}",
-        unique_id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("one-agent-one-browser-mouse-back-{}", unique_id()));
     std::fs::create_dir_all(&root).unwrap();
 
     let page1 = root.join("page1.html");

@@ -14,9 +14,7 @@ use crate::render::{
     DrawRoundedRectBorder, LinkHitRegion, TextMeasurer, TextStyle, Viewport,
 };
 use crate::resources::ResourceLoader;
-use crate::style::{
-    ComputedStyle, Display, Float, Position, StyleComputer, Visibility,
-};
+use crate::style::{ComputedStyle, Display, Float, Position, StyleComputer, Visibility};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -732,10 +730,8 @@ impl LayoutEngine<'_> {
 
                         let establishes_bfc = establishes_block_formatting_context(&style);
                         if establishes_bfc {
-                            let required_outer_width = required_outer_width_for_float_clearance(
-                                &style,
-                                content_box.width,
-                            );
+                            let required_outer_width =
+                                required_outer_width_for_float_clearance(&style, content_box.width);
                             let (flow_box, new_y) = floats::flow_area_for_width(
                                 &floats,
                                 content_box,
@@ -761,7 +757,8 @@ impl LayoutEngine<'_> {
                             )?;
                             cursor_y = child_cursor_y;
                         } else {
-                            let flow_box = floats::flow_area_at_exact_y(&floats, content_box, cursor_y);
+                            let flow_box =
+                                floats::flow_area_at_exact_y(&floats, content_box, cursor_y);
                             let mut child_cursor_y = cursor_y;
                             self.layout_block_box(
                                 el,
@@ -785,7 +782,6 @@ impl LayoutEngine<'_> {
                     }
                 }
             }
-
         }
 
         if !inline_nodes.is_empty() {
@@ -809,7 +805,10 @@ impl LayoutEngine<'_> {
             self.link_regions.extend(deferred.links);
         }
 
-        Ok(cursor_y.max(max_float_bottom).saturating_sub(content_box.y).max(0))
+        Ok(cursor_y
+            .max(max_float_bottom)
+            .saturating_sub(content_box.y)
+            .max(0))
     }
 
     fn resolve_used_width(

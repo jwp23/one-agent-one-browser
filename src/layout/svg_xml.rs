@@ -158,4 +158,3 @@ fn svg_adjust_attr_name(name: &str) -> std::borrow::Cow<'_, str> {
         _ => std::borrow::Cow::Borrowed(name),
     }
 }
-

@@ -75,8 +75,12 @@ impl TextTransform {
     pub fn apply<'a>(self, input: &'a str) -> Cow<'a, str> {
         match self {
             TextTransform::None => Cow::Borrowed(input),
-            TextTransform::Uppercase => Cow::Owned(input.chars().flat_map(|ch| ch.to_uppercase()).collect()),
-            TextTransform::Lowercase => Cow::Owned(input.chars().flat_map(|ch| ch.to_lowercase()).collect()),
+            TextTransform::Uppercase => {
+                Cow::Owned(input.chars().flat_map(|ch| ch.to_uppercase()).collect())
+            }
+            TextTransform::Lowercase => {
+                Cow::Owned(input.chars().flat_map(|ch| ch.to_lowercase()).collect())
+            }
         }
     }
 }

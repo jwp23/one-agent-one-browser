@@ -9,8 +9,8 @@ use crate::geom::Color;
 use crate::image::{Argb32Image, RgbImage};
 use crate::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
 use crate::style::FontFamily;
-use crate::win::stream;
 use crate::win::com::ComPtr;
+use crate::win::stream;
 use core::ffi::c_void;
 use std::collections::HashMap;
 
@@ -51,12 +51,11 @@ impl WinPainter {
 
         let d3d = d3d11::create_d3d_devices()?;
         let d2d_factory = d2d::create_factory1()?;
-        let d2d_device = d2d::factory_create_device(
-            &d2d_factory,
-            d3d.dxgi_device.as_ptr().cast::<c_void>(),
-        )
-        .map_err(|err| err.message())?;
-        let d2d_ctx = d2d::device_create_device_context(&d2d_device).map_err(|err| err.message())?;
+        let d2d_device =
+            d2d::factory_create_device(&d2d_factory, d3d.dxgi_device.as_ptr().cast::<c_void>())
+                .map_err(|err| err.message())?;
+        let d2d_ctx =
+            d2d::device_create_device_context(&d2d_device).map_err(|err| err.message())?;
 
         d2d::ctx_set_unit_mode(&d2d_ctx, d2d::D2D1_UNIT_MODE_PIXELS);
         d2d::ctx_set_text_antialias_mode(&d2d_ctx, d2d::D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
@@ -250,7 +249,13 @@ impl WinPainter {
         Ok(w.clamp(0, i64::from(i32::MAX)) as i32)
     }
 
-    fn draw_text_run(&mut self, x_px: i32, baseline_y_px: i32, text: &str, style: TextStyle) -> Result<(), String> {
+    fn draw_text_run(
+        &mut self,
+        x_px: i32,
+        baseline_y_px: i32,
+        text: &str,
+        style: TextStyle,
+    ) -> Result<(), String> {
         if text.is_empty() || style.color.a == 0 {
             return Ok(());
         }
@@ -321,7 +326,8 @@ impl TextMeasurer for WinPainter {
             )
             .map_err(|err| err.message())?;
 
-            let lines = dwrite::text_layout_get_line_metrics(&layout).map_err(|err| err.message())?;
+            let lines =
+                dwrite::text_layout_get_line_metrics(&layout).map_err(|err| err.message())?;
             let Some(line0) = lines.first() else {
                 return Ok(FontMetricsPx {
                     ascent_px: style.font_size_px.max(1),
@@ -517,7 +523,13 @@ impl Painter for WinPainter {
         Ok(())
     }
 
-    fn draw_text(&mut self, x_px: i32, y_px: i32, text: &str, style: TextStyle) -> Result<(), String> {
+    fn draw_text(
+        &mut self,
+        x_px: i32,
+        y_px: i32,
+        text: &str,
+        style: TextStyle,
+    ) -> Result<(), String> {
         if text.is_empty() || style.color.a == 0 {
             return Ok(());
         }
@@ -627,10 +639,7 @@ impl Painter for WinPainter {
                 debug::log(
                     debug::Target::Render,
                     debug::Level::Warn,
-                    format_args!(
-                        "SVG render failed: {}",
-                        debug::shorten(&err.message(), 120)
-                    ),
+                    format_args!("SVG render failed: {}", debug::shorten(&err.message(), 120)),
                 );
                 return Ok(());
             }
@@ -680,8 +689,10 @@ impl Painter for WinPainter {
             }
         }
 
-        d2d::bitmap_copy_from_bitmap(&self.d2d_readback, &self.d2d_target).map_err(|err| err.message())?;
-        let mapped = d2d::bitmap_map(&self.d2d_readback, d2d::D2D1_MAP_OPTIONS_READ).map_err(|err| err.message())?;
+        d2d::bitmap_copy_from_bitmap(&self.d2d_readback, &self.d2d_target)
+            .map_err(|err| err.message())?;
+        let mapped = d2d::bitmap_map(&self.d2d_readback, d2d::D2D1_MAP_OPTIONS_READ)
+            .map_err(|err| err.message())?;
         if mapped.bits.is_null() {
             let _ = d2d::bitmap_unmap(&self.d2d_readback);
             return Err("ID2D1Bitmap1::Map returned null bits".to_owned());
@@ -740,7 +751,14 @@ fn create_back_buffers(
     ctx: &ComPtr<d2d::ID2D1DeviceContext5>,
     width_px: i32,
     height_px: i32,
-) -> Result<(ComPtr<d2d::ID2D1Bitmap1>, ComPtr<d2d::ID2D1Bitmap1>, Vec<u8>), String> {
+) -> Result<
+    (
+        ComPtr<d2d::ID2D1Bitmap1>,
+        ComPtr<d2d::ID2D1Bitmap1>,
+        Vec<u8>,
+    ),
+    String,
+> {
     let width: u32 = width_px
         .try_into()
         .map_err(|_| "Viewport width out of range".to_owned())?;
@@ -749,7 +767,8 @@ fn create_back_buffers(
         .map_err(|_| "Viewport height out of range".to_owned())?;
     let size = d2d::D2D1_SIZE_U { width, height };
 
-    let target = d2d::ctx_create_bitmap(ctx, size, None, d2d::D2D1_BITMAP_OPTIONS_TARGET).map_err(|err| err.message())?;
+    let target = d2d::ctx_create_bitmap(ctx, size, None, d2d::D2D1_BITMAP_OPTIONS_TARGET)
+        .map_err(|err| err.message())?;
     let readback = d2d::ctx_create_bitmap(
         ctx,
         size,

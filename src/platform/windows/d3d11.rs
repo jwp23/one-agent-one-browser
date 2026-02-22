@@ -1,5 +1,5 @@
 use crate::win::com;
-use crate::win::com::{ComPtr, GUID, HResultError, HRESULT};
+use crate::win::com::{ComPtr, GUID, HRESULT, HResultError};
 use core::ffi::c_void;
 
 type HMODULE = *mut c_void;
@@ -47,8 +47,12 @@ pub(super) fn create_d3d_devices() -> Result<D3DDevices, String> {
 
     let (d3d_device, _d3d_context) = match try_create_device(D3D_DRIVER_TYPE_HARDWARE) {
         Ok(dev) => dev,
-        Err(_) => try_create_device(D3D_DRIVER_TYPE_WARP)
-            .map_err(|err| format!("D3D11CreateDevice failed (hardware+WARP): {}", err.message()))?,
+        Err(_) => try_create_device(D3D_DRIVER_TYPE_WARP).map_err(|err| {
+            format!(
+                "D3D11CreateDevice failed (hardware+WARP): {}",
+                err.message()
+            )
+        })?,
     };
 
     let dxgi_device: ComPtr<IDXGIDevice> = com::query_interface(
@@ -61,7 +65,9 @@ pub(super) fn create_d3d_devices() -> Result<D3DDevices, String> {
     Ok(D3DDevices { dxgi_device })
 }
 
-fn try_create_device(driver_type: UINT) -> Result<(ComPtr<ID3D11Device>, ComPtr<ID3D11DeviceContext>), HResultError> {
+fn try_create_device(
+    driver_type: UINT,
+) -> Result<(ComPtr<ID3D11Device>, ComPtr<ID3D11DeviceContext>), HResultError> {
     let mut device: *mut ID3D11Device = std::ptr::null_mut();
     let mut context: *mut ID3D11DeviceContext = std::ptr::null_mut();
     let mut feature_level: UINT = 0;

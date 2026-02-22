@@ -123,7 +123,8 @@ impl CustomProperties {
             let resolved = self
                 .resolve_vars_with_stack(raw, stack, depth + 1)
                 .or_else(|| {
-                    fallback.and_then(|fallback| self.resolve_vars_with_stack(fallback, stack, depth))
+                    fallback
+                        .and_then(|fallback| self.resolve_vars_with_stack(fallback, stack, depth))
                 });
             stack.pop();
             return resolved;
@@ -175,7 +176,10 @@ fn is_var_at(bytes: &[u8], idx: usize) -> bool {
     let Some(tail) = bytes.get(idx..idx + 4) else {
         return false;
     };
-    (tail[0] | 0x20) == b'v' && (tail[1] | 0x20) == b'a' && (tail[2] | 0x20) == b'r' && tail[3] == b'('
+    (tail[0] | 0x20) == b'v'
+        && (tail[1] | 0x20) == b'a'
+        && (tail[2] | 0x20) == b'r'
+        && tail[3] == b'('
 }
 
 fn split_balanced_parens(input: &str) -> Option<(&str, usize)> {
@@ -217,4 +221,3 @@ fn split_var_arguments(args: &str) -> (&str, Option<&str>) {
 
     (args, None)
 }
-

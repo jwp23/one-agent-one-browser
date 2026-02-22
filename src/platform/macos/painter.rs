@@ -167,7 +167,12 @@ unsafe extern "C" {
     fn CGContextAddPath(c: CGContextRef, path: CGPathRef);
     fn CGContextDrawPath(c: CGContextRef, mode: c_int);
 
-    fn CGPathCreateWithRoundedRect(rect: CGRect, corner_width: CGFloat, corner_height: CGFloat, transform: *const CGAffineTransform) -> CGPathRef;
+    fn CGPathCreateWithRoundedRect(
+        rect: CGRect,
+        corner_width: CGFloat,
+        corner_height: CGFloat,
+        transform: *const CGAffineTransform,
+    ) -> CGPathRef;
     fn CGPathRelease(path: CGPathRef);
 
     fn CGContextSetAlpha(c: CGContextRef, alpha: CGFloat);
@@ -278,7 +283,10 @@ impl MacPainter {
         let x = x_px as CGFloat;
         let width = width_px.max(0) as CGFloat;
         let height = height_px.max(0) as CGFloat;
-        let y = (self.height_px.saturating_sub(y_px).saturating_sub(height_px)) as CGFloat;
+        let y = (self
+            .height_px
+            .saturating_sub(y_px)
+            .saturating_sub(height_px)) as CGFloat;
         CGRect {
             origin: CGPoint { x, y },
             size: CGSize { width, height },
@@ -338,7 +346,13 @@ impl MacPainter {
         font
     }
 
-    fn draw_text_run(&self, x_px: i32, y_baseline_px: i32, text: &str, style: TextStyle) -> Result<(), String> {
+    fn draw_text_run(
+        &self,
+        x_px: i32,
+        y_baseline_px: i32,
+        text: &str,
+        style: TextStyle,
+    ) -> Result<(), String> {
         let font = self.font_for(style);
         if font.is_null() {
             return Ok(());
@@ -346,11 +360,12 @@ impl MacPainter {
 
         let cf_text = cf_string(text).ok_or_else(|| "Text contains invalid UTF-8".to_owned())?;
 
-        let keys: [*const c_void; 2] = [
-            unsafe { kCTFontAttributeName as *const c_void },
-            unsafe { kCTForegroundColorFromContextAttributeName as *const c_void },
-        ];
-        let values: [*const c_void; 2] = [font as *const c_void, unsafe { kCFBooleanTrue as *const c_void }];
+        let keys: [*const c_void; 2] = [unsafe { kCTFontAttributeName as *const c_void }, unsafe {
+            kCTForegroundColorFromContextAttributeName as *const c_void
+        }];
+        let values: [*const c_void; 2] = [font as *const c_void, unsafe {
+            kCFBooleanTrue as *const c_void
+        }];
         let attrs = unsafe {
             CFDictionaryCreate(
                 std::ptr::null(),
@@ -436,7 +451,8 @@ impl MacPainter {
         let mut ascent: CGFloat = 0.0;
         let mut descent: CGFloat = 0.0;
         let mut leading: CGFloat = 0.0;
-        let width = unsafe { CTLineGetTypographicBounds(line, &mut ascent, &mut descent, &mut leading) };
+        let width =
+            unsafe { CTLineGetTypographicBounds(line, &mut ascent, &mut descent, &mut leading) };
         unsafe { CFRelease(line as CFTypeRef) };
 
         if !width.is_finite() || width <= 0.0 {
@@ -520,11 +536,7 @@ fn cf_string(input: &str) -> Option<CFStringRef> {
             0,
         )
     };
-    if cf.is_null() {
-        None
-    } else {
-        Some(cf)
-    }
+    if cf.is_null() { None } else { Some(cf) }
 }
 
 impl TextMeasurer for MacPainter {
@@ -737,13 +749,7 @@ impl Painter for MacPainter {
 
         if style.underline {
             let width_px = self.text_width_px(text, style)?;
-            self.fill_rect(
-                x_px,
-                y_px.saturating_add(1),
-                width_px,
-                1,
-                style.color,
-            )?;
+            self.fill_rect(x_px, y_px.saturating_add(1), width_px, 1, style.color)?;
         }
 
         Ok(())

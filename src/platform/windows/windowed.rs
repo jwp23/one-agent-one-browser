@@ -1,8 +1,8 @@
+use super::WindowOptions;
 use super::painter::WinPainter;
 use super::scale::ScaleFactor;
 use super::scaled::ScaledPainter;
 use super::wstr;
-use super::WindowOptions;
 use crate::app::App;
 use crate::render::Viewport;
 use core::ffi::c_void;
@@ -59,7 +59,8 @@ const WS_OVERLAPPEDWINDOW: DWORD = 0x00cf_0000;
 const WS_VISIBLE: DWORD = 0x1000_0000;
 
 type DpiAwarenessContext = *mut c_void;
-const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: DpiAwarenessContext = (-4isize) as DpiAwarenessContext;
+const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: DpiAwarenessContext =
+    (-4isize) as DpiAwarenessContext;
 
 #[repr(C)]
 struct POINT {
@@ -222,7 +223,13 @@ pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
     let state_ptr: *mut WindowState = &mut *state;
 
     let class_name = wstr::utf16_nul("OneAgentOneBrowserWindow");
-    let hwnd = create_window(title, initial_width_device, initial_height_device, &class_name, state_ptr)?;
+    let hwnd = create_window(
+        title,
+        initial_width_device,
+        initial_height_device,
+        &class_name,
+        state_ptr,
+    )?;
 
     let mut scale = ScaleFactor::detect(false, Some(hwnd));
 
@@ -366,7 +373,8 @@ pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
         let can_complete = !should_wait_for_resources || timed_out_waiting_for_resources;
 
         let wants_screenshot = screenshot_path.is_some();
-        let should_complete_screenshot = wants_screenshot && ready_for_screenshot && has_rendered_ready_state;
+        let should_complete_screenshot =
+            wants_screenshot && ready_for_screenshot && has_rendered_ready_state;
 
         let mut capture_now = false;
         let mut capture_after_render = false;
@@ -379,7 +387,11 @@ pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
             resource_wait_started = None;
         }
 
-        if ready_for_screenshot && has_rendered_ready_state && can_complete && should_complete_screenshot {
+        if ready_for_screenshot
+            && has_rendered_ready_state
+            && can_complete
+            && should_complete_screenshot
+        {
             if needs_redraw {
                 capture_after_render = true;
             } else {
@@ -389,7 +401,9 @@ pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
 
         if capture_now {
             let Some(path) = screenshot_path.take() else {
-                return Err("Internal error: capture_now set but screenshot path missing".to_owned());
+                return Err(
+                    "Internal error: capture_now set but screenshot path missing".to_owned(),
+                );
             };
             let rgb = painter.capture_back_buffer_rgb()?;
             crate::png::write_rgb_png(&path, &rgb)?;
@@ -520,7 +534,12 @@ fn client_viewport(hwnd: HWND) -> Result<Viewport, String> {
     })
 }
 
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: UINT,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
     unsafe {
         if msg == WM_NCCREATE {
             let cs = l_param as *const CREATESTRUCTW;

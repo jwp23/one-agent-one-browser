@@ -4,13 +4,12 @@ use one_agent_one_browser::browser::BrowserApp;
 use one_agent_one_browser::geom::Color;
 use one_agent_one_browser::image::Argb32Image;
 use one_agent_one_browser::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
-use support::http::{HttpTestServer, Route};
 use std::time::{Duration, Instant};
+use support::http::{HttpTestServer, Route};
 
 #[test]
 fn unsupported_images_are_negative_cached() {
-    let html =
-        br#"<!doctype html><img src="/unsupported.gif" width="20" height="20">"#.to_vec();
+    let html = br#"<!doctype html><img src="/unsupported.gif" width="20" height="20">"#.to_vec();
     let gif_bytes = b"GIF89anot-a-real-gif".to_vec();
 
     let server = HttpTestServer::new(vec![

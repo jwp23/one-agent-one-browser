@@ -2,7 +2,7 @@ use crate::dom::Element;
 use crate::geom::Rect;
 use crate::style::{ComputedStyle, Float};
 
-use super::{flex, inline, LayoutEngine};
+use super::{LayoutEngine, flex, inline};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FloatPlacement {
@@ -27,7 +27,11 @@ pub(super) fn flow_area_at_y(
         let clearance = clearance_at_y(floats, containing, y);
         let available_width = containing
             .width
-            .saturating_sub(clearance.left_offset_px.saturating_add(clearance.right_offset_px))
+            .saturating_sub(
+                clearance
+                    .left_offset_px
+                    .saturating_add(clearance.right_offset_px),
+            )
             .max(0);
 
         if available_width > 0 || clearance.next_y.is_none() {
@@ -56,7 +60,11 @@ pub(super) fn flow_area_at_exact_y(floats: &[FloatPlacement], containing: Rect, 
     let clearance = clearance_at_y(floats, containing, y);
     let available_width = containing
         .width
-        .saturating_sub(clearance.left_offset_px.saturating_add(clearance.right_offset_px))
+        .saturating_sub(
+            clearance
+                .left_offset_px
+                .saturating_add(clearance.right_offset_px),
+        )
         .max(0);
 
     Rect {
@@ -80,7 +88,11 @@ pub(super) fn flow_area_for_width(
         let clearance = clearance_at_y(floats, containing, y);
         let available_width = containing
             .width
-            .saturating_sub(clearance.left_offset_px.saturating_add(clearance.right_offset_px))
+            .saturating_sub(
+                clearance
+                    .left_offset_px
+                    .saturating_add(clearance.right_offset_px),
+            )
             .max(0);
         if available_width >= required_outer_width {
             return (
@@ -117,7 +129,9 @@ pub(super) fn layout_float<'doc>(
 ) -> Result<FloatPlacement, String> {
     let side = style.float;
     if !matches!(side, Float::Left | Float::Right) {
-        return Err(format!("layout_float called with non-floating style: {side:?}"));
+        return Err(format!(
+            "layout_float called with non-floating style: {side:?}"
+        ));
     }
 
     let margin_left_px = if style.margin_auto.left {
@@ -136,10 +150,15 @@ pub(super) fn layout_float<'doc>(
         let clearance = clearance_at_y(floats, containing, y_outer);
         let available_width = containing
             .width
-            .saturating_sub(clearance.left_offset_px.saturating_add(clearance.right_offset_px))
+            .saturating_sub(
+                clearance
+                    .left_offset_px
+                    .saturating_add(clearance.right_offset_px),
+            )
             .max(0);
 
-        let border_width = measure_float_border_width(engine, element, style, ancestors, available_width)?;
+        let border_width =
+            measure_float_border_width(engine, element, style, ancestors, available_width)?;
         let outer_width = margin_left_px
             .saturating_add(border_width)
             .saturating_add(margin_right_px);
@@ -183,14 +202,17 @@ pub(super) fn layout_float<'doc>(
             });
         }
 
-        let Some(next_y) = clearance.next_y else { break };
+        let Some(next_y) = clearance.next_y else {
+            break;
+        };
         if next_y <= y_outer {
             break;
         }
         y_outer = next_y;
     }
 
-    let border_width = measure_float_border_width(engine, element, style, ancestors, containing.width.max(0))?;
+    let border_width =
+        measure_float_border_width(engine, element, style, ancestors, containing.width.max(0))?;
     let outer_width = margin_left_px
         .saturating_add(border_width)
         .saturating_add(margin_right_px);

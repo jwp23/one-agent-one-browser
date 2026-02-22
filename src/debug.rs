@@ -94,8 +94,10 @@ fn config() -> &'static Config {
             Err(std::env::VarError::NotPresent) => ALL_TARGETS,
             Err(_) => 0,
         };
-        let max_level =
-            std::env::var("OAB_LOG_LEVEL").ok().and_then(|s| Level::parse(&s)).unwrap_or(Level::Info);
+        let max_level = std::env::var("OAB_LOG_LEVEL")
+            .ok()
+            .and_then(|s| Level::parse(&s))
+            .unwrap_or(Level::Info);
         Config {
             targets,
             max_level,
@@ -214,7 +216,11 @@ pub fn shorten<'a>(value: &'a str, max_chars: usize) -> std::borrow::Cow<'a, str
 }
 
 fn sanitize_in_place(value: &mut String) {
-    if !value.as_bytes().iter().any(|&b| b == b'\n' || b == b'\r' || b == b'\t') {
+    if !value
+        .as_bytes()
+        .iter()
+        .any(|&b| b == b'\n' || b == b'\r' || b == b'\t')
+    {
         return;
     }
 

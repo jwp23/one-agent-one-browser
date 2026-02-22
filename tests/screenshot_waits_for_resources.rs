@@ -1,9 +1,9 @@
 mod support;
 
-use support::http::{HttpTestServer, Route};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use support::http::{HttpTestServer, Route};
 
 #[test]
 fn screenshot_waits_for_async_images() {
@@ -167,7 +167,10 @@ fn read_rgb_png(path: &Path) -> Result<PngRgbImage, String> {
         .get(0..8)
         .ok_or_else(|| format!("{} is too small to be a PNG", path.display()))?;
     if signature != SIGNATURE {
-        return Err(format!("{} is not a PNG (invalid signature)", path.display()));
+        return Err(format!(
+            "{} is not a PNG (invalid signature)",
+            path.display()
+        ));
     }
 
     let mut offset = SIGNATURE.len();

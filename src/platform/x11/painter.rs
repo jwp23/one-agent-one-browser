@@ -5,7 +5,10 @@ use core::ffi::{c_int, c_uint, c_ulong};
 
 use super::cairo::CairoCanvas;
 use super::xft::XftRenderer;
-use super::xlib::{self, Colormap, Display, Drawable, GC, Pixmap, Visual, Window, ALL_PLANES, IMAGE_FORMAT_Z_PIXMAP};
+use super::xlib::{
+    self, ALL_PLANES, Colormap, Display, Drawable, GC, IMAGE_FORMAT_Z_PIXMAP, Pixmap, Visual,
+    Window,
+};
 
 pub struct X11Painter {
     pub display: *mut Display,
@@ -146,7 +149,11 @@ impl X11Painter {
         let ximage = xlib::XImageHandle(ximage);
 
         let (masks, get_pixel) = unsafe {
-            let masks = ((*ximage.0).red_mask, (*ximage.0).green_mask, (*ximage.0).blue_mask);
+            let masks = (
+                (*ximage.0).red_mask,
+                (*ximage.0).green_mask,
+                (*ximage.0).blue_mask,
+            );
             let masks = if masks.0 == 0 && masks.1 == 0 && masks.2 == 0 {
                 self.visual_masks
             } else {
@@ -269,7 +276,15 @@ impl Painter for X11Painter {
 
         self.set_foreground(color);
         unsafe {
-            xlib::XFillRectangle(self.display, self.back_buffer, self.gc, x_px, y_px, width, height);
+            xlib::XFillRectangle(
+                self.display,
+                self.back_buffer,
+                self.gc,
+                x_px,
+                y_px,
+                width,
+                height,
+            );
         }
         Ok(())
     }
@@ -325,13 +340,7 @@ impl Painter for X11Painter {
 
         if style.underline {
             let width_px = self.text_width_px(text, style)?;
-            self.fill_rect(
-                x_px,
-                y_px.saturating_add(1),
-                width_px,
-                1,
-                style.color,
-            )?;
+            self.fill_rect(x_px, y_px.saturating_add(1), width_px, 1, style.color)?;
         }
         Ok(())
     }
@@ -421,7 +430,11 @@ fn extract_channel(pixel: u64, mask: u64) -> u8 {
     }
 
     let value = (pixel & mask) >> shift;
-    let max = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let max = if bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    };
     if max == 0 {
         return 0;
     }
@@ -445,7 +458,11 @@ fn pack_channel_u8(value: u8, mask: c_ulong) -> c_ulong {
         return 0;
     }
 
-    let max = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let max = if bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    };
     if max == 0 {
         return 0;
     }

@@ -1,8 +1,6 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
-use crate::render::{
-    DisplayCommand, DrawText, FontMetricsPx, LinkHitRegion, TextStyle,
-};
+use crate::render::{DisplayCommand, DrawText, FontMetricsPx, LinkHitRegion, TextStyle};
 use crate::style::{ComputedStyle, Display, TextAlign, Visibility};
 use std::rc::Rc;
 
@@ -228,10 +226,7 @@ fn collect_tokens<'doc>(
                             max_width,
                         )?;
                     }
-                    push_inline_spacing(
-                        out,
-                        style.margin.right.saturating_add(padding.right),
-                    );
+                    push_inline_spacing(out, style.margin.right.saturating_add(padding.right));
                 }
                 _ => {
                     cursor.flush_pending_space(out);
@@ -356,9 +351,13 @@ pub(super) fn measure_replaced_element_outer_size(
     let horizontal_inset = inset.left.saturating_add(inset.right);
     let vertical_inset = inset.top.saturating_add(inset.bottom);
 
-    let mut content_width = style
-        .width_px
-        .map(|width| width.resolve_px(max_width).max(0).saturating_sub(horizontal_inset).max(0));
+    let mut content_width = style.width_px.map(|width| {
+        width
+            .resolve_px(max_width)
+            .max(0)
+            .saturating_sub(horizontal_inset)
+            .max(0)
+    });
     let mut content_height = style
         .height_px
         .map(|height| height.max(0).saturating_sub(vertical_inset).max(0));
@@ -490,9 +489,18 @@ fn intrinsic_input_content_dimensions(
             let chars = label.chars().count() as i32;
             let approximate_char_width_px = ((font_size_px as f32) * 0.6).round() as i32;
             let letter_spacing_px = style.letter_spacing_px.max(0);
-            let spacing_px = letter_spacing_px.saturating_mul(chars.saturating_sub(1)).max(0);
-            let text_px = approximate_char_width_px.saturating_mul(chars).saturating_add(spacing_px);
-            Some(text_px.saturating_add(font_size_px / 2).max(font_size_px * 2).max(1))
+            let spacing_px = letter_spacing_px
+                .saturating_mul(chars.saturating_sub(1))
+                .max(0);
+            let text_px = approximate_char_width_px
+                .saturating_mul(chars)
+                .saturating_add(spacing_px);
+            Some(
+                text_px
+                    .saturating_add(font_size_px / 2)
+                    .max(font_size_px * 2)
+                    .max(1),
+            )
         }
         _ => Some(font_size_px.saturating_mul(10).max(80).max(1)),
     };
@@ -775,17 +783,18 @@ fn layout_tokens<'doc>(
                     }
 
                     if element_paint {
-                        let _ =
-                            engine.push_background(border_box, &element_box.style, border_box.height);
+                        let _ = engine.push_background(
+                            border_box,
+                            &element_box.style,
+                            border_box.height,
+                        );
 
                         engine.paint_border(border_box, &element_box.style);
 
                         if is_replaced_element(element_box.element) {
                             let padding = element_box.style.padding.resolve_px(content_box.width);
-                            let content_box = border_box.inset(super::add_edges(
-                                element_box.style.border_width,
-                                padding,
-                            ));
+                            let content_box = border_box
+                                .inset(super::add_edges(element_box.style.border_width, padding));
                             engine.paint_replaced_content(
                                 element_box.element,
                                 &element_box.style,
@@ -807,10 +816,8 @@ fn layout_tokens<'doc>(
 
                     if !is_replaced_element(element_box.element) {
                         let padding = element_box.style.padding.resolve_px(content_box.width);
-                        let content_box = border_box.inset(super::add_edges(
-                            element_box.style.border_width,
-                            padding,
-                        ));
+                        let content_box = border_box
+                            .inset(super::add_edges(element_box.style.border_width, padding));
                         ancestors.push(element_box.element);
                         engine.layout_flow_children(
                             &element_box.element.children,

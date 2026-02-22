@@ -77,7 +77,12 @@ unsafe extern "system" {
     ) -> INT;
 }
 
-pub(super) fn blit_bgra(hwnd: HWND, src_width_px: i32, src_height_px: i32, bgra: &[u8]) -> Result<(), String> {
+pub(super) fn blit_bgra(
+    hwnd: HWND,
+    src_width_px: i32,
+    src_height_px: i32,
+    bgra: &[u8],
+) -> Result<(), String> {
     if hwnd.is_null() {
         return Err("blit_bgra called with null HWND".to_owned());
     }
@@ -179,4 +184,3 @@ pub(super) fn blit_bgra(hwnd: HWND, src_width_px: i32, src_height_px: i32, bgra:
 
     Ok(())
 }
-

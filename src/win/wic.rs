@@ -1,8 +1,8 @@
 use super::com::{self, ComPtr, GUID, HRESULT, HResultError};
+use super::stream::IStream;
 use crate::debug;
 use crate::image::Argb32Image;
 use core::ffi::c_void;
-use super::stream::IStream;
 
 type UINT = u32;
 
@@ -99,7 +99,8 @@ struct IWICBitmapSourceVtbl {
     get_pixel_format: *const c_void,
     get_resolution: *const c_void,
     copy_palette: *const c_void,
-    copy_pixels: unsafe extern "system" fn(*mut c_void, *const c_void, UINT, UINT, *mut u8) -> HRESULT,
+    copy_pixels:
+        unsafe extern "system" fn(*mut c_void, *const c_void, UINT, UINT, *mut u8) -> HRESULT,
 }
 
 #[repr(C)]
@@ -200,19 +201,21 @@ fn decode_wic_argb32(bytes: &[u8]) -> Result<Argb32Image, HResultError> {
         });
     }
 
-    let stride = width
-        .checked_mul(4)
-        .ok_or(HResultError {
-            hr: -1,
-            context: "Decoded image row stride overflow",
-        })? as usize;
+    let stride = width.checked_mul(4).ok_or(HResultError {
+        hr: -1,
+        context: "Decoded image row stride overflow",
+    })? as usize;
     let len = stride.checked_mul(height as usize).ok_or(HResultError {
         hr: -1,
         context: "Decoded image buffer size overflow",
     })?;
     let mut bgra = vec![0u8; len];
 
-    bitmap_source_copy_pixels(converter.as_ptr().cast::<IWICBitmapSource>(), stride as u32, &mut bgra)?;
+    bitmap_source_copy_pixels(
+        converter.as_ptr().cast::<IWICBitmapSource>(),
+        stride as u32,
+        &mut bgra,
+    )?;
 
     Argb32Image::new(width, height, bgra).map_err(|_| HResultError {
         hr: -1,
@@ -249,7 +252,11 @@ fn decoder_get_frame(
 ) -> Result<ComPtr<IWICBitmapFrameDecode>, HResultError> {
     let mut frame: *mut IWICBitmapFrameDecode = std::ptr::null_mut();
     let hr = unsafe {
-        ((*(*decoder.as_ptr()).vtbl).get_frame)(decoder.as_ptr().cast::<c_void>(), index, &mut frame)
+        ((*(*decoder.as_ptr()).vtbl).get_frame)(
+            decoder.as_ptr().cast::<c_void>(),
+            index,
+            &mut frame,
+        )
     };
     if !com::succeeded(hr) {
         return Err(HResultError {

@@ -81,7 +81,11 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
     })
 }
 
-pub(crate) fn co_create_instance<T>(clsid: &GUID, iid: &GUID, context: &'static str) -> Result<ComPtr<T>, HResultError> {
+pub(crate) fn co_create_instance<T>(
+    clsid: &GUID,
+    iid: &GUID,
+    context: &'static str,
+) -> Result<ComPtr<T>, HResultError> {
     let mut out: *mut c_void = std::ptr::null_mut();
     let hr = unsafe {
         CoCreateInstance(
@@ -104,10 +108,7 @@ pub(crate) fn query_interface<T>(
     context: &'static str,
 ) -> Result<ComPtr<T>, HResultError> {
     if object.is_null() {
-        return Err(HResultError {
-            hr: -1,
-            context,
-        });
+        return Err(HResultError { hr: -1, context });
     }
 
     let mut out: *mut c_void = std::ptr::null_mut();
@@ -171,8 +172,6 @@ impl<T> Drop for ComPtr<T> {
 
 impl<T> std::fmt::Debug for ComPtr<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ComPtr")
-            .field("ptr", &self.ptr)
-            .finish()
+        f.debug_struct("ComPtr").field("ptr", &self.ptr).finish()
     }
 }

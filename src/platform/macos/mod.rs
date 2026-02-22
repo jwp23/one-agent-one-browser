@@ -1,7 +1,7 @@
 mod headless;
 mod painter;
-mod scaled;
 mod scale;
+mod scaled;
 mod svg;
 mod windowed;
 

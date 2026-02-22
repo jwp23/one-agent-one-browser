@@ -7,8 +7,8 @@ mod painter;
 mod scale;
 mod scaled;
 mod svg;
-mod wstr;
 mod windowed;
+mod wstr;
 
 use super::WindowOptions;
 use crate::app::App;
