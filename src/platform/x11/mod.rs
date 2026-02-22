@@ -10,7 +10,8 @@ use crate::geom::Color;
 use crate::image::Argb32Image;
 use crate::render::{FontMetricsPx, Painter, TextMeasurer, TextStyle, Viewport};
 use core::ffi::{c_int, c_uint, c_ulong};
-use std::ffi::CString;
+use std::ffi::{CString, OsStr};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use painter::X11Painter;
@@ -21,15 +22,14 @@ use xlib::*;
 // (e.g. during drag-resize). Rendering at least once per tick keeps the window responsive.
 const MAX_X11_EVENTS_PER_TICK: usize = 512;
 
+const X11_SOCKET_DIR: &str = "/tmp/.X11-unix";
+
 const SCREENSHOT_RESOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 const WHEEL_SCROLL_STEP_PX: i32 = 48;
 
 pub fn run_window<A: App>(title: &str, options: WindowOptions, app: &mut A) -> Result<(), String> {
-    let display = unsafe { XOpenDisplay(std::ptr::null()) };
-    if display.is_null() {
-        return Err("XOpenDisplay failed: is $DISPLAY set and an X server available?".to_owned());
-    }
+    let display = open_x11_display()?;
 
     let result = run_window_with_display(display, title, options, app);
 
@@ -38,6 +38,108 @@ pub fn run_window<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
     }
 
     result
+}
+
+fn open_x11_display() -> Result<*mut Display, String> {
+    let display = try_open_x11_display(None);
+    if !display.is_null() {
+        return Ok(display);
+    }
+
+    let display_env = std::env::var("DISPLAY").ok();
+    let mut attempted = vec!["<default>".to_owned()];
+    for candidate in discover_x11_display_candidates(Path::new(X11_SOCKET_DIR)) {
+        if display_env.as_deref() == Some(candidate.as_str()) {
+            continue;
+        }
+        if attempted.iter().any(|existing| existing == &candidate) {
+            continue;
+        }
+        attempted.push(candidate.clone());
+        let display = try_open_x11_display(Some(&candidate));
+        if !display.is_null() {
+            return Ok(display);
+        }
+    }
+
+    if is_wayland_session() {
+        return Err(format!(
+            "XOpenDisplay failed in this Wayland session. Tried {}. Ensure XWayland is running and $DISPLAY points to an available X display.",
+            attempted.join(", ")
+        ));
+    }
+
+    Err("XOpenDisplay failed: is $DISPLAY set and an X server available?".to_owned())
+}
+
+fn try_open_x11_display(display_name: Option<&str>) -> *mut Display {
+    unsafe {
+        match display_name {
+            None => XOpenDisplay(std::ptr::null()),
+            Some(name) => {
+                let Ok(c_name) = CString::new(name) else {
+                    return std::ptr::null_mut();
+                };
+                XOpenDisplay(c_name.as_ptr())
+            }
+        }
+    }
+}
+
+fn discover_x11_display_candidates(socket_dir: &Path) -> Vec<String> {
+    let entries = match std::fs::read_dir(socket_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let socket_names = entries.filter_map(|entry| {
+        let entry = entry.ok()?;
+        let file_name = entry.file_name();
+        file_name.into_string().ok()
+    });
+    parse_x11_display_candidates_from_names(socket_names)
+}
+
+fn parse_x11_display_candidates_from_names<I, S>(socket_names: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut display_numbers = Vec::<u32>::new();
+    for socket_name in socket_names {
+        let Some(number) = parse_x11_display_number(socket_name.as_ref()) else {
+            continue;
+        };
+        display_numbers.push(number);
+    }
+    display_numbers.sort_unstable();
+    display_numbers.dedup();
+    display_numbers
+        .into_iter()
+        .map(|number| format!(":{number}"))
+        .collect()
+}
+
+fn parse_x11_display_number(socket_name: &str) -> Option<u32> {
+    let digits = socket_name.strip_prefix('X')?;
+    if digits.is_empty() || !digits.as_bytes().iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    digits.parse::<u32>().ok()
+}
+
+fn is_wayland_session() -> bool {
+    let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
+    let xdg_session_type = std::env::var("XDG_SESSION_TYPE").ok();
+    is_wayland_session_from_values(wayland_display.as_deref(), xdg_session_type.as_deref())
+}
+
+fn is_wayland_session_from_values(
+    wayland_display: Option<&OsStr>,
+    xdg_session_type: Option<&str>,
+) -> bool {
+    wayland_display.is_some_and(|value| !value.is_empty())
+        || xdg_session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
 }
 
 fn run_window_with_display<A: App>(
@@ -547,5 +649,31 @@ impl Painter for ScaledPainter<'_> {
 
     fn flush(&mut self) -> Result<(), String> {
         self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_wayland_session_from_values, parse_x11_display_candidates_from_names};
+    use std::ffi::OsStr;
+
+    #[test]
+    fn x11_display_candidates_are_sorted_unique_and_filtered() {
+        let candidates = parse_x11_display_candidates_from_names([
+            "X2", "X10", "X1", "X2", "X03", "X", "X1.0", "Y1", "Xabc",
+        ]);
+        assert_eq!(candidates, vec![":1", ":2", ":3", ":10"]);
+    }
+
+    #[test]
+    fn wayland_session_detection_handles_both_signals() {
+        assert!(is_wayland_session_from_values(
+            Some(OsStr::new("wayland-0")),
+            None
+        ));
+        assert!(is_wayland_session_from_values(None, Some("wayland")));
+        assert!(is_wayland_session_from_values(None, Some("WAYLAND")));
+        assert!(!is_wayland_session_from_values(None, Some("x11")));
+        assert!(!is_wayland_session_from_values(Some(OsStr::new("")), None));
     }
 }
