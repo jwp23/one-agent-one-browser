@@ -10,7 +10,7 @@ This is an experiment to see if an agent using LLMs, could build a functional br
 
 Platform:
 
-- Linux/X11 (also works in Wayland sessions via XWayland).
+- Linux (native Wayland or X11/XWayland).
 - Windows 10 (1703+) or Windows 11
 - macOS 11+ (double-check)
 
@@ -18,30 +18,30 @@ Platform:
 
 This project uses system libraries/frameworks via FFI.
 
-- Linux/X11: X11/Xft/Cairo, librsvg, libcurl, libpng, libjpeg-turbo, libwebp.
+- Linux: Wayland client/protocol tooling (`wayland-scanner` + `xdg-shell.xml`) and/or X11/Xft, plus Cairo, librsvg, libcurl, libpng, libjpeg-turbo, libwebp.
 - Windows 10/11: WinHTTP, WIC (PNG/JPEG/WebP), Direct2D/DirectWrite. If WebP decode fails, install Microsoft "WebP Image Extensions".
 - macOS: system frameworks (CoreGraphics/CoreText/ImageIO/QuickLook).
 
-Arch Linux (Wayland via XWayland):
+Arch Linux:
 
 ```sh
-sudo pacman -S --needed xorg-xwayland libx11 libxft cairo librsvg curl libpng libjpeg-turbo libwebp
+sudo pacman -S --needed wayland wayland-protocols xorg-xwayland libx11 libxft cairo librsvg curl libpng libjpeg-turbo libwebp
 ```
 
-Ubuntu (Wayland via XWayland):
+Ubuntu:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y xwayland libx11-dev libxft-dev libcairo2-dev librsvg2-dev libglib2.0-dev libcurl4-openssl-dev libpng-dev libjpeg-turbo8-dev libturbojpeg0-dev libwebp-dev
+sudo apt-get install -y libwayland-dev wayland-protocols xwayland libx11-dev libxft-dev libcairo2-dev librsvg2-dev libglib2.0-dev libcurl4-openssl-dev libpng-dev libjpeg-turbo8-dev libturbojpeg0-dev libwebp-dev
 ```
 
-RHEL (Wayland via XWayland):
+RHEL:
 
 ```sh
-sudo dnf install -y xorg-x11-server-Xwayland libX11 libXft cairo librsvg2 libcurl libpng libjpeg-turbo libwebp
+sudo dnf install -y wayland wayland-devel wayland-protocols-devel xorg-x11-server-Xwayland libX11 libXft cairo librsvg2 libcurl libpng libjpeg-turbo libwebp
 ```
 
-If you run an Xorg session (not Wayland), install an Xorg server package instead of XWayland (`xorg-server` / `xorg` / `xorg-x11-server-Xorg`).
+If you run only Xorg (not Wayland), install an Xorg server package (`xorg-server` / `xorg` / `xorg-x11-server-Xorg`).
 If `$DISPLAY` is unset, Linux startup also probes `/tmp/.X11-unix` for available X server sockets.
 
 ```sh
@@ -57,7 +57,7 @@ cargo run -- https://example.com
 # Save a PNG screenshot and exit once the page is ready
 cargo run -- test-file.html --screenshot out.png
 
-# Headless mode (Linux: still requires an X server, e.g. via xvfb-run or XWayland)
+# Headless mode (Linux: still requires a compositor/display server, Wayland or X11)
 cargo run -- --headless test-file.html --screenshot out.png
 ```
 
@@ -69,6 +69,7 @@ cargo run -- --headless test-file.html --screenshot out.png
 - `--width <px>` / `--width=<px>`: initial viewport width in CSS pixels (default: 1024).
 - `--height <px>` / `--height=<px>`: initial viewport height in CSS pixels (default: 768).
 - `OAB_SCALE` (env): override the DPI scale factor (e.g. `1.25` or `125%`).
+- `OAB_LINUX_BACKEND` (env, Linux): `auto` (default), `wayland`, or `x11`.
 
 ## Tests
 
