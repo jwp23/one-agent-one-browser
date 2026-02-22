@@ -14,6 +14,10 @@ impl Document {
         self.root.find_first_element_by_name(name)
     }
 
+    pub fn find_first_element_by_name_mut(&mut self, name: &str) -> Option<&mut Element> {
+        self.root.find_first_element_by_name_mut(name)
+    }
+
     pub fn find_first_element_by_id(&self, id: &str) -> Option<&Element> {
         self.root.find_first_element_by_id(id)
     }
@@ -109,6 +113,23 @@ impl Element {
                 return Some(found);
             }
         }
+        None
+    }
+
+    pub fn find_first_element_by_name_mut(&mut self, name: &str) -> Option<&mut Element> {
+        for child in &mut self.children {
+            let Node::Element(el) = child else {
+                continue;
+            };
+
+            if el.name == name {
+                return Some(el);
+            }
+            if let Some(found) = el.find_first_element_by_name_mut(name) {
+                return Some(found);
+            }
+        }
+
         None
     }
 
