@@ -306,43 +306,45 @@ fn run_window_with_display<A: App>(
                 break;
             }
 
-            let can_present = state.configured && !state.buffer_busy;
+            let can_present = if headless { true } else { state.configured };
             if needs_redraw && can_present {
                 painter.ensure_back_buffer(viewport)?;
                 let mut scaled_painter = ScaledPainter::new(&mut painter, scale);
                 app.render(&mut scaled_painter, css_viewport)?;
                 needs_redraw = false;
 
-                let shm = state.shm;
-                ensure_shm_buffer(
-                    &mut shm_buffer,
-                    &mut state,
-                    state_ptr,
-                    shm,
-                    viewport.width_px,
-                    viewport.height_px,
-                )?;
-
-                let buffer = shm_buffer
-                    .as_mut()
-                    .ok_or_else(|| "Internal error: shared-memory buffer missing".to_owned())?;
-                copy_bgra_to_shm(buffer, painter.bgra())?;
-
-                unsafe {
-                    oab_wl_surface_set_buffer_scale(surface, buffer_scale);
-                    oab_wl_surface_attach(surface, buffer.buffer, 0, 0);
-                    oab_wl_surface_damage_buffer(
-                        surface,
-                        0,
-                        0,
+                if !headless {
+                    let shm = state.shm;
+                    ensure_shm_buffer(
+                        &mut shm_buffer,
+                        &mut state,
+                        state_ptr,
+                        shm,
                         viewport.width_px,
                         viewport.height_px,
-                    );
-                    oab_wl_surface_commit(surface);
-                }
-                state.buffer_busy = true;
+                    )?;
 
-                flush_display(display)?;
+                    let buffer = shm_buffer
+                        .as_mut()
+                        .ok_or_else(|| "Internal error: shared-memory buffer missing".to_owned())?;
+                    copy_bgra_to_shm(buffer, painter.bgra())?;
+
+                    unsafe {
+                        oab_wl_surface_set_buffer_scale(surface, buffer_scale);
+                        oab_wl_surface_attach(surface, buffer.buffer, 0, 0);
+                        oab_wl_surface_damage_buffer(
+                            surface,
+                            0,
+                            0,
+                            viewport.width_px,
+                            viewport.height_px,
+                        );
+                        oab_wl_surface_commit(surface);
+                    }
+                    state.buffer_busy = true;
+
+                    flush_display(display)?;
+                }
 
                 if ready_for_screenshot {
                     has_rendered_ready_state = true;
@@ -450,9 +452,11 @@ fn ensure_shm_buffer(
         ));
     }
 
-    let needs_recreate = slot
-        .as_ref()
-        .is_none_or(|buffer| buffer.width_px != width_px || buffer.height_px != height_px);
+    let needs_recreate = slot.as_ref().is_none_or(|buffer| {
+        buffer.width_px != width_px
+            || buffer.height_px != height_px
+            || (state.buffer_busy && state.buffer_ptr == buffer.buffer)
+    });
 
     if needs_recreate {
         if let Some(old) = slot.take()
