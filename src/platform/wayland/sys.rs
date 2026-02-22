@@ -281,10 +281,8 @@ unsafe extern "C" {
 
 static XDG_WM_BASE_CREATE_POSITIONER_TYPES: InterfaceTypeList<1> =
     InterfaceTypeList([&XDG_POSITIONER_INTERFACE]);
-static XDG_WM_BASE_GET_XDG_SURFACE_TYPES: InterfaceTypeList<2> = InterfaceTypeList([
-    &XDG_SURFACE_INTERFACE,
-    unsafe { &wl_surface_interface },
-]);
+static XDG_WM_BASE_GET_XDG_SURFACE_TYPES: InterfaceTypeList<2> =
+    InterfaceTypeList([&XDG_SURFACE_INTERFACE, unsafe { &wl_surface_interface }]);
 static XDG_SURFACE_GET_TOPLEVEL_TYPES: InterfaceTypeList<1> =
     InterfaceTypeList([&XDG_TOPLEVEL_INTERFACE]);
 static XDG_SURFACE_GET_POPUP_TYPES: InterfaceTypeList<3> = InterfaceTypeList([
