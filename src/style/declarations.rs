@@ -7,7 +7,7 @@ use super::parse::{
 use super::{
     AutoEdges, BorderStyle, CascadePriority, CssEdges, CssLength, Display, FlexAlignItems,
     FlexDirection, FlexJustifyContent, FlexWrap, Float, LetterSpacing, Position, StyleBuilder,
-    TextAlign, TextTransform, Visibility,
+    TextAlign, TextTransform, Visibility, WhiteSpace,
 };
 
 pub(super) fn apply_declaration(
@@ -31,8 +31,14 @@ pub(super) fn apply_declaration(
                 builder.apply_display(Display::Inline, priority);
             } else if value.eq_ignore_ascii_case("inline-block") {
                 builder.apply_display(Display::InlineBlock, priority);
+            } else if value.eq_ignore_ascii_case("inline-flex") {
+                builder.apply_display(Display::Flex, priority);
             } else if value.eq_ignore_ascii_case("flex") {
                 builder.apply_display(Display::Flex, priority);
+            } else if value.eq_ignore_ascii_case("grid")
+                || value.eq_ignore_ascii_case("inline-grid")
+            {
+                builder.apply_display(Display::Grid, priority);
             }
         }
         "visibility" => {
@@ -193,6 +199,16 @@ pub(super) fn apply_declaration(
             };
             if let Some(transform) = transform {
                 builder.apply_text_transform(transform, priority);
+            }
+        }
+        "white-space" => {
+            let white_space = match value.trim().to_ascii_lowercase().as_str() {
+                "normal" => Some(WhiteSpace::Normal),
+                "nowrap" => Some(WhiteSpace::NoWrap),
+                _ => None,
+            };
+            if let Some(white_space) = white_space {
+                builder.apply_white_space(white_space, priority);
             }
         }
         "line-height" => {
@@ -436,6 +452,62 @@ pub(super) fn apply_declaration(
             let first = value.split_whitespace().next().unwrap_or("");
             if let Some(px) = builder.parse_css_length_px(first) {
                 builder.apply_flex_gap_px(px.max(0), priority);
+            }
+        }
+        "column-gap" | "row-gap" => {
+            if let Some(px) = builder.parse_css_length_px(value) {
+                builder.apply_flex_gap_px(px.max(0), priority);
+            }
+        }
+        "grid-area" => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
+                builder.apply_grid_area(None, priority);
+            } else {
+                let ident = value
+                    .split('/')
+                    .next()
+                    .unwrap_or(value)
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"');
+                if !ident.is_empty() {
+                    builder.apply_grid_area(Some(ident.to_owned()), priority);
+                }
+            }
+        }
+        "grid-template-columns" => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+                || value.eq_ignore_ascii_case("none")
+            {
+                builder.apply_grid_template_columns(None, priority);
+            } else if !value.is_empty() {
+                builder.apply_grid_template_columns(Some(value.to_owned()), priority);
+            }
+        }
+        "grid-template-areas" => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+                || value.eq_ignore_ascii_case("none")
+            {
+                builder.apply_grid_template_areas(None, priority);
+            } else if !value.is_empty() {
+                builder.apply_grid_template_areas(Some(value.to_owned()), priority);
+            }
+        }
+        "grid-template" => {
+            let value = value.trim();
+            if let Some((_, columns)) = value.split_once('/') {
+                let columns = columns.trim();
+                if !columns.is_empty() {
+                    builder.apply_grid_template_columns(Some(columns.to_owned()), priority);
+                }
             }
         }
         _ => {}

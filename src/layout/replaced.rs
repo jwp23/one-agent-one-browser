@@ -29,6 +29,15 @@ impl LayoutEngine<'_> {
                             opacity: 255,
                             image,
                         }));
+                    } else if let Some(svg_xml) = self.load_svg(src)? {
+                        self.list.commands.push(DisplayCommand::Svg(DrawSvg {
+                            x_px: content_box.x,
+                            y_px: content_box.y,
+                            width_px: content_box.width,
+                            height_px: content_box.height,
+                            opacity: 255,
+                            svg_xml,
+                        }));
                     }
                 }
             }

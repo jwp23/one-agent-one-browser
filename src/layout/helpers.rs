@@ -23,7 +23,10 @@ pub(super) fn constrain_flow_content_box(content_box: Rect, flow_area: Rect) -> 
 }
 
 pub(super) fn establishes_block_formatting_context(style: &ComputedStyle) -> bool {
-    matches!(style.display, Display::Flex | Display::Table)
+    matches!(
+        style.display,
+        Display::Flex | Display::Grid | Display::Table
+    )
 }
 
 pub(super) fn required_outer_width_for_float_clearance(
@@ -76,7 +79,7 @@ pub(super) fn resolve_canvas_background(
 
 pub(super) fn is_flow_block(style: &ComputedStyle, element: &Element) -> bool {
     match style.display {
-        Display::Block | Display::Flex | Display::Table => true,
+        Display::Block | Display::Flex | Display::Grid | Display::Table => true,
         Display::TableRow | Display::TableCell => true,
         Display::Inline | Display::InlineBlock => {
             if element.name != "span" {

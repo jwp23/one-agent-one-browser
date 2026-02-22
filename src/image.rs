@@ -78,7 +78,31 @@ pub fn decode_image(data: &[u8]) -> Result<Argb32Image, String> {
 }
 
 pub fn looks_like_supported_image(data: &[u8]) -> bool {
-    looks_like_webp(data) || looks_like_png(data) || looks_like_jpeg(data)
+    looks_like_webp(data)
+        || looks_like_png(data)
+        || looks_like_jpeg(data)
+        || looks_like_svg_document(data)
+}
+
+pub fn looks_like_svg_document(data: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(data);
+    let trimmed = text
+        .trim_start_matches(|ch: char| ch.is_ascii_whitespace() || ch == '\u{feff}' || ch == '\0');
+    if !trimmed.starts_with('<') {
+        return false;
+    }
+
+    let mut search_window = &trimmed[..trimmed.len().min(2048)];
+    if let Some(after_xml_decl) = search_window
+        .strip_prefix("<?xml")
+        .and_then(|rest| rest.find("?>").map(|idx| &rest[idx + 2..]))
+    {
+        search_window = after_xml_decl.trim_start_matches(char::is_whitespace);
+    }
+
+    search_window.starts_with("<svg")
+        || search_window.starts_with("<!DOCTYPE svg")
+        || search_window.starts_with("<!doctype svg")
 }
 
 fn looks_like_webp(data: &[u8]) -> bool {
@@ -616,4 +640,24 @@ fn premultiply_rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
         dst[3] = a8;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_like_supported_image, looks_like_svg_document};
+
+    #[test]
+    fn recognizes_svg_documents() {
+        let svg = br#"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>"#;
+        assert!(looks_like_svg_document(svg));
+        assert!(looks_like_supported_image(svg));
+    }
+
+    #[test]
+    fn does_not_misclassify_html_as_svg() {
+        let html = br#"<!doctype html><html><body><svg></svg></body></html>"#;
+        assert!(!looks_like_svg_document(html));
+        assert!(!looks_like_supported_image(html));
+    }
 }

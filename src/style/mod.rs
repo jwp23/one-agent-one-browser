@@ -23,6 +23,7 @@ pub enum Display {
     Inline,
     InlineBlock,
     Flex,
+    Grid,
     Table,
     TableRow,
     TableCell,
@@ -83,6 +84,12 @@ impl TextTransform {
             }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WhiteSpace {
+    Normal,
+    NoWrap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -161,6 +168,7 @@ pub struct ComputedStyle {
     pub underline: bool,
     pub text_align: TextAlign,
     pub text_transform: TextTransform,
+    pub white_space: WhiteSpace,
     pub line_height: LineHeight,
     pub margin: Edges,
     pub margin_auto: AutoEdges,
@@ -182,6 +190,9 @@ pub struct ComputedStyle {
     pub flex_shrink: i32,
     pub flex_basis_px: Option<i32>,
     pub flex_gap_px: i32,
+    pub grid_area: Option<String>,
+    pub grid_template_columns: Option<String>,
+    pub grid_template_areas: Option<String>,
 }
 
 impl ComputedStyle {
@@ -207,6 +218,7 @@ impl ComputedStyle {
             underline: false,
             text_align: TextAlign::Left,
             text_transform: TextTransform::None,
+            white_space: WhiteSpace::Normal,
             line_height: LineHeight::Normal,
             margin: Edges::ZERO,
             margin_auto: AutoEdges::NONE,
@@ -228,6 +240,9 @@ impl ComputedStyle {
             flex_shrink: 1,
             flex_basis_px: None,
             flex_gap_px: 0,
+            grid_area: None,
+            grid_template_columns: None,
+            grid_template_areas: None,
         }
     }
 
@@ -253,6 +268,7 @@ impl ComputedStyle {
             underline: parent.underline,
             text_align: parent.text_align,
             text_transform: parent.text_transform,
+            white_space: parent.white_space,
             line_height: parent.line_height,
             margin: Edges::ZERO,
             margin_auto: AutoEdges::NONE,
@@ -274,6 +290,9 @@ impl ComputedStyle {
             flex_shrink: 1,
             flex_basis_px: None,
             flex_gap_px: 0,
+            grid_area: None,
+            grid_template_columns: None,
+            grid_template_areas: None,
         }
     }
 }
