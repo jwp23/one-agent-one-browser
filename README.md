@@ -10,7 +10,7 @@ This is an experiment to see if an agent using LLMs, could build a functional br
 
 Platform:
 
-- Linux/X11 (requires an X server and `$DISPLAY`).
+- Linux/X11 (also works in Wayland sessions via XWayland).
 - Windows 10 (1703+) or Windows 11
 - macOS 11+ (double-check)
 
@@ -42,6 +42,7 @@ sudo dnf install -y xorg-x11-server-Xwayland libX11 libXft cairo librsvg2 libcur
 ```
 
 If you run an Xorg session (not Wayland), install an Xorg server package instead of XWayland (`xorg-server` / `xorg` / `xorg-x11-server-Xorg`).
+If `$DISPLAY` is unset, Linux startup also probes `/tmp/.X11-unix` for available X server sockets.
 
 ```sh
 # Built-in "Hello World"
@@ -56,7 +57,7 @@ cargo run -- https://example.com
 # Save a PNG screenshot and exit once the page is ready
 cargo run -- test-file.html --screenshot out.png
 
-# Headless mode (Linux/X11: still requires an X server, e.g. via xvfb-run)
+# Headless mode (Linux: still requires an X server, e.g. via xvfb-run or XWayland)
 cargo run -- --headless test-file.html --screenshot out.png
 ```
 

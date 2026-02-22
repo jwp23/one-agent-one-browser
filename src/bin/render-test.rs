@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
@@ -41,7 +41,7 @@ fn main() -> ExitCode {
 
     println!("Browser: {}", browser_exe.display());
     println!("Output:  {}", output_dir.display());
-    println!("Baseline platform: {}", baseline_platform_tag());
+    println!("Baseline platform: {}", baseline_platform_label());
 
     let min_similarity = match read_min_similarity() {
         Ok(value) => value,
@@ -274,26 +274,61 @@ fn expected_baseline_png(case_path: &Path) -> Result<PathBuf, String> {
         .file_stem()
         .ok_or_else(|| format!("Invalid case path: {}", case_path.display()))?
         .to_string_lossy();
-    Ok(parent.join(format!("{stem}-{}.png", baseline_platform_tag())))
+    let candidates: Vec<PathBuf> = baseline_platform_tags()
+        .into_iter()
+        .map(|tag| parent.join(format!("{stem}-{tag}.png")))
+        .collect();
+    if let Some(existing) = candidates.iter().find(|path| path.is_file()) {
+        return Ok(existing.to_path_buf());
+    }
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Internal error: baseline_platform_tags returned no candidates".to_owned())
 }
 
-fn baseline_platform_tag() -> &'static str {
+fn baseline_platform_label() -> String {
+    baseline_platform_tags().join(" -> ")
+}
+
+fn baseline_platform_tags() -> Vec<&'static str> {
     #[cfg(target_os = "linux")]
     {
-        return "linux-x11";
+        return linux_baseline_platform_tags(
+            std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+            std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        );
     }
     #[cfg(target_os = "macos")]
     {
-        return "macos";
+        return vec!["macos"];
     }
     #[cfg(target_os = "windows")]
     {
-        return "windows";
+        return vec!["windows"];
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        return "unknown";
+        return vec!["unknown"];
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_baseline_platform_tags(
+    wayland_display: Option<&OsStr>,
+    xdg_session_type: Option<&str>,
+) -> Vec<&'static str> {
+    if is_wayland_session(wayland_display, xdg_session_type) {
+        vec!["linux-wayland", "linux-x11"]
+    } else {
+        vec!["linux-x11", "linux-wayland"]
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn is_wayland_session(wayland_display: Option<&OsStr>, xdg_session_type: Option<&str>) -> bool {
+    wayland_display.is_some_and(|value| !value.is_empty())
+        || xdg_session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
 }
 
 fn actual_filename_for_html(html_path: &Path) -> Result<String, String> {
@@ -766,4 +801,29 @@ fn read_u16_le(bytes: Option<&[u8]>) -> Result<u16, String> {
         return Err("Invalid u16 slice".to_owned());
     };
     Ok(u16::from_le_bytes([*a, *b]))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "linux")]
+    use super::linux_baseline_platform_tags;
+    #[cfg(target_os = "linux")]
+    use std::ffi::OsStr;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_wayland_baselines_are_preferred_when_wayland_is_detected() {
+        assert_eq!(
+            linux_baseline_platform_tags(Some(OsStr::new("wayland-0")), None),
+            vec!["linux-wayland", "linux-x11"]
+        );
+        assert_eq!(
+            linux_baseline_platform_tags(None, Some("wayland")),
+            vec!["linux-wayland", "linux-x11"]
+        );
+        assert_eq!(
+            linux_baseline_platform_tags(None, Some("x11")),
+            vec!["linux-x11", "linux-wayland"]
+        );
+    }
 }

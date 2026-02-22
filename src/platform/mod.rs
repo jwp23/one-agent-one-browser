@@ -30,7 +30,7 @@ pub fn run_window(title: &str, options: WindowOptions, app: &mut impl App) -> Re
     {
         let _ = (title, options, app);
         Err(
-            "Unsupported platform: this demo currently only supports Linux/X11, macOS, and Windows"
+            "Unsupported platform: this demo currently only supports Linux (X11/XWayland), macOS, and Windows"
                 .to_owned(),
         )
     }
