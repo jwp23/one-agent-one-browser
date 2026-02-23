@@ -454,3 +454,26 @@ unsafe extern "C" fn handle_buffer_release(data: *mut c_void, buffer: *mut wl_bu
         state.buffer_busy = false;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CallbackState, XDG_TOPLEVEL_LISTENER};
+
+    #[test]
+    fn xdg_toplevel_close_requests_exit() {
+        let mut state = CallbackState::default();
+        assert!(!state.should_exit);
+
+        let close = XDG_TOPLEVEL_LISTENER
+            .close
+            .expect("xdg_toplevel close listener must be wired");
+        unsafe {
+            close(
+                (&mut state as *mut CallbackState).cast(),
+                std::ptr::null_mut(),
+            );
+        }
+
+        assert!(state.should_exit);
+    }
+}

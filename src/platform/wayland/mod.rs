@@ -162,12 +162,12 @@ fn run_window_with_display<A: App>(
     }
 
     for _ in 0..4 {
-        if state.configured {
+        if state.configured || state.should_exit {
             break;
         }
         roundtrip(display)?;
     }
-    if !state.configured {
+    if !state.configured && !state.should_exit {
         unsafe {
             oab_xdg_toplevel_destroy(xdg_toplevel);
             oab_xdg_surface_destroy(xdg_surface);
@@ -364,6 +364,9 @@ fn run_window_with_display<A: App>(
 
             if !needs_redraw {
                 dispatch_events(display, 10)?;
+                if state.should_exit {
+                    break;
+                }
             }
         }
 
