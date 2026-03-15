@@ -661,8 +661,7 @@ fn layout_tokens<'doc>(
                     continue;
                 }
                 let word_width_px = engine.measurer.text_width_px(text, *style)?;
-                if !nowrap && x_px != 0 && x_px.saturating_add(word_width_px) > content_box.width
-                {
+                if !nowrap && x_px != 0 && x_px.saturating_add(word_width_px) > content_box.width {
                     lines.push(std::mem::replace(
                         &mut line,
                         Line::new(explicit_line_height_px, base_metrics),

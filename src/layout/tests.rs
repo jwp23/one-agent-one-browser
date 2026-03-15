@@ -96,7 +96,10 @@ fn nowrap_keeps_words_on_single_line() {
 
     let hello_y = hello_y.expect("first word should render");
     let world_y = world_y.expect("second word should render");
-    assert_eq!(hello_y, world_y, "nowrap text should not wrap to a new line");
+    assert_eq!(
+        hello_y, world_y,
+        "nowrap text should not wrap to a new line"
+    );
 }
 
 #[test]

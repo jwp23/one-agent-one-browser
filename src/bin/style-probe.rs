@@ -169,7 +169,11 @@ fn run() -> Result<(), String> {
         width_px,
         height_px,
         "vector-typeahead-search-container",
-        |element| element.attributes.has_class("vector-typeahead-search-container"),
+        |element| {
+            element
+                .attributes
+                .has_class("vector-typeahead-search-container")
+        },
         Some("p-search"),
     )?;
 
