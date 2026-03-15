@@ -278,7 +278,6 @@ const WL_COMPOSITOR_CREATE_SURFACE: c_uint = 0;
 const WL_SHM_POOL_CREATE_BUFFER: c_uint = 0;
 const WL_SHM_POOL_DESTROY: c_uint = 1;
 const WL_SHM_CREATE_POOL: c_uint = 0;
-const WL_SHM_RELEASE: c_uint = 1;
 const WL_BUFFER_DESTROY: c_uint = 0;
 const WL_SURFACE_DESTROY: c_uint = 0;
 const WL_SURFACE_ATTACH: c_uint = 1;
@@ -287,7 +286,6 @@ const WL_SURFACE_SET_BUFFER_SCALE: c_uint = 8;
 const WL_SURFACE_DAMAGE_BUFFER: c_uint = 9;
 const WL_SEAT_GET_POINTER: c_uint = 0;
 const WL_SEAT_GET_KEYBOARD: c_uint = 1;
-const XDG_WM_BASE_DESTROY: c_uint = 0;
 const XDG_WM_BASE_GET_XDG_SURFACE: c_uint = 2;
 const XDG_WM_BASE_PONG: c_uint = 3;
 const XDG_SURFACE_DESTROY: c_uint = 0;
@@ -949,20 +947,6 @@ pub unsafe fn oab_wl_seat_get_keyboard(seat: *mut wl_seat) -> *mut wl_keyboard {
     .cast::<wl_keyboard>()
 }
 
-pub unsafe fn oab_wl_shm_release(shm: *mut wl_shm) {
-    let shm_proxy = shm.cast::<wl_proxy>();
-    let version = unsafe { wl_proxy_get_version(shm_proxy) };
-    unsafe {
-        wl_proxy_marshal_flags(
-            shm_proxy,
-            WL_SHM_RELEASE,
-            std::ptr::null(),
-            version,
-            WL_MARSHAL_FLAG_DESTROY,
-        );
-    }
-}
-
 pub unsafe fn oab_xdg_wm_base_get_xdg_surface(
     wm_base: *mut xdg_wm_base,
     surface: *mut wl_surface,
@@ -994,20 +978,6 @@ pub unsafe fn oab_xdg_wm_base_pong(wm_base: *mut xdg_wm_base, serial: c_uint) {
             version,
             0,
             serial,
-        );
-    }
-}
-
-pub unsafe fn oab_xdg_wm_base_destroy(wm_base: *mut xdg_wm_base) {
-    let wm_base_proxy = wm_base.cast::<wl_proxy>();
-    let version = unsafe { wl_proxy_get_version(wm_base_proxy) };
-    unsafe {
-        wl_proxy_marshal_flags(
-            wm_base_proxy,
-            XDG_WM_BASE_DESTROY,
-            std::ptr::null(),
-            version,
-            WL_MARSHAL_FLAG_DESTROY,
         );
     }
 }
