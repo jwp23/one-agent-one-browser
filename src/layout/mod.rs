@@ -259,9 +259,10 @@ impl LayoutEngine<'_> {
         } else {
             let mut width = if style.display == Display::Table
                 && (element.attributes.has_class("wikitable")
-                    || element.children.iter().any(|child| {
-                        matches!(child, Node::Element(el) if el.name == "caption")
-                    }))
+                    || element
+                        .children
+                        .iter()
+                        .any(|child| matches!(child, Node::Element(el) if el.name == "caption")))
                 && style.width_px.is_none()
                 && element
                     .attributes
