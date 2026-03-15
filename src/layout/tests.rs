@@ -260,6 +260,92 @@ fn grid_containers_fallback_to_block_flow() {
 }
 
 #[test]
+fn auto_width_tables_shrink_to_contents() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                table { background: #ff0000; }
+            </style>
+            <table class="wikitable"><tr><td>abc</td></tr></table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 200,
+        height_px: 120,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let table_background = output
+        .display_list
+        .commands
+        .iter()
+        .find_map(|command| {
+            let DisplayCommand::Rect(rect) = command else {
+                return None;
+            };
+            (rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0).then_some(rect)
+        })
+        .expect("table background should render");
+
+    assert!(
+        table_background.width_px < 40,
+        "auto-width table should not expand to the full viewport"
+    );
+}
+
+#[test]
+fn table_captions_render_above_rows() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>body { margin: 0; }</style>
+            <table>
+                <caption>Caption</caption>
+                <tr><td>Cell</td></tr>
+            </table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 200,
+        height_px: 120,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut caption_y = None;
+    let mut cell_y = None;
+    for command in &output.display_list.commands {
+        let DisplayCommand::Text(text) = command else {
+            continue;
+        };
+        if text.text == "Caption" {
+            caption_y = Some(text.y_px);
+        } else if text.text == "Cell" {
+            cell_y = Some(text.y_px);
+        }
+    }
+
+    let caption_y = caption_y.expect("caption text should render");
+    let cell_y = cell_y.expect("cell text should render");
+    assert!(caption_y < cell_y, "caption should appear above table rows");
+}
+
+#[test]
 fn grid_template_places_named_areas_into_columns() {
     let doc = crate::html::parse_document(
         r#"

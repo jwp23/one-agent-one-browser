@@ -327,27 +327,57 @@ fn inject_vector_appearance_fallback(document: &mut Document) {
             Node::Element(build_element(
                 "div",
                 &[("style", "font-size:12px;font-weight:bold;margin-top:8px")],
+                vec![Node::Text("Birthday mode (Baby Globe)".to_owned())],
+            )),
+            Node::Element(build_element(
+                "div",
+                &[("style", "font-size:12px")],
+                vec![
+                    Node::Element(build_radio_option(
+                        "oab-appearance-birthday",
+                        "disabled",
+                        false,
+                        "Disabled",
+                    )),
+                    Node::Element(build_radio_option(
+                        "oab-appearance-birthday",
+                        "enabled",
+                        true,
+                        "Enabled",
+                    )),
+                ],
+            )),
+            Node::Element(build_element(
+                "div",
+                &[("style", "font-size:12px;margin-bottom:8px")],
+                vec![Node::Element(build_element(
+                    "a",
+                    &[("href", "#")],
+                    vec![Node::Text("Learn more about Birthday mode".to_owned())],
+                ))],
+            )),
+            Node::Element(build_element(
+                "div",
+                &[("style", "font-size:12px;font-weight:bold;margin-top:8px")],
                 vec![Node::Text("Text".to_owned())],
             )),
             Node::Element(build_element(
                 "div",
                 &[("style", "font-size:12px")],
                 vec![
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-text",
                         "small",
                         false,
                         "Small",
                     )),
-                    Node::Text(" ".to_owned()),
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-text",
                         "standard",
                         true,
                         "Standard",
                     )),
-                    Node::Text(" ".to_owned()),
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-text",
                         "large",
                         false,
@@ -364,14 +394,13 @@ fn inject_vector_appearance_fallback(document: &mut Document) {
                 "div",
                 &[("style", "font-size:12px")],
                 vec![
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-width",
                         "standard",
                         true,
                         "Standard",
                     )),
-                    Node::Text(" ".to_owned()),
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-width",
                         "wide",
                         false,
@@ -388,21 +417,19 @@ fn inject_vector_appearance_fallback(document: &mut Document) {
                 "div",
                 &[("style", "font-size:12px;margin-bottom:8px")],
                 vec![
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-color",
                         "auto",
                         true,
                         "Automatic",
                     )),
-                    Node::Text(" ".to_owned()),
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-color",
                         "light",
                         false,
                         "Light",
                     )),
-                    Node::Text(" ".to_owned()),
-                    Node::Element(build_radio_label(
+                    Node::Element(build_radio_option(
                         "oab-appearance-color",
                         "dark",
                         false,
@@ -414,12 +441,16 @@ fn inject_vector_appearance_fallback(document: &mut Document) {
     )));
 }
 
-fn build_radio_label(_name: &str, _value: &str, checked: bool, text: &str) -> Element {
+fn build_radio_option(_name: &str, _value: &str, checked: bool, text: &str) -> Element {
     let marker = if checked { "(o)" } else { "( )" };
     build_element(
-        "label",
-        &[("style", "white-space:nowrap")],
-        vec![Node::Text(format!("{marker} {text}"))],
+        "div",
+        &[("style", "margin-top:4px")],
+        vec![Node::Element(build_element(
+            "label",
+            &[("style", "white-space:nowrap")],
+            vec![Node::Text(format!("{marker} {text}"))],
+        ))],
     )
 }
 

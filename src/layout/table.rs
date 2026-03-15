@@ -1,9 +1,30 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Edges, Rect, Size};
 use crate::render::{DisplayCommand, TextStyle};
-use crate::style::{ComputedStyle, Display, Visibility};
+use crate::style::{ComputedStyle, Display, TextAlign, Visibility};
 
 use super::LayoutEngine;
+
+pub(super) fn measure_auto_table_width<'doc>(
+    engine: &LayoutEngine<'_>,
+    table: &'doc Element,
+    table_style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
+    available_width: i32,
+) -> Result<i32, String> {
+    let cellspacing = table
+        .attributes
+        .get("cellspacing")
+        .and_then(parse_i32)
+        .unwrap_or(0)
+        .max(0);
+    let (col_widths, _) =
+        compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
+    let caption_width = measure_caption_min_width(engine, table, table_style, ancestors)?;
+    Ok(sum_table_width(&col_widths, cellspacing)
+        .max(caption_width)
+        .min(available_width.max(0)))
+}
 
 pub(super) fn layout_table<'doc>(
     engine: &mut LayoutEngine<'_>,
@@ -29,38 +50,8 @@ pub(super) fn layout_table<'doc>(
     let rows = collect_table_rows(table);
 
     let grid = build_grid(rows);
-    let mut col_widths = vec![0i32; grid.columns];
-    let mut fixed = vec![false; grid.columns];
-
-    for row in &grid.rows {
-        for cell in &row.cells {
-            if cell.colspan != 1 {
-                continue;
-            }
-            let cell_style = engine.styles.compute_style_in_viewport(
-                cell.element,
-                table_style,
-                ancestors,
-                engine.viewport.width_px,
-                engine.viewport.height_px,
-            );
-            let min_width =
-                measure_cell_min_width(engine, cell.element, &cell_style, ancestors, cellpadding)?;
-
-            if let Some(width) = cell_style
-                .width_px
-                .map(|width| width.resolve_px(content_box.width))
-            {
-                col_widths[cell.col_index] = col_widths[cell.col_index].max(width);
-                fixed[cell.col_index] = true;
-            } else {
-                col_widths[cell.col_index] = col_widths[cell.col_index].max(min_width);
-                if cell_style.text_align == crate::style::TextAlign::Right {
-                    fixed[cell.col_index] = true;
-                }
-            }
-        }
-    }
+    let (mut col_widths, fixed) =
+        compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
 
     let total_min = sum_table_width(&col_widths, cellspacing);
     let extra = content_box.width.saturating_sub(total_min).max(0);
@@ -71,6 +62,37 @@ pub(super) fn layout_table<'doc>(
     }
 
     let mut y = content_box.y;
+    if let Some(caption) = collect_table_caption(table) {
+        let mut caption_style = engine.styles.compute_style_in_viewport(
+            caption,
+            table_style,
+            ancestors,
+            engine.viewport.width_px,
+            engine.viewport.height_px,
+        );
+        if caption_style.display == Display::Inline {
+            caption_style.display = Display::Block;
+        }
+        if caption_style.text_align == TextAlign::Left {
+            caption_style.text_align = TextAlign::Center;
+        }
+        engine.layout_block_box(
+            caption,
+            &caption_style,
+            table_style,
+            ancestors,
+            Rect {
+                x: content_box.x,
+                y,
+                width: content_box.width,
+                height: content_box.height,
+            },
+            &mut y,
+            paint,
+            None,
+        )?;
+    }
+
     for row in &grid.rows {
         let row_style = engine.styles.compute_style_in_viewport(
             row.element,
@@ -179,6 +201,103 @@ pub(super) fn layout_table<'doc>(
     })
 }
 
+fn compute_intrinsic_column_widths<'doc>(
+    engine: &LayoutEngine<'_>,
+    table: &'doc Element,
+    table_style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
+    cellspacing: i32,
+) -> Result<(Vec<i32>, Vec<bool>), String> {
+    let cellpadding = table
+        .attributes
+        .get("cellpadding")
+        .and_then(parse_i32)
+        .unwrap_or(0)
+        .max(0);
+    let rows = collect_table_rows(table);
+    let grid = build_grid(rows);
+    let mut col_widths = vec![0i32; grid.columns];
+    let mut fixed = vec![false; grid.columns];
+
+    for row in &grid.rows {
+        for cell in &row.cells {
+            let cell_style = engine.styles.compute_style_in_viewport(
+                cell.element,
+                table_style,
+                ancestors,
+                engine.viewport.width_px,
+                engine.viewport.height_px,
+            );
+            let min_width =
+                measure_cell_min_width(engine, cell.element, &cell_style, ancestors, cellpadding)?;
+            let target_width = cell_style
+                .width_px
+                .map(|width| width.resolve_px(0))
+                .unwrap_or(min_width);
+
+            apply_cell_target_width(
+                &mut col_widths,
+                &mut fixed,
+                cell,
+                target_width,
+                cellspacing,
+                cell_style.width_px.is_some() || cell_style.text_align == TextAlign::Right,
+            );
+        }
+    }
+
+    Ok((col_widths, fixed))
+}
+
+fn apply_cell_target_width(
+    col_widths: &mut [i32],
+    fixed: &mut [bool],
+    cell: &GridCell<'_>,
+    target_width: i32,
+    cellspacing: i32,
+    mark_fixed: bool,
+) {
+    if cell.colspan == 1 {
+        if let Some(width) = col_widths.get_mut(cell.col_index) {
+            *width = (*width).max(target_width);
+        }
+        if mark_fixed {
+            if let Some(slot) = fixed.get_mut(cell.col_index) {
+                *slot = true;
+            }
+        }
+        return;
+    }
+
+    let current_width = cell_span_width(col_widths, cell.col_index, cell.colspan, cellspacing);
+    let deficit = target_width.saturating_sub(current_width);
+    if deficit > 0 {
+        distribute_span_extra(col_widths, cell.col_index, cell.colspan, deficit);
+    }
+    if mark_fixed {
+        for idx in cell.col_index..cell.col_index.saturating_add(cell.colspan) {
+            if let Some(slot) = fixed.get_mut(idx) {
+                *slot = true;
+            }
+        }
+    }
+}
+
+fn distribute_span_extra(col_widths: &mut [i32], start: usize, span: usize, extra: i32) {
+    let end = start.saturating_add(span).min(col_widths.len());
+    let count = end.saturating_sub(start);
+    if count == 0 || extra <= 0 {
+        return;
+    }
+
+    let base = extra / count as i32;
+    let remainder = extra % count as i32;
+    for (offset, width) in col_widths[start..end].iter_mut().enumerate() {
+        let bump = base + i32::from(offset < remainder as usize);
+        *width = width.saturating_add(bump);
+    }
+}
+
 struct GridRow<'doc> {
     element: &'doc Element,
     cells: Vec<GridCell<'doc>>,
@@ -259,6 +378,15 @@ fn collect_table_rows<'doc>(table: &'doc Element) -> Vec<&'doc Element> {
     rows
 }
 
+fn collect_table_caption(table: &Element) -> Option<&Element> {
+    table.children.iter().find_map(|child| {
+        let Node::Element(el) = child else {
+            return None;
+        };
+        (el.name == "caption").then_some(el)
+    })
+}
+
 fn is_table_row_group(name: &str) -> bool {
     matches!(name, "tbody" | "thead" | "tfoot")
 }
@@ -324,6 +452,40 @@ fn parse_i32(value: &str) -> Option<i32> {
 
 fn parse_usize(value: &str) -> Option<usize> {
     value.trim().parse().ok()
+}
+
+fn measure_caption_min_width<'doc>(
+    engine: &LayoutEngine<'_>,
+    table: &'doc Element,
+    table_style: &ComputedStyle,
+    ancestors: &mut Vec<&'doc Element>,
+) -> Result<i32, String> {
+    let Some(caption) = collect_table_caption(table) else {
+        return Ok(0);
+    };
+    let style = engine.styles.compute_style_in_viewport(
+        caption,
+        table_style,
+        ancestors,
+        engine.viewport.width_px,
+        engine.viewport.height_px,
+    );
+    let mut width = 0i32;
+    ancestors.push(caption);
+    measure_inline_words(
+        engine,
+        &caption.children,
+        &style,
+        ancestors,
+        &mut width,
+        engine.text_style_for(&style),
+    )?;
+    ancestors.pop();
+
+    let padding = style.padding.resolve_px(0);
+    Ok(width
+        .saturating_add(padding.left)
+        .saturating_add(padding.right))
 }
 
 fn measure_cell_min_width<'doc>(

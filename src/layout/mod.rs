@@ -257,7 +257,22 @@ impl LayoutEngine<'_> {
                 .saturating_sub(margin.left.saturating_add(margin.right))
                 .max(0)
         } else {
-            let mut width = self.resolve_used_width(element, style, available_width);
+            let mut width = if style.display == Display::Table
+                && (element.attributes.has_class("wikitable")
+                    || element.children.iter().any(|child| {
+                        matches!(child, Node::Element(el) if el.name == "caption")
+                    }))
+                && style.width_px.is_none()
+                && element
+                    .attributes
+                    .get("width")
+                    .and_then(parse_percentage)
+                    .is_none()
+            {
+                table::measure_auto_table_width(self, element, style, ancestors, available_width)?
+            } else {
+                self.resolve_used_width(element, style, available_width)
+            };
             if let Some(min_width) = style
                 .min_width_px
                 .map(|width| width.resolve_px(available_width))
