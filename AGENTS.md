@@ -26,6 +26,9 @@
 - Plan: bullet minimal steps; note risks and edge cases.
 - Patch: small, focused diffs with paths; exclude unrelated changes.
 - Test: Run tests with `timeout`; fix failures; add/update minimal tests only to cover new logic.
+- Use `tools/oracle` for tasks that depend on real JavaScript execution, browser console/page errors, or validating rendered DOM/text/screenshot against a real browser.
+- Treat `tools/oracle` as optional local verification, not part of the Rust runtime or default test harness.
+- If oracle dependencies are not already installed, ask before running `npm install` or `playwright install`.
 - Decompose: split work into small, reviewable steps/commits.
 - Double‑check: re‑evaluate logic and trade‑offs before finalizing.
 - Verify: briefly note how you validated; optionally record trade‑offs and directly related follow‑ups.
