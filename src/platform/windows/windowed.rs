@@ -37,6 +37,7 @@ const PM_REMOVE: UINT = 0x0001;
 
 const SW_SHOW: i32 = 5;
 
+const VK_BACK: WPARAM = 0x08;
 const VK_ESCAPE: WPARAM = 0x1b;
 
 const WM_NCCREATE: UINT = 0x0081;
@@ -570,6 +571,12 @@ unsafe extern "system" fn wnd_proc(
                 return 0;
             }
             WM_KEYDOWN => {
+                if w_param == VK_BACK {
+                    if let Some(state) = state {
+                        state.events.push(WindowEvent::NavigateBack);
+                    }
+                    return 0;
+                }
                 if w_param == VK_ESCAPE {
                     if let Some(state) = state {
                         state.should_close = true;

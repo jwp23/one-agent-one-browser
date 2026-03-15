@@ -28,6 +28,23 @@ const SCREENSHOT_RESOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 const WHEEL_SCROLL_STEP_PX: i32 = 48;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyAction {
+    None,
+    NavigateBack,
+    Exit,
+}
+
+fn key_action(keysym: KeySym) -> KeyAction {
+    if keysym == KEYSYM_BACKSPACE {
+        KeyAction::NavigateBack
+    } else if keysym == KEYSYM_ESCAPE {
+        KeyAction::Exit
+    } else {
+        KeyAction::None
+    }
+}
+
 pub fn run_window<A: App>(title: &str, options: WindowOptions, app: &mut A) -> Result<(), String> {
     let display = open_x11_display()?;
 
@@ -348,9 +365,18 @@ fn run_window_with_display<A: App>(
                             unsafe { &*(event.inner.as_ptr() as *const XKeyEvent) };
                         let keysym =
                             unsafe { XLookupKeysym(key as *const XKeyEvent as *mut XKeyEvent, 0) };
-                        if keysym == KEYSYM_ESCAPE {
-                            should_exit = true;
-                            break;
+                        match key_action(keysym) {
+                            KeyAction::NavigateBack => {
+                                let tick = app.navigate_back()?;
+                                if tick.needs_redraw {
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyAction::Exit => {
+                                should_exit = true;
+                                break;
+                            }
+                            KeyAction::None => {}
                         }
                     }
                     EVENT_TYPE_CLIENT_MESSAGE => {
@@ -654,7 +680,10 @@ impl Painter for ScaledPainter<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_wayland_session_from_values, parse_x11_display_candidates_from_names};
+    use super::{
+        KeyAction, is_wayland_session_from_values, key_action,
+        parse_x11_display_candidates_from_names,
+    };
     use std::ffi::OsStr;
 
     #[test]
@@ -675,5 +704,12 @@ mod tests {
         assert!(is_wayland_session_from_values(None, Some("WAYLAND")));
         assert!(!is_wayland_session_from_values(None, Some("x11")));
         assert!(!is_wayland_session_from_values(Some(OsStr::new("")), None));
+    }
+
+    #[test]
+    fn x11_key_action_maps_backspace_and_escape() {
+        assert_eq!(key_action(super::KEYSYM_BACKSPACE), KeyAction::NavigateBack);
+        assert_eq!(key_action(super::KEYSYM_ESCAPE), KeyAction::Exit);
+        assert_eq!(key_action(0), KeyAction::None);
     }
 }

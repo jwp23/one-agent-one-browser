@@ -380,6 +380,10 @@ fn run_window_with_display<A: App>(
             wl_proxy_destroy(state.pointer.cast::<wl_proxy>());
             state.pointer = std::ptr::null_mut();
         }
+        if !state.keyboard.is_null() {
+            wl_proxy_destroy(state.keyboard.cast::<wl_proxy>());
+            state.keyboard = std::ptr::null_mut();
+        }
         if !state.seat.is_null() {
             wl_proxy_destroy(state.seat.cast::<wl_proxy>());
             state.seat = std::ptr::null_mut();

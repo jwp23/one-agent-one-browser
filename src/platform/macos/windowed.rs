@@ -14,6 +14,7 @@ const SCREENSHOT_RESOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_TYPE_LEFT_MOUSE_DOWN: c_ulong = 1;
 const EVENT_TYPE_KEY_DOWN: c_ulong = 10;
 const EVENT_TYPE_SCROLL_WHEEL: c_ulong = 22;
+const KEY_CODE_DELETE: u16 = 51;
 
 type Id = *mut c_void;
 type Sel = *mut c_void;
@@ -135,6 +136,14 @@ pub(super) fn run<A: App>(title: &str, options: WindowOptions, app: &mut A) -> R
                     cocoa.send_event(event);
                 }
                 EVENT_TYPE_KEY_DOWN => {
+                    if cocoa.event_key_code(event) == KEY_CODE_DELETE {
+                        let tick = app.navigate_back()?;
+                        if tick.needs_redraw {
+                            needs_redraw = true;
+                        }
+                        processed += 1;
+                        continue;
+                    }
                     should_exit = true;
                     break;
                 }
@@ -447,6 +456,13 @@ impl CocoaApp {
             let f: unsafe extern "C" fn(Id, Sel) -> c_double =
                 std::mem::transmute(objc_msg_send_ptr());
             f(event, sel(b"scrollingDeltaY\0"))
+        }
+    }
+
+    fn event_key_code(&self, event: Id) -> u16 {
+        unsafe {
+            let f: unsafe extern "C" fn(Id, Sel) -> u16 = std::mem::transmute(objc_msg_send_ptr());
+            f(event, sel(b"keyCode\0"))
         }
     }
 }

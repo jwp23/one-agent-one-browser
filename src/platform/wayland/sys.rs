@@ -46,6 +46,7 @@ pub type wl_shm_pool = wl_proxy;
 pub type wl_buffer = wl_proxy;
 pub type wl_seat = wl_proxy;
 pub type wl_pointer = wl_proxy;
+pub type wl_keyboard = wl_proxy;
 pub type xdg_wm_base = wl_proxy;
 pub type xdg_surface = wl_proxy;
 pub type xdg_toplevel = wl_proxy;
@@ -163,6 +164,60 @@ pub struct wl_pointer_listener {
 }
 
 #[repr(C)]
+pub struct wl_keyboard_listener {
+    pub keymap: Option<
+        unsafe extern "C" fn(
+            data: *mut c_void,
+            keyboard: *mut wl_keyboard,
+            format: u32,
+            fd: c_int,
+            size: u32,
+        ),
+    >,
+    pub enter: Option<
+        unsafe extern "C" fn(
+            data: *mut c_void,
+            keyboard: *mut wl_keyboard,
+            serial: u32,
+            surface: *mut wl_surface,
+            keys: *mut wl_array,
+        ),
+    >,
+    pub leave: Option<
+        unsafe extern "C" fn(
+            data: *mut c_void,
+            keyboard: *mut wl_keyboard,
+            serial: u32,
+            surface: *mut wl_surface,
+        ),
+    >,
+    pub key: Option<
+        unsafe extern "C" fn(
+            data: *mut c_void,
+            keyboard: *mut wl_keyboard,
+            serial: u32,
+            time: u32,
+            key: u32,
+            state: u32,
+        ),
+    >,
+    pub modifiers: Option<
+        unsafe extern "C" fn(
+            data: *mut c_void,
+            keyboard: *mut wl_keyboard,
+            serial: u32,
+            mods_depressed: u32,
+            mods_latched: u32,
+            mods_locked: u32,
+            group: u32,
+        ),
+    >,
+    pub repeat_info: Option<
+        unsafe extern "C" fn(data: *mut c_void, keyboard: *mut wl_keyboard, rate: i32, delay: i32),
+    >,
+}
+
+#[repr(C)]
 pub struct xdg_wm_base_listener {
     pub ping:
         Option<unsafe extern "C" fn(data: *mut c_void, wm_base: *mut xdg_wm_base, serial: u32)>,
@@ -206,7 +261,9 @@ pub struct xdg_toplevel_listener {
 pub const WL_SHM_FORMAT_ARGB8888: u32 = 0;
 
 pub const WL_SEAT_CAPABILITY_POINTER: u32 = 1;
+pub const WL_SEAT_CAPABILITY_KEYBOARD: u32 = 2;
 
+pub const WL_KEYBOARD_KEY_STATE_PRESSED: u32 = 1;
 pub const WL_POINTER_BUTTON_STATE_PRESSED: u32 = 1;
 pub const WL_POINTER_AXIS_VERTICAL_SCROLL: u32 = 0;
 
@@ -229,6 +286,7 @@ const WL_SURFACE_COMMIT: c_uint = 6;
 const WL_SURFACE_SET_BUFFER_SCALE: c_uint = 8;
 const WL_SURFACE_DAMAGE_BUFFER: c_uint = 9;
 const WL_SEAT_GET_POINTER: c_uint = 0;
+const WL_SEAT_GET_KEYBOARD: c_uint = 1;
 const XDG_WM_BASE_DESTROY: c_uint = 0;
 const XDG_WM_BASE_GET_XDG_SURFACE: c_uint = 2;
 const XDG_WM_BASE_PONG: c_uint = 3;
@@ -277,6 +335,7 @@ unsafe extern "C" {
     static wl_surface_interface: wl_interface;
     static wl_seat_interface: wl_interface;
     static wl_pointer_interface: wl_interface;
+    static wl_keyboard_interface: wl_interface;
 }
 
 static XDG_WM_BASE_CREATE_POSITIONER_TYPES: InterfaceTypeList<1> =
@@ -872,6 +931,22 @@ pub unsafe fn oab_wl_seat_get_pointer(seat: *mut wl_seat) -> *mut wl_pointer {
         )
     }
     .cast::<wl_pointer>()
+}
+
+pub unsafe fn oab_wl_seat_get_keyboard(seat: *mut wl_seat) -> *mut wl_keyboard {
+    let seat_proxy = seat.cast::<wl_proxy>();
+    let version = unsafe { wl_proxy_get_version(seat_proxy) };
+    unsafe {
+        wl_proxy_marshal_flags(
+            seat_proxy,
+            WL_SEAT_GET_KEYBOARD,
+            &wl_keyboard_interface,
+            version,
+            0,
+            std::ptr::null_mut::<wl_proxy>(),
+        )
+    }
+    .cast::<wl_keyboard>()
 }
 
 pub unsafe fn oab_wl_shm_release(shm: *mut wl_shm) {

@@ -1,8 +1,28 @@
 use super::sys::*;
 use core::ffi::{c_char, c_void};
 use std::ffi::CStr;
+use std::os::fd::FromRawFd;
 
 const WHEEL_SCROLL_STEP_PX: i32 = 48;
+const KEY_BACKSPACE: u32 = 14;
+const KEY_ESCAPE: u32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyAction {
+    None,
+    NavigateBack,
+    Exit,
+}
+
+fn key_action(key: u32) -> KeyAction {
+    if key == KEY_BACKSPACE {
+        KeyAction::NavigateBack
+    } else if key == KEY_ESCAPE {
+        KeyAction::Exit
+    } else {
+        KeyAction::None
+    }
+}
 
 pub(super) struct CallbackState {
     pub(super) setup_error: Option<String>,
@@ -11,6 +31,7 @@ pub(super) struct CallbackState {
     pub(super) shm: *mut wl_shm,
     pub(super) seat: *mut wl_seat,
     pub(super) pointer: *mut wl_pointer,
+    pub(super) keyboard: *mut wl_keyboard,
     pub(super) wm_base: *mut xdg_wm_base,
 
     pub(super) supports_argb8888: bool,
@@ -36,6 +57,7 @@ impl Default for CallbackState {
             shm: std::ptr::null_mut(),
             seat: std::ptr::null_mut(),
             pointer: std::ptr::null_mut(),
+            keyboard: std::ptr::null_mut(),
             wm_base: std::ptr::null_mut(),
             supports_argb8888: false,
             configured: false,
@@ -121,6 +143,15 @@ const POINTER_LISTENER: wl_pointer_listener = wl_pointer_listener {
     axis_discrete: Some(handle_pointer_axis_discrete),
     axis_value120: Some(handle_pointer_axis_value120),
     axis_relative_direction: Some(handle_pointer_axis_relative_direction),
+};
+
+const KEYBOARD_LISTENER: wl_keyboard_listener = wl_keyboard_listener {
+    keymap: Some(handle_keyboard_keymap),
+    enter: Some(handle_keyboard_enter),
+    leave: Some(handle_keyboard_leave),
+    key: Some(handle_keyboard_key),
+    modifiers: Some(handle_keyboard_modifiers),
+    repeat_info: Some(handle_keyboard_repeat_info),
 };
 
 const WM_BASE_LISTENER: xdg_wm_base_listener = xdg_wm_base_listener {
@@ -263,6 +294,33 @@ unsafe extern "C" fn handle_seat_capabilities(
         }
         state.pointer = std::ptr::null_mut();
     }
+
+    if (capabilities & WL_SEAT_CAPABILITY_KEYBOARD) != 0 {
+        if state.keyboard.is_null() {
+            let keyboard = unsafe { oab_wl_seat_get_keyboard(seat) };
+            if keyboard.is_null() {
+                record_setup_error(state, "wl_seat_get_keyboard returned null".to_owned());
+                return;
+            }
+
+            let add_result =
+                unsafe { add_proxy_listener(keyboard, &KEYBOARD_LISTENER, state, "wl_keyboard") };
+            if let Err(err) = add_result {
+                unsafe {
+                    wl_proxy_destroy(keyboard.cast::<wl_proxy>());
+                }
+                record_setup_error(state, err);
+                return;
+            }
+
+            state.keyboard = keyboard;
+        }
+    } else if !state.keyboard.is_null() {
+        unsafe {
+            wl_proxy_destroy(state.keyboard.cast::<wl_proxy>());
+        }
+        state.keyboard = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn handle_seat_name(
@@ -393,6 +451,78 @@ unsafe extern "C" fn handle_pointer_axis_relative_direction(
 ) {
 }
 
+unsafe extern "C" fn handle_keyboard_keymap(
+    _data: *mut c_void,
+    _keyboard: *mut wl_keyboard,
+    _format: u32,
+    fd: i32,
+    _size: u32,
+) {
+    if fd >= 0 {
+        let _ = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    }
+}
+
+unsafe extern "C" fn handle_keyboard_enter(
+    _data: *mut c_void,
+    _keyboard: *mut wl_keyboard,
+    _serial: u32,
+    _surface: *mut wl_surface,
+    _keys: *mut wl_array,
+) {
+}
+
+unsafe extern "C" fn handle_keyboard_leave(
+    _data: *mut c_void,
+    _keyboard: *mut wl_keyboard,
+    _serial: u32,
+    _surface: *mut wl_surface,
+) {
+}
+
+unsafe extern "C" fn handle_keyboard_key(
+    data: *mut c_void,
+    _keyboard: *mut wl_keyboard,
+    _serial: u32,
+    _time: u32,
+    key: u32,
+    state_value: u32,
+) {
+    if state_value != WL_KEYBOARD_KEY_STATE_PRESSED {
+        return;
+    }
+
+    let state = unsafe { state_from_data(data) };
+    match key_action(key) {
+        KeyAction::NavigateBack => {
+            state.pending_back_navigations = state.pending_back_navigations.saturating_add(1);
+        }
+        KeyAction::Exit => {
+            state.should_exit = true;
+        }
+        KeyAction::None => {}
+    }
+}
+
+unsafe extern "C" fn handle_keyboard_modifiers(
+    _data: *mut c_void,
+    _keyboard: *mut wl_keyboard,
+    _serial: u32,
+    _mods_depressed: u32,
+    _mods_latched: u32,
+    _mods_locked: u32,
+    _group: u32,
+) {
+}
+
+unsafe extern "C" fn handle_keyboard_repeat_info(
+    _data: *mut c_void,
+    _keyboard: *mut wl_keyboard,
+    _rate: i32,
+    _delay: i32,
+) {
+}
+
 unsafe extern "C" fn handle_wm_base_ping(
     _data: *mut c_void,
     wm_base: *mut xdg_wm_base,
@@ -457,7 +587,7 @@ unsafe extern "C" fn handle_buffer_release(data: *mut c_void, buffer: *mut wl_bu
 
 #[cfg(test)]
 mod tests {
-    use super::{CallbackState, XDG_TOPLEVEL_LISTENER};
+    use super::{CallbackState, KeyAction, XDG_TOPLEVEL_LISTENER, key_action};
 
     #[test]
     fn xdg_toplevel_close_requests_exit() {
@@ -475,5 +605,12 @@ mod tests {
         }
 
         assert!(state.should_exit);
+    }
+
+    #[test]
+    fn wayland_key_action_maps_backspace_and_escape() {
+        assert_eq!(key_action(super::KEY_BACKSPACE), KeyAction::NavigateBack);
+        assert_eq!(key_action(super::KEY_ESCAPE), KeyAction::Exit);
+        assert_eq!(key_action(0), KeyAction::None);
     }
 }

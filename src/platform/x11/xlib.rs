@@ -10,6 +10,7 @@ pub type KeySym = c_ulong;
 pub type Pixmap = c_ulong;
 pub type Window = c_ulong;
 
+pub const KEYSYM_BACKSPACE: KeySym = 0xff08;
 pub const KEYSYM_ESCAPE: KeySym = 0xff1b;
 
 #[repr(C)]

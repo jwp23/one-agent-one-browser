@@ -71,6 +71,12 @@ cargo run -- --headless test-file.html --screenshot out.png
 - `OAB_SCALE` (env): override the DPI scale factor (e.g. `1.25` or `125%`).
 - `OAB_LINUX_BACKEND` (env, Linux): `auto` (default), `wayland`, or `x11`.
 
+### Controls
+
+- `Backspace`: navigate back in history.
+- Mouse back/side button: navigate back in history.
+- `Esc`: close the window.
+
 ## Tests
 
 ```sh
