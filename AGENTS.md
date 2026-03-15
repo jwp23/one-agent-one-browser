@@ -3,6 +3,7 @@
 ## Project-Specific
 - Never consider backwards-compatibility, legacy or similar concerns, I'm the only user, and it's a new greenfield project, we can freely make any changes we want.
 - Make sure you never introduce any new compilation warnings, address them if you encounter them.
+- Engine-first: when rendering, DOM, CSS, or JavaScript behavior is missing or incorrect, update the relevant engine/runtime code instead of adding page-specific workarounds, special cases, or test-only shims unless the user explicitly asks for a temporary workaround.
 
 ## Mindset & Principles
 - Flag missing info and unsupported assumptions.
