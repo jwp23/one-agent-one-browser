@@ -376,36 +376,9 @@ fn run_window_with_display<A: App>(
     drop(shm_buffer);
 
     unsafe {
-        if !state.pointer.is_null() {
-            wl_proxy_destroy(state.pointer.cast::<wl_proxy>());
-            state.pointer = std::ptr::null_mut();
-        }
-        if !state.keyboard.is_null() {
-            wl_proxy_destroy(state.keyboard.cast::<wl_proxy>());
-            state.keyboard = std::ptr::null_mut();
-        }
-        if !state.seat.is_null() {
-            wl_proxy_destroy(state.seat.cast::<wl_proxy>());
-            state.seat = std::ptr::null_mut();
-        }
-
         oab_xdg_toplevel_destroy(xdg_toplevel);
         oab_xdg_surface_destroy(xdg_surface);
         oab_wl_surface_destroy(surface);
-
-        if !state.wm_base.is_null() {
-            oab_xdg_wm_base_destroy(state.wm_base);
-            state.wm_base = std::ptr::null_mut();
-        }
-        if !state.shm.is_null() {
-            oab_wl_shm_release(state.shm);
-            state.shm = std::ptr::null_mut();
-        }
-        if !state.compositor.is_null() {
-            wl_proxy_destroy(state.compositor.cast::<wl_proxy>());
-            state.compositor = std::ptr::null_mut();
-        }
-        wl_proxy_destroy(registry.cast::<wl_proxy>());
     }
 
     loop_result

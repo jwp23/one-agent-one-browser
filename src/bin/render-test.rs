@@ -1,4 +1,6 @@
 use std::ffi::{OsStr, OsString};
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
@@ -370,8 +372,8 @@ fn render_to_png(
         {
             if !status.success() {
                 return Err(format!(
-                    "Browser process failed (exit={})",
-                    status.code().unwrap_or(-1)
+                    "Browser process failed ({})",
+                    render_exit_status(status)
                 ));
             }
 
@@ -396,6 +398,19 @@ fn render_to_png(
 
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn render_exit_status(status: std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return format!("exit={code}");
+    }
+
+    #[cfg(unix)]
+    if let Some(signal) = status.signal() {
+        return format!("signal={signal}");
+    }
+
+    "terminated without an exit code".to_owned()
 }
 
 #[derive(Clone, Copy, Debug)]
