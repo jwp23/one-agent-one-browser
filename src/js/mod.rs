@@ -313,151 +313,338 @@ fn consume_char(source: &str, start: usize, expected: char) -> Option<usize> {
 fn inject_vector_appearance_fallback(document: &mut Document) {
     ensure_vector_appearance_landmark_visible(&mut document.root);
 
+    let state = vector_appearance_state(document);
     let Some(appearance) = document.find_first_element_by_id_mut("vector-appearance") else {
         return;
     };
-    if contains_descendant_class(appearance, "oab-appearance-fallback") {
+    if contains_descendant_class(appearance, "vector-menu")
+        || contains_descendant_class(appearance, "oab-appearance-fallback")
+    {
         return;
     }
 
-    appearance.children.push(Node::Element(build_element(
+    appearance
+        .children
+        .extend(build_vector_appearance_fallback(&state));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VectorAppearanceTextSize {
+    Small,
+    Standard,
+    Large,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VectorAppearanceTheme {
+    Automatic,
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VectorAppearanceState {
+    birthday_mode_enabled: bool,
+    text_size: VectorAppearanceTextSize,
+    standard_width: bool,
+    theme: VectorAppearanceTheme,
+}
+
+fn vector_appearance_state(document: &Document) -> VectorAppearanceState {
+    let birthday_mode_enabled = html_has_class(document, "wp25eastereggs-enable-clientpref-1");
+
+    let text_size = if html_has_class(document, "vector-feature-custom-font-size-clientpref-0") {
+        VectorAppearanceTextSize::Small
+    } else if html_has_class(document, "vector-feature-custom-font-size-clientpref-2") {
+        VectorAppearanceTextSize::Large
+    } else {
+        VectorAppearanceTextSize::Standard
+    };
+
+    let standard_width = !html_has_class(document, "vector-feature-limited-width-clientpref-0");
+
+    let theme = if html_has_class(document, "skin-theme-clientpref-night") {
+        VectorAppearanceTheme::Dark
+    } else if html_has_class(document, "skin-theme-clientpref-os") {
+        VectorAppearanceTheme::Automatic
+    } else {
+        VectorAppearanceTheme::Light
+    };
+
+    VectorAppearanceState {
+        birthday_mode_enabled,
+        text_size,
+        standard_width,
+        theme,
+    }
+}
+
+fn html_has_class(document: &Document, class_name: &str) -> bool {
+    document
+        .find_first_element_by_name("html")
+        .is_some_and(|html| html.attributes.has_class(class_name))
+}
+
+fn build_vector_appearance_fallback(state: &VectorAppearanceState) -> Vec<Node> {
+    vec![
+        Node::Element(build_vector_appearance_portlet(
+            "skin-client-prefs-wp25eastereggs-enable",
+            &[
+                "oab-appearance-fallback",
+                "mw-portlet-skin-client-prefs-wp25eastereggs-enable",
+            ],
+            vec![Node::Text("Birthday mode (Baby Globe)".to_owned())],
+            vec![
+                build_radio_control(
+                    "skin-client-pref-wp25eastereggs-enable-group",
+                    "skin-client-pref-wp25eastereggs-enable-value-0",
+                    "0",
+                    "Disabled",
+                    !state.birthday_mode_enabled,
+                ),
+                build_radio_control(
+                    "skin-client-pref-wp25eastereggs-enable-group",
+                    "skin-client-pref-wp25eastereggs-enable-value-1",
+                    "1",
+                    "Enabled",
+                    state.birthday_mode_enabled,
+                ),
+            ],
+            vec![Node::Element(build_element(
+                "span",
+                &[("id", "wp25eastereggs-enable-beta-notice")],
+                vec![Node::Element(build_element(
+                    "a",
+                    &[
+                        (
+                            "href",
+                            "https://wikimediafoundation.org/wikipedia25/wikipedia-mascot/?utm_campaign=wpam&utm_source=wpam&utm_medium=wpamen",
+                        ),
+                        ("target", "_blank"),
+                    ],
+                    vec![Node::Text("Learn more about Birthday mode".to_owned())],
+                ))],
+            ))],
+            Vec::new(),
+        )),
+        Node::Element(build_vector_appearance_portlet(
+            "skin-client-prefs-vector-feature-custom-font-size",
+            &["mw-portlet-skin-client-prefs-vector-feature-custom-font-size"],
+            vec![Node::Text("Text".to_owned())],
+            vec![
+                build_radio_control(
+                    "skin-client-pref-vector-feature-custom-font-size-group",
+                    "skin-client-pref-vector-feature-custom-font-size-value-0",
+                    "0",
+                    "Small",
+                    state.text_size == VectorAppearanceTextSize::Small,
+                ),
+                build_radio_control(
+                    "skin-client-pref-vector-feature-custom-font-size-group",
+                    "skin-client-pref-vector-feature-custom-font-size-value-1",
+                    "1",
+                    "Standard",
+                    state.text_size == VectorAppearanceTextSize::Standard,
+                ),
+                build_radio_control(
+                    "skin-client-pref-vector-feature-custom-font-size-group",
+                    "skin-client-pref-vector-feature-custom-font-size-value-2",
+                    "2",
+                    "Large",
+                    state.text_size == VectorAppearanceTextSize::Large,
+                ),
+            ],
+            Vec::new(),
+            vec![Node::Element(build_element(
+                "span",
+                &[("class", "skin-client-pref-exclusion-notice")],
+                vec![Node::Text(
+                    "This page always uses small font size".to_owned(),
+                )],
+            ))],
+        )),
+        Node::Element(build_vector_appearance_portlet(
+            "skin-client-prefs-vector-feature-limited-width",
+            &["mw-portlet-skin-client-prefs-vector-feature-limited-width"],
+            vec![Node::Text("Width".to_owned())],
+            vec![
+                build_radio_control(
+                    "skin-client-pref-vector-feature-limited-width-group",
+                    "skin-client-pref-vector-feature-limited-width-value-1",
+                    "1",
+                    "Standard",
+                    state.standard_width,
+                ),
+                build_radio_control(
+                    "skin-client-pref-vector-feature-limited-width-group",
+                    "skin-client-pref-vector-feature-limited-width-value-0",
+                    "0",
+                    "Wide",
+                    !state.standard_width,
+                ),
+            ],
+            Vec::new(),
+            vec![Node::Element(build_element(
+                "span",
+                &[("class", "skin-client-pref-exclusion-notice")],
+                vec![Node::Text(
+                    "The content is as wide as possible for your browser window.".to_owned(),
+                )],
+            ))],
+        )),
+        Node::Element(build_vector_appearance_portlet(
+            "skin-client-prefs-skin-theme",
+            &["mw-portlet-skin-client-prefs-skin-theme"],
+            vec![
+                Node::Text("Color ".to_owned()),
+                Node::Element(build_element(
+                    "span",
+                    &[],
+                    vec![Node::Element(build_element(
+                        "span",
+                        &[],
+                        vec![Node::Text("(beta)".to_owned())],
+                    ))],
+                )),
+            ],
+            vec![
+                build_radio_control(
+                    "skin-client-pref-skin-theme-group",
+                    "skin-client-pref-skin-theme-value-os",
+                    "os",
+                    "Automatic",
+                    state.theme == VectorAppearanceTheme::Automatic,
+                ),
+                build_radio_control(
+                    "skin-client-pref-skin-theme-group",
+                    "skin-client-pref-skin-theme-value-day",
+                    "day",
+                    "Light",
+                    state.theme == VectorAppearanceTheme::Light,
+                ),
+                build_radio_control(
+                    "skin-client-pref-skin-theme-group",
+                    "skin-client-pref-skin-theme-value-night",
+                    "night",
+                    "Dark",
+                    state.theme == VectorAppearanceTheme::Dark,
+                ),
+            ],
+            vec![Node::Element(build_element(
+                "span",
+                &[("id", "skin-theme-beta-notice")],
+                Vec::new(),
+            ))],
+            vec![Node::Element(build_element(
+                "span",
+                &[("class", "skin-client-pref-exclusion-notice")],
+                vec![Node::Text("This page is always in light mode.".to_owned())],
+            ))],
+        )),
+    ]
+}
+
+fn build_vector_appearance_portlet(
+    id: &str,
+    extra_classes: &[&str],
+    heading_children: Vec<Node>,
+    radios: Vec<Element>,
+    item_trailing_children: Vec<Node>,
+    content_trailing_children: Vec<Node>,
+) -> Element {
+    let mut classes = vec!["mw-portlet", "vector-menu"];
+    classes.extend_from_slice(extra_classes);
+
+    let mut item_children = vec![Node::Element(build_element(
+        "form",
+        &[],
+        radios.into_iter().map(Node::Element).collect(),
+    ))];
+    item_children.extend(item_trailing_children);
+
+    let mut content_children = vec![Node::Element(build_element(
+        "ul",
+        &[("class", "vector-menu-content-list")],
+        vec![Node::Element(build_element(
+            "li",
+            &[("class", "mw-list-item mw-list-item-js")],
+            vec![Node::Element(build_element("div", &[], item_children))],
+        ))],
+    ))];
+    content_children.extend(content_trailing_children);
+
+    build_element_owned(
         "div",
-        &[("class", "vector-menu-content oab-appearance-fallback")],
+        vec![
+            ("id".to_owned(), id.to_owned()),
+            ("class".to_owned(), classes.join(" ")),
+        ],
         vec![
             Node::Element(build_element(
                 "div",
-                &[("style", "font-size:12px;font-weight:bold;margin-top:8px")],
-                vec![Node::Text("Birthday mode (Baby Globe)".to_owned())],
+                &[("class", "vector-menu-heading")],
+                heading_children,
             )),
             Node::Element(build_element(
                 "div",
-                &[("style", "font-size:12px")],
-                vec![
-                    Node::Element(build_radio_option(
-                        "oab-appearance-birthday",
-                        "disabled",
-                        false,
-                        "Disabled",
-                    )),
-                    Node::Element(build_radio_option(
-                        "oab-appearance-birthday",
-                        "enabled",
-                        true,
-                        "Enabled",
-                    )),
-                ],
-            )),
-            Node::Element(build_element(
-                "div",
-                &[("style", "font-size:12px;margin-bottom:8px")],
-                vec![Node::Element(build_element(
-                    "a",
-                    &[("href", "#")],
-                    vec![Node::Text("Learn more about Birthday mode".to_owned())],
-                ))],
-            )),
-            Node::Element(build_element(
-                "div",
-                &[("style", "font-size:12px;font-weight:bold;margin-top:8px")],
-                vec![Node::Text("Text".to_owned())],
-            )),
-            Node::Element(build_element(
-                "div",
-                &[("style", "font-size:12px")],
-                vec![
-                    Node::Element(build_radio_option(
-                        "oab-appearance-text",
-                        "small",
-                        false,
-                        "Small",
-                    )),
-                    Node::Element(build_radio_option(
-                        "oab-appearance-text",
-                        "standard",
-                        true,
-                        "Standard",
-                    )),
-                    Node::Element(build_radio_option(
-                        "oab-appearance-text",
-                        "large",
-                        false,
-                        "Large",
-                    )),
-                ],
-            )),
-            Node::Element(build_element(
-                "div",
-                &[("style", "font-size:12px;font-weight:bold;margin-top:8px")],
-                vec![Node::Text("Width".to_owned())],
-            )),
-            Node::Element(build_element(
-                "div",
-                &[("style", "font-size:12px")],
-                vec![
-                    Node::Element(build_radio_option(
-                        "oab-appearance-width",
-                        "standard",
-                        true,
-                        "Standard",
-                    )),
-                    Node::Element(build_radio_option(
-                        "oab-appearance-width",
-                        "wide",
-                        false,
-                        "Wide",
-                    )),
-                ],
-            )),
-            Node::Element(build_element(
-                "div",
-                &[("style", "font-size:12px;font-weight:bold;margin-top:8px")],
-                vec![Node::Text("Color (beta)".to_owned())],
-            )),
-            Node::Element(build_element(
-                "div",
-                &[("style", "font-size:12px;margin-bottom:8px")],
-                vec![
-                    Node::Element(build_radio_option(
-                        "oab-appearance-color",
-                        "auto",
-                        true,
-                        "Automatic",
-                    )),
-                    Node::Element(build_radio_option(
-                        "oab-appearance-color",
-                        "light",
-                        false,
-                        "Light",
-                    )),
-                    Node::Element(build_radio_option(
-                        "oab-appearance-color",
-                        "dark",
-                        false,
-                        "Dark",
-                    )),
-                ],
+                &[("class", "vector-menu-content")],
+                content_children,
             )),
         ],
-    )));
+    )
 }
 
-fn build_radio_option(_name: &str, _value: &str, checked: bool, text: &str) -> Element {
-    let marker = if checked { "(o)" } else { "( )" };
+fn build_radio_control(name: &str, id: &str, value: &str, text: &str, checked: bool) -> Element {
+    let mut input_attrs = vec![
+        ("name".to_owned(), name.to_owned()),
+        ("id".to_owned(), id.to_owned()),
+        ("type".to_owned(), "radio".to_owned()),
+        ("value".to_owned(), value.to_owned()),
+        ("data-event-name".to_owned(), id.to_owned()),
+        ("class".to_owned(), "cdx-radio__input".to_owned()),
+    ];
+    if checked {
+        input_attrs.push(("checked".to_owned(), "checked".to_owned()));
+    }
+
     build_element(
         "div",
-        &[("style", "margin-top:4px")],
-        vec![Node::Element(build_element(
-            "label",
-            &[("style", "white-space:nowrap")],
-            vec![Node::Text(format!("{marker} {text}"))],
-        ))],
+        &[("class", "cdx-radio")],
+        vec![
+            Node::Element(build_element_owned("input", input_attrs, Vec::new())),
+            Node::Element(build_element(
+                "span",
+                &[("class", "cdx-radio__icon")],
+                Vec::new(),
+            )),
+            Node::Element(build_element(
+                "label",
+                &[("class", "cdx-label cdx-radio__label"), ("for", id)],
+                vec![Node::Element(build_element(
+                    "span",
+                    &[("class", "cdx-label__label__text")],
+                    vec![Node::Text(text.to_owned())],
+                ))],
+            )),
+        ],
     )
 }
 
 fn build_element(name: &str, attrs: &[(&str, &str)], children: Vec<Node>) -> Element {
+    build_element_owned(
+        name,
+        attrs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect(),
+        children,
+    )
+}
+
+fn build_element_owned(name: &str, attrs: Vec<(String, String)>, children: Vec<Node>) -> Element {
     let mut attributes = crate::dom::Attributes::default();
     for (key, value) in attrs {
-        attributes.insert((*key).to_owned(), (*value).to_owned());
+        attributes.insert(key, value);
     }
     Element {
         name: name.to_owned(),
@@ -640,7 +827,7 @@ mod tests {
     #[test]
     fn injects_vector_appearance_fallback_when_panel_is_empty() {
         let html = r#"
-<html class="skin-vector">
+<html class="skin-vector wp25eastereggs-enable-clientpref-1 vector-feature-custom-font-size-clientpref-1 vector-feature-limited-width-clientpref-1 skin-theme-clientpref-day">
   <body>
     <div id="vector-appearance"><div class="vector-pinnable-header">Appearance</div></div>
   </body>
@@ -651,7 +838,51 @@ mod tests {
         let panel = document
             .find_first_element_by_id("vector-appearance")
             .expect("missing vector appearance panel");
-        assert!(contains_descendant_text(panel, "(o) Standard"));
+        assert!(contains_descendant_class(panel, "oab-appearance-fallback"));
+        assert!(contains_descendant_class(panel, "cdx-radio"));
+        assert!(
+            panel
+                .find_first_element_by_id("skin-client-pref-wp25eastereggs-enable-value-1")
+                .is_some_and(|input| input.attributes.get("checked").is_some())
+        );
+        assert!(
+            panel
+                .find_first_element_by_id(
+                    "skin-client-pref-vector-feature-custom-font-size-value-1"
+                )
+                .is_some_and(|input| input.attributes.get("checked").is_some())
+        );
+        assert!(
+            panel
+                .find_first_element_by_id("skin-client-pref-vector-feature-limited-width-value-1")
+                .is_some_and(|input| input.attributes.get("checked").is_some())
+        );
+        assert!(
+            panel
+                .find_first_element_by_id("skin-client-pref-skin-theme-value-day")
+                .is_some_and(|input| input.attributes.get("checked").is_some())
+        );
+        assert!(!contains_descendant_text(panel, "(o) Standard"));
+    }
+
+    #[test]
+    fn skips_vector_appearance_fallback_when_panel_already_has_content() {
+        let html = r#"
+<html>
+  <body>
+    <div id="vector-appearance">
+      <div class="vector-pinnable-header">Appearance</div>
+      <div class="vector-menu">Existing content</div>
+    </div>
+  </body>
+</html>
+"#;
+        let mut document = crate::html::parse_document(html);
+        execute_inline_scripts(&mut document);
+        let panel = document
+            .find_first_element_by_id("vector-appearance")
+            .expect("missing vector appearance panel");
+        assert!(!contains_descendant_class(panel, "oab-appearance-fallback"));
     }
 
     #[test]
