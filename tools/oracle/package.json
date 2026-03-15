@@ -1,0 +1,12 @@
+{
+  "name": "oab-js-oracle",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "oracle": "node ./oracle.mjs",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  }
+}

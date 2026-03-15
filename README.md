@@ -102,3 +102,10 @@ Render regression tests compare screenshots to per-platform baseline PNGs in `te
 - `OAB_TEST_LINUX_BACKEND` (env, Linux tests): `x11` (default) or `wayland`.
 
 GitHub Actions runs Linux tests on both backends (`x11` and `wayland`) using `ubuntu-latest`; no special runner image is required.
+
+## Optional JS Oracle
+
+Real JavaScript execution for local development is isolated under
+[`tools/oracle/`](./tools/oracle/). It uses Playwright as an external oracle and
+does not change the Rust runtime, Cargo dependency graph, or test harness unless
+you choose to use it locally.
