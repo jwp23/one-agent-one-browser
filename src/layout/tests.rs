@@ -265,6 +265,52 @@ fn hidden_inputs_do_not_take_space_in_flex_layout() {
 }
 
 #[test]
+fn clipped_icon_only_labels_do_not_emit_text_commands() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .icon-only { position: relative; width: 20px; height: 20px; }
+                .icon-only span + span {
+                    display: block;
+                    position: absolute;
+                    clip: rect(1px,1px,1px,1px);
+                    width: 1px;
+                    height: 1px;
+                    margin: -1px;
+                    border: 0;
+                    padding: 0;
+                }
+            </style>
+            <button class="icon-only"><span></span><span>Main menu</span></button>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 80,
+        height_px: 40,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    assert!(
+        !output.display_list.commands.iter().any(|command| {
+            let DisplayCommand::Text(text) = command else {
+                return false;
+            };
+            text.text == "Main" || text.text == "menu" || text.text == "Main menu"
+        }),
+        "fully clipped icon-only labels should not paint visible text"
+    );
+}
+
+#[test]
 fn percentage_width_descendants_do_not_force_flex_item_intrinsic_width() {
     let doc = crate::html::parse_document(
         r#"

@@ -1,5 +1,5 @@
 use super::builder::{MatchedRule, StyleBuilder};
-use super::{ComputedStyle, Display};
+use super::{ComputedStyle, Display, Visibility};
 use crate::css::{CompoundSelector, Stylesheet};
 use crate::dom::{Document, Element, Node};
 use crate::render::Viewport;
@@ -87,6 +87,10 @@ impl StyleComputer {
         builder.apply_inline_style(element);
 
         let mut style = builder.finish();
+        if style.clip_rect.is_some_and(|clip_rect| clip_rect.is_empty()) {
+            // Common visually-hidden patterns use an empty clip rect.
+            style.visibility = Visibility::Hidden;
+        }
         if is_hidden_input(element) {
             style.display = Display::None;
         }
@@ -463,6 +467,32 @@ mod tests {
             .expect("input element exists");
         let style = computer.compute_style(input, &root_style, &[]);
         assert_eq!(style.color, crate::geom::Color::WHITE);
+    }
+
+    #[test]
+    fn selector_matches_not_focus_pseudo_class() {
+        let doc = crate::html::parse_document(r#"<a href="/">home</a>"#);
+        let computer = StyleComputer::from_css("a:not(:focus) { color: #ffffff; }");
+        let root_style = ComputedStyle::root_defaults();
+        let link = doc
+            .find_first_element_by_name("a")
+            .expect("anchor element exists");
+        let style = computer.compute_style(link, &root_style, &[]);
+        assert_eq!(style.color, crate::geom::Color::WHITE);
+    }
+
+    #[test]
+    fn empty_clip_rect_hides_element_paint() {
+        let doc = crate::html::parse_document(
+            "<span style='position:absolute;clip:rect(1px,1px,1px,1px)'>hidden</span>",
+        );
+        let computer = StyleComputer::empty();
+        let root_style = ComputedStyle::root_defaults();
+        let span = doc
+            .find_first_element_by_name("span")
+            .expect("span element exists");
+        let style = computer.compute_style(span, &root_style, &[]);
+        assert_eq!(style.visibility, Visibility::Hidden);
     }
 
     #[test]

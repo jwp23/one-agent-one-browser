@@ -1,7 +1,7 @@
 use super::CustomProperties;
 use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px};
 use super::{
-    AutoEdges, BackgroundImage, BorderStyle, ComputedStyle, CssEdges, CssLength, Display,
+    AutoEdges, BackgroundImage, BorderStyle, ClipRect, ComputedStyle, CssEdges, CssLength, Display,
     FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, Float, FontFamily, LineHeight,
     LinearGradient, Position, TextAlign, TextTransform, Visibility, WhiteSpace, custom_properties,
     declarations, length,
@@ -75,6 +75,7 @@ pub(super) struct StyleBuilder {
     visibility: Option<Cascaded<Visibility>>,
     position: Option<Cascaded<Position>>,
     float: Option<Cascaded<Float>>,
+    clip_rect: Option<Cascaded<Option<ClipRect>>>,
     top_px: Option<Cascaded<Option<CssLength>>>,
     right_px: Option<Cascaded<Option<CssLength>>>,
     bottom_px: Option<Cascaded<Option<CssLength>>>,
@@ -131,6 +132,7 @@ impl StyleBuilder {
             visibility: None,
             position: None,
             float: None,
+            clip_rect: None,
             top_px: None,
             right_px: None,
             bottom_px: None,
@@ -212,6 +214,10 @@ impl StyleBuilder {
             position: self.position.map(|v| v.value).unwrap_or(self.base.position),
             float: self.float.map(|v| v.value).unwrap_or(self.base.float),
             custom_properties: self.custom_properties,
+            clip_rect: self
+                .clip_rect
+                .map(|v| v.value)
+                .unwrap_or(self.base.clip_rect),
             top_px: self.top_px.map(|v| v.value).unwrap_or(self.base.top_px),
             right_px: self.right_px.map(|v| v.value).unwrap_or(self.base.right_px),
             bottom_px: self
@@ -595,6 +601,10 @@ impl StyleBuilder {
 
     pub(super) fn apply_float(&mut self, value: Float, priority: CascadePriority) {
         apply_cascade(&mut self.float, value, priority);
+    }
+
+    pub(super) fn apply_clip_rect(&mut self, value: Option<ClipRect>, priority: CascadePriority) {
+        apply_cascade(&mut self.clip_rect, value, priority);
     }
 
     pub(super) fn apply_top(&mut self, value: Option<CssLength>, priority: CascadePriority) {

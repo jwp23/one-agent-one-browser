@@ -45,6 +45,20 @@ pub enum Position {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClipRect {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+impl ClipRect {
+    pub fn is_empty(self) -> bool {
+        self.right <= self.left || self.bottom <= self.top
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Float {
     None,
     Left,
@@ -153,6 +167,7 @@ pub struct ComputedStyle {
     pub position: Position,
     pub float: Float,
     pub custom_properties: CustomProperties,
+    pub clip_rect: Option<ClipRect>,
     pub top_px: Option<CssLength>,
     pub right_px: Option<CssLength>,
     pub bottom_px: Option<CssLength>,
@@ -205,6 +220,7 @@ impl ComputedStyle {
             position: Position::Static,
             float: Float::None,
             custom_properties: CustomProperties::default(),
+            clip_rect: None,
             top_px: None,
             right_px: None,
             bottom_px: None,
@@ -257,6 +273,7 @@ impl ComputedStyle {
             position: Position::Static,
             float: Float::None,
             custom_properties: parent.custom_properties.clone(),
+            clip_rect: None,
             top_px: None,
             right_px: None,
             bottom_px: None,

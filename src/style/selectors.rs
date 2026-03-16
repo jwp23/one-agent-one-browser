@@ -167,6 +167,7 @@ fn pseudo_matches(pseudo: &PseudoClass, element: &Element, ancestors: &[&Element
         PseudoClass::Link => element.name == "a" && element.attributes.get("href").is_some(),
         PseudoClass::Visited => false,
         PseudoClass::Hover => false,
+        PseudoClass::Focus => false,
         PseudoClass::Root => element.name == "html",
         PseudoClass::Checked => element.attributes.get("checked").is_some(),
         PseudoClass::NthChild(pattern) => nth_child_matches(element, ancestors, *pattern),

@@ -5,7 +5,7 @@ use super::parse::{
     parse_css_font_family, parse_css_length_px,
 };
 use super::{
-    AutoEdges, BorderStyle, CascadePriority, CssEdges, CssLength, Display, FlexAlignItems,
+    AutoEdges, BorderStyle, CascadePriority, ClipRect, CssEdges, CssLength, Display, FlexAlignItems,
     FlexDirection, FlexJustifyContent, FlexWrap, Float, LetterSpacing, Position, StyleBuilder,
     TextAlign, TextTransform, Visibility, WhiteSpace,
 };
@@ -69,6 +69,17 @@ pub(super) fn apply_declaration(
             };
             if let Some(float) = float {
                 builder.apply_float(float, priority);
+            }
+        }
+        "clip" => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("auto")
+                || value.eq_ignore_ascii_case("unset")
+                || value.eq_ignore_ascii_case("initial")
+            {
+                builder.apply_clip_rect(None, priority);
+            } else if let Some(rect) = parse_clip_rect(builder, value) {
+                builder.apply_clip_rect(Some(rect), priority);
             }
         }
         "top" => {
@@ -665,4 +676,30 @@ fn parse_em_factor(value: &str) -> Option<f32> {
     let value = value.trim();
     let number = value.strip_suffix("em")?;
     number.trim().parse().ok()
+}
+
+fn parse_clip_rect(builder: &StyleBuilder, value: &str) -> Option<ClipRect> {
+    let inner = value
+        .trim()
+        .strip_prefix("rect(")?
+        .strip_suffix(')')?
+        .trim();
+    let mut parts: Vec<&str> = inner
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() != 4 {
+        parts = inner.split_whitespace().collect();
+    }
+    if parts.len() != 4 {
+        return None;
+    }
+
+    Some(ClipRect {
+        top: builder.parse_css_length_px(parts[0])?,
+        right: builder.parse_css_length_px(parts[1])?,
+        bottom: builder.parse_css_length_px(parts[2])?,
+        left: builder.parse_css_length_px(parts[3])?,
+    })
 }
