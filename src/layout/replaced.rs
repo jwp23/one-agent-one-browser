@@ -72,6 +72,10 @@ impl LayoutEngine<'_> {
             .trim()
             .to_ascii_lowercase();
 
+        if input_type == "hidden" {
+            return Ok(());
+        }
+
         let (text, center_text, is_placeholder) = match input_type.as_str() {
             "submit" | "button" | "reset" => {
                 let mut label = element.attributes.get("value").unwrap_or("").trim();

@@ -1,5 +1,10 @@
 use crate::geom::Color;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BackgroundImage {
+    pub reference: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GradientDirection {
     TopToBottom,
@@ -59,6 +64,49 @@ pub(super) fn parse_css_linear_gradient(value: &str) -> Option<LinearGradient> {
         start: colors[0],
         end: *colors.last().expect("colors len >= 2"),
     })
+}
+
+pub(super) fn parse_css_background_image_url(value: &str) -> Option<BackgroundImage> {
+    let value = value.trim();
+    let start = value.find("url(")?;
+    let mut depth = 0usize;
+    let mut in_quote: Option<char> = None;
+    let rest = &value[start + 4..];
+    let mut end = None;
+
+    for (idx, ch) in rest.char_indices() {
+        match ch {
+            '"' | '\'' => {
+                if in_quote == Some(ch) {
+                    in_quote = None;
+                } else if in_quote.is_none() {
+                    in_quote = Some(ch);
+                }
+            }
+            '(' if in_quote.is_none() => depth = depth.saturating_add(1),
+            ')' if in_quote.is_none() => {
+                if depth == 0 {
+                    end = Some(idx);
+                    break;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
+    let end = end?;
+    let reference = rest[..end]
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim()
+        .to_owned();
+    if reference.is_empty() {
+        return None;
+    }
+
+    Some(BackgroundImage { reference })
 }
 
 fn parse_stop_color(stop: &str) -> Option<Color> {

@@ -1,4 +1,5 @@
 use crate::debug;
+use crate::data_url;
 use crate::net;
 use crate::url::Url;
 use std::cell::RefCell;
@@ -138,6 +139,28 @@ impl ResourceManager {
             Err(err) => Err(err),
         }
     }
+
+    fn cache_data(&self, url: String) -> Result<Option<Arc<Vec<u8>>>, String> {
+        let mut state = self.state.borrow_mut();
+        let key = ResolvedReference::Data(url.clone());
+
+        if let Some(bytes) = state.cache_ok.get(&key) {
+            return Ok(Some(Arc::clone(bytes)));
+        }
+        if state.cache_fail.contains(&key) {
+            return Ok(None);
+        }
+
+        let bytes = data_url::decode_bytes(&url)?;
+        if !crate::image::looks_like_supported_image(&bytes) {
+            state.cache_fail.insert(key);
+            return Ok(None);
+        }
+
+        let bytes = Arc::new(bytes);
+        state.cache_ok.insert(key, Arc::clone(&bytes));
+        Ok(Some(bytes))
+    }
 }
 
 impl ResourceLoader for ResourceManager {
@@ -149,6 +172,7 @@ impl ResourceLoader for ResourceManager {
         match resolved {
             ResolvedReference::File(path) => Ok(self.cache_file(path)),
             ResolvedReference::Url(url) => self.cache_url(url),
+            ResolvedReference::Data(url) => self.cache_data(url),
         }
     }
 }
@@ -194,6 +218,7 @@ impl ResourceState {
                             let url = match &key {
                                 ResolvedReference::Url(url) => debug::shorten(url, 64),
                                 ResolvedReference::File(_) => debug::shorten("", 64),
+                                ResolvedReference::Data(_) => debug::shorten("data:", 64),
                             };
                             debug::log(
                                 debug::Target::Res,
@@ -212,6 +237,7 @@ impl ResourceState {
                         let url = match &key {
                             ResolvedReference::Url(url) => debug::shorten(url, 64),
                             ResolvedReference::File(_) => debug::shorten("", 64),
+                            ResolvedReference::Data(_) => debug::shorten("data:", 64),
                         };
                         let err = debug::shorten(&err, 48);
                         debug::log(
@@ -233,12 +259,17 @@ impl ResourceState {
 enum ResolvedReference {
     Url(String),
     File(PathBuf),
+    Data(String),
 }
 
 fn resolve_reference(base: &ResourceBase, reference: &str) -> Option<ResolvedReference> {
     let reference = reference.trim();
     if reference.is_empty() {
         return None;
+    }
+
+    if reference.starts_with("data:") {
+        return Some(ResolvedReference::Data(reference.to_owned()));
     }
 
     if reference.starts_with("http://") || reference.starts_with("https://") {

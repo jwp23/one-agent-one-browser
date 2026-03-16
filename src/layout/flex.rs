@@ -1132,7 +1132,7 @@ fn layout_item_box<'doc>(
         return Ok(0);
     }
 
-    let mut background_index = None;
+    let mut background_indices = Vec::new();
     let mut paint = paint && item.style.visibility == Visibility::Visible;
     if paint && item.style.opacity == 0 {
         paint = false;
@@ -1147,7 +1147,11 @@ fn layout_item_box<'doc>(
     }
 
     if paint {
-        background_index = engine.push_background(border_box, &item.style, 0);
+        let element = match item.node {
+            FlexNode::Element(el) => Some(el),
+            FlexNode::Text(_) => None,
+        };
+        background_indices = engine.push_background(element, border_box, &item.style, 0)?;
     }
 
     let border = item.style.border_width;
@@ -1253,8 +1257,8 @@ fn layout_item_box<'doc>(
         border_height = border_height.max(min_height.max(0));
     }
 
-    if let Some(index) = background_index {
-        engine.set_background_height(index, border_height);
+    if !background_indices.is_empty() {
+        engine.set_background_height(&background_indices, border_height);
     }
 
     if paint {

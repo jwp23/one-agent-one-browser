@@ -10,7 +10,7 @@ mod selectors;
 use crate::geom::{Color, Edges};
 use std::borrow::Cow;
 
-pub use background::{GradientDirection, LinearGradient};
+pub use background::{BackgroundImage, GradientDirection, LinearGradient};
 pub use computer::StyleComputer;
 pub use custom_properties::CustomProperties;
 pub use length::CssLength;
@@ -161,6 +161,8 @@ pub struct ComputedStyle {
     pub color: Color,
     pub background_color: Option<Color>,
     pub background_gradient: Option<LinearGradient>,
+    pub background_image: Option<BackgroundImage>,
+    pub mask_image: Option<BackgroundImage>,
     pub font_family: FontFamily,
     pub font_size_px: i32,
     pub letter_spacing_px: i32,
@@ -211,6 +213,8 @@ impl ComputedStyle {
             color: Color::BLACK,
             background_color: None,
             background_gradient: None,
+            background_image: None,
+            mask_image: None,
             font_family: FontFamily::SansSerif,
             font_size_px: 16,
             letter_spacing_px: 0,
@@ -261,6 +265,8 @@ impl ComputedStyle {
             color: parent.color,
             background_color: None,
             background_gradient: None,
+            background_image: None,
+            mask_image: None,
             font_family: parent.font_family,
             font_size_px: parent.font_size_px,
             letter_spacing_px: parent.letter_spacing_px,

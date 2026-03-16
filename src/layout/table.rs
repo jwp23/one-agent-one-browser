@@ -153,10 +153,10 @@ pub(super) fn layout_table<'doc>(
             };
             let content = border_box.inset(padding);
 
-            let background_index = if cell_paint {
-                engine.push_background(border_box, &cell_style, 0)
+            let background_indices = if cell_paint {
+                engine.push_background(Some(cell.element), border_box, &cell_style, 0)?
             } else {
-                None
+                Vec::new()
             };
 
             ancestors.push(cell.element);
@@ -176,8 +176,8 @@ pub(super) fn layout_table<'doc>(
                 cell_height = cell_height.max(min_height);
             }
 
-            if let Some(index) = background_index {
-                engine.set_background_height(index, cell_height);
+            if !background_indices.is_empty() {
+                engine.set_background_height(&background_indices, cell_height);
             }
 
             if needs_opacity_group {

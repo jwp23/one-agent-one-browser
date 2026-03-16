@@ -11,8 +11,8 @@ use crate::dom::{Document, Element, Node};
 use crate::geom::{Edges, Rect};
 use crate::image::Argb32Image;
 use crate::render::{
-    DisplayCommand, DisplayList, DrawLinearGradientRect, DrawRect, DrawRoundedRect,
-    DrawRoundedRectBorder, LinkHitRegion, TextMeasurer, TextStyle, Viewport,
+    DisplayCommand, DisplayList, DrawImage, DrawLinearGradientRect, DrawRect, DrawRoundedRect,
+    DrawRoundedRectBorder, DrawSvg, LinkHitRegion, TextMeasurer, TextStyle, Viewport,
 };
 use crate::resources::ResourceLoader;
 use crate::style::{ComputedStyle, Display, Float, Position, StyleComputer, Visibility};
@@ -309,10 +309,10 @@ impl LayoutEngine<'_> {
             .map(|flow| constrain_flow_content_box(content_box, flow))
             .unwrap_or(content_box);
 
-        let background_index = if paint {
-            self.push_background(border_box, style, 0)
+        let background_indices = if paint {
+            self.push_background(Some(element), border_box, style, 0)?
         } else {
-            None
+            Vec::new()
         };
 
         let content_height = if let Some(size) = replaced_size {
@@ -374,8 +374,8 @@ impl LayoutEngine<'_> {
             border_height = border_height.max(min_height);
         }
 
-        if let Some(index) = background_index {
-            self.set_background_height(index, border_height);
+        if !background_indices.is_empty() {
+            self.set_background_height(&background_indices, border_height);
         }
 
         if paint {
@@ -536,10 +536,10 @@ impl LayoutEngine<'_> {
         };
         let content_box = border_box.inset(add_edges(border, padding));
 
-        let background_index = if paint {
-            self.push_background(border_box, style, 0)
+        let background_indices = if paint {
+            self.push_background(Some(element), border_box, style, 0)?
         } else {
-            None
+            Vec::new()
         };
 
         let content_height = if let Some(size) = replaced_size {
@@ -601,8 +601,8 @@ impl LayoutEngine<'_> {
             border_height = border_height.max(min_height);
         }
 
-        if let Some(index) = background_index {
-            self.set_background_height(index, border_height);
+        if !background_indices.is_empty() {
+            self.set_background_height(&background_indices, border_height);
         }
 
         if paint {
@@ -970,16 +970,19 @@ impl LayoutEngine<'_> {
 
     fn push_background(
         &mut self,
+        element: Option<&Element>,
         border_box: Rect,
         style: &ComputedStyle,
         height_px: i32,
-    ) -> Option<usize> {
+    ) -> Result<Vec<usize>, String> {
         if border_box.width <= 0 {
-            return None;
+            return Ok(Vec::new());
         }
 
+        let mut indexes = Vec::new();
+
         if let Some(gradient) = style.background_gradient {
-            let index = self.list.commands.len();
+            indexes.push(self.list.commands.len());
             self.list
                 .commands
                 .push(DisplayCommand::LinearGradientRect(DrawLinearGradientRect {
@@ -991,49 +994,111 @@ impl LayoutEngine<'_> {
                     start_color: gradient.start,
                     end_color: gradient.end,
                 }));
-            return Some(index);
         }
 
-        let Some(color) = style.background_color else {
-            return None;
-        };
+        let empty_element_mask = element
+            .filter(|element| background_image_is_empty_element(element))
+            .and_then(|_| style.mask_image.as_ref());
 
-        let index = self.list.commands.len();
-        if style.border_radius_px > 0 {
-            self.list
-                .commands
-                .push(DisplayCommand::RoundedRect(DrawRoundedRect {
+        if empty_element_mask.is_none() && let Some(color) = style.background_color {
+            indexes.push(self.list.commands.len());
+            if style.border_radius_px > 0 {
+                self.list
+                    .commands
+                    .push(DisplayCommand::RoundedRect(DrawRoundedRect {
+                        x_px: border_box.x,
+                        y_px: border_box.y,
+                        width_px: border_box.width,
+                        height_px,
+                        radius_px: style.border_radius_px,
+                        color,
+                    }));
+            } else {
+                self.list.commands.push(DisplayCommand::Rect(DrawRect {
                     x_px: border_box.x,
                     y_px: border_box.y,
                     width_px: border_box.width,
                     height_px,
-                    radius_px: style.border_radius_px,
                     color,
                 }));
-        } else {
-            self.list.commands.push(DisplayCommand::Rect(DrawRect {
-                x_px: border_box.x,
-                y_px: border_box.y,
-                width_px: border_box.width,
-                height_px,
-                color,
-            }));
+            }
         }
-        Some(index)
+
+        if let Some(mask_image) = empty_element_mask {
+            if let Some(image) = self.load_image(&mask_image.reference)? {
+                indexes.push(self.list.commands.len());
+                self.list.commands.push(DisplayCommand::Image(DrawImage {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px,
+                    opacity: 255,
+                    image,
+                }));
+            } else if let Some(svg_xml) = self.load_svg(&mask_image.reference)? {
+                indexes.push(self.list.commands.len());
+                self.list.commands.push(DisplayCommand::Svg(DrawSvg {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px,
+                    opacity: 255,
+                    svg_xml,
+                }));
+            }
+        } else if let (Some(element), Some(background_image)) =
+            (element, style.background_image.as_ref())
+            && background_image_is_empty_element(element)
+        {
+            if let Some(image) = self.load_image(&background_image.reference)? {
+                indexes.push(self.list.commands.len());
+                self.list.commands.push(DisplayCommand::Image(DrawImage {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px,
+                    opacity: 255,
+                    image,
+                }));
+            } else if let Some(svg_xml) = self.load_svg(&background_image.reference)? {
+                indexes.push(self.list.commands.len());
+                self.list.commands.push(DisplayCommand::Svg(DrawSvg {
+                    x_px: border_box.x,
+                    y_px: border_box.y,
+                    width_px: border_box.width,
+                    height_px,
+                    opacity: 255,
+                    svg_xml,
+                }));
+            }
+        }
+
+        Ok(indexes)
     }
 
-    fn set_background_height(&mut self, index: usize, height_px: i32) {
-        let Some(cmd) = self.list.commands.get_mut(index) else {
-            return;
-        };
+    fn set_background_height(&mut self, indexes: &[usize], height_px: i32) {
+        for index in indexes {
+            let Some(cmd) = self.list.commands.get_mut(*index) else {
+                continue;
+            };
 
-        match cmd {
-            DisplayCommand::Rect(rect) => rect.height_px = height_px,
-            DisplayCommand::RoundedRect(rect) => rect.height_px = height_px,
-            DisplayCommand::LinearGradientRect(rect) => rect.height_px = height_px,
-            _ => {}
+            match cmd {
+                DisplayCommand::Rect(rect) => rect.height_px = height_px,
+                DisplayCommand::RoundedRect(rect) => rect.height_px = height_px,
+                DisplayCommand::LinearGradientRect(rect) => rect.height_px = height_px,
+                DisplayCommand::Image(image) => image.height_px = height_px,
+                DisplayCommand::Svg(svg) => svg.height_px = height_px,
+                _ => {}
+            }
         }
     }
+}
+
+fn background_image_is_empty_element(element: &Element) -> bool {
+    element.children.iter().all(|child| match child {
+        Node::Text(text) => text.trim().is_empty(),
+        Node::Element(_) => false,
+    })
 }
 
 #[cfg(test)]

@@ -113,6 +113,26 @@ pub(super) fn parse_css_length_px_f32_with_viewport(
         return Some(0.0);
     }
 
+    if let Some(args) = parse_css_function_args(value, "calc") {
+        return parse_css_calc_length_px_f32(args, viewport_width_px, viewport_height_px);
+    }
+    if let Some(args) = parse_css_function_args(value, "max") {
+        return split_top_level_commas(args)
+            .into_iter()
+            .filter_map(|part| {
+                parse_css_length_px_f32_with_viewport(part, viewport_width_px, viewport_height_px)
+            })
+            .reduce(f32::max);
+    }
+    if let Some(args) = parse_css_function_args(value, "min") {
+        return split_top_level_commas(args)
+            .into_iter()
+            .filter_map(|part| {
+                parse_css_length_px_f32_with_viewport(part, viewport_width_px, viewport_height_px)
+            })
+            .reduce(f32::min);
+    }
+
     let mut end = 0usize;
     for (idx, ch) in value.char_indices() {
         if !(ch.is_ascii_digit() || ch == '.' || ch == '-') {
@@ -149,6 +169,98 @@ pub(super) fn parse_css_length_px_with_viewport(
 ) -> Option<i32> {
     parse_css_length_px_f32_with_viewport(value, viewport_width_px, viewport_height_px)
         .map(|px| px.round() as i32)
+}
+
+fn parse_css_function_args<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+    let value = value.trim();
+    let open = value.find('(')?;
+    if !value[..open].trim().eq_ignore_ascii_case(name) || !value.ends_with(')') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    for (idx, ch) in value.char_indices() {
+        match ch {
+            '(' => depth = depth.saturating_add(1),
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && idx + ch.len_utf8() != value.len() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+
+    Some(value[open + 1..value.len().saturating_sub(1)].trim())
+}
+
+fn parse_css_calc_length_px_f32(
+    value: &str,
+    viewport_width_px: Option<i32>,
+    viewport_height_px: Option<i32>,
+) -> Option<f32> {
+    let mut total = 0.0f32;
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut op = '+';
+
+    for (idx, ch) in value.char_indices() {
+        match ch {
+            '(' => depth = depth.saturating_add(1),
+            ')' => depth = depth.saturating_sub(1),
+            '+' | '-' if depth == 0 && idx > start => {
+                let term = value[start..idx].trim();
+                let amount =
+                    parse_css_length_px_f32_with_viewport(term, viewport_width_px, viewport_height_px)?;
+                if op == '-' {
+                    total -= amount;
+                } else {
+                    total += amount;
+                }
+                op = ch;
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    let term = value[start..].trim();
+    if term.is_empty() {
+        return None;
+    }
+    let amount =
+        parse_css_length_px_f32_with_viewport(term, viewport_width_px, viewport_height_px)?;
+    if op == '-' {
+        total -= amount;
+    } else {
+        total += amount;
+    }
+    Some(total)
+}
+
+fn split_top_level_commas(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '(' => depth = depth.saturating_add(1),
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(input[start..idx].trim());
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    parts.push(input[start..].trim());
+    parts
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -342,4 +454,22 @@ pub(super) fn parse_html_length_px(value: &str) -> Option<i32> {
     }
 
     parse_css_length_px(value).or_else(|| value.parse::<i32>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_css_length_px;
+
+    #[test]
+    fn parses_calc_lengths() {
+        assert_eq!(parse_css_length_px("calc(1rem + 4px)"), Some(20));
+        assert_eq!(parse_css_length_px("calc(20px - 3px)"), Some(17));
+    }
+
+    #[test]
+    fn parses_min_and_max_lengths() {
+        assert_eq!(parse_css_length_px("max(12px, 1rem)"), Some(16));
+        assert_eq!(parse_css_length_px("min(12px, 1rem)"), Some(12));
+        assert_eq!(parse_css_length_px("max(calc(1rem + 4px), 10px)"), Some(20));
+    }
 }

@@ -127,15 +127,40 @@ pub(super) fn apply_declaration(
                 builder.apply_background_color(None, priority);
             }
         }
+        "background-image" => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("none") {
+                builder.apply_background_image(None, priority);
+            } else if let Some(image) = super::background::parse_css_background_image_url(value) {
+                builder.apply_background_image(Some(image), priority);
+            }
+        }
+        "-webkit-mask-image" | "mask-image" => {
+            let value = value.trim();
+            if value.eq_ignore_ascii_case("none") {
+                builder.apply_mask_image(None, priority);
+            } else if let Some(image) = super::background::parse_css_background_image_url(value) {
+                builder.apply_mask_image(Some(image), priority);
+            }
+        }
         "background" => {
             let value = value.trim();
-            if let Some(gradient) = super::background::parse_css_linear_gradient(value) {
+            let image = super::background::parse_css_background_image_url(value);
+            let gradient = super::background::parse_css_linear_gradient(value);
+            let color = parse_css_color(value);
+            let is_transparent = value.eq_ignore_ascii_case("transparent");
+            let is_none = value.eq_ignore_ascii_case("none");
+            builder.apply_background_image(image, priority);
+            if let Some(gradient) = gradient {
                 builder.apply_background_gradient(Some(gradient), priority);
                 builder.apply_background_color(None, priority);
-            } else if let Some(color) = parse_css_color(value) {
+            } else if let Some(color) = color {
                 builder.apply_background_color(Some(color), priority);
                 builder.apply_background_gradient(None, priority);
-            } else if value.eq_ignore_ascii_case("transparent") {
+            } else if is_transparent {
+                builder.apply_background_color(None, priority);
+                builder.apply_background_gradient(None, priority);
+            } else if is_none {
                 builder.apply_background_color(None, priority);
                 builder.apply_background_gradient(None, priority);
             }

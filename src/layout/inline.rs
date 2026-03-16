@@ -784,11 +784,12 @@ fn layout_tokens<'doc>(
                     }
 
                     if element_paint {
-                        let _ = engine.push_background(
+                        engine.push_background(
+                            Some(element_box.element),
                             border_box,
                             &element_box.style,
                             border_box.height,
-                        );
+                        )?;
 
                         engine.paint_border(border_box, &element_box.style);
 

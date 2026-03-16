@@ -1,10 +1,10 @@
 use super::CustomProperties;
 use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px};
 use super::{
-    AutoEdges, BorderStyle, ComputedStyle, CssEdges, CssLength, Display, FlexAlignItems,
-    FlexDirection, FlexJustifyContent, FlexWrap, Float, FontFamily, LineHeight, LinearGradient,
-    Position, TextAlign, TextTransform, Visibility, WhiteSpace, custom_properties, declarations,
-    length,
+    AutoEdges, BackgroundImage, BorderStyle, ComputedStyle, CssEdges, CssLength, Display,
+    FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, Float, FontFamily, LineHeight,
+    LinearGradient, Position, TextAlign, TextTransform, Visibility, WhiteSpace,
+    custom_properties, declarations, length,
 };
 use crate::css::{Rule, Specificity};
 use crate::dom::Element;
@@ -82,6 +82,8 @@ pub(super) struct StyleBuilder {
     color: Option<Cascaded<Color>>,
     background_color: Option<Cascaded<Option<Color>>>,
     background_gradient: Option<Cascaded<Option<LinearGradient>>>,
+    background_image: Option<Cascaded<Option<BackgroundImage>>>,
+    mask_image: Option<Cascaded<Option<BackgroundImage>>>,
     font_family: Option<Cascaded<FontFamily>>,
     font_size_px: Option<Cascaded<i32>>,
     letter_spacing: Option<Cascaded<LetterSpacing>>,
@@ -136,6 +138,8 @@ impl StyleBuilder {
             color: None,
             background_color: None,
             background_gradient: None,
+            background_image: None,
+            mask_image: None,
             font_family: None,
             font_size_px: None,
             letter_spacing: None,
@@ -224,6 +228,14 @@ impl StyleBuilder {
                 .background_gradient
                 .map(|v| v.value)
                 .unwrap_or(self.base.background_gradient),
+            background_image: self
+                .background_image
+                .map(|v| v.value)
+                .unwrap_or_else(|| self.base.background_image.clone()),
+            mask_image: self
+                .mask_image
+                .map(|v| v.value)
+                .unwrap_or_else(|| self.base.mask_image.clone()),
             font_family: self
                 .font_family
                 .map(|v| v.value)
@@ -609,6 +621,22 @@ impl StyleBuilder {
         priority: CascadePriority,
     ) {
         apply_cascade(&mut self.background_gradient, value, priority);
+    }
+
+    pub(super) fn apply_background_image(
+        &mut self,
+        value: Option<BackgroundImage>,
+        priority: CascadePriority,
+    ) {
+        apply_cascade(&mut self.background_image, value, priority);
+    }
+
+    pub(super) fn apply_mask_image(
+        &mut self,
+        value: Option<BackgroundImage>,
+        priority: CascadePriority,
+    ) {
+        apply_cascade(&mut self.mask_image, value, priority);
     }
 
     pub(super) fn apply_font_family(&mut self, value: FontFamily, priority: CascadePriority) {
