@@ -18,10 +18,9 @@ pub(super) fn measure_auto_table_width<'doc>(
         .and_then(parse_i32)
         .unwrap_or(0)
         .max(0);
-    let (col_widths, _) =
-        compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
-    let caption_width = measure_caption_min_width(engine, table, table_style, ancestors)?;
-    Ok(sum_table_width(&col_widths, cellspacing)
+    let widths = compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
+    let caption_width = measure_caption_max_width(engine, table, table_style, ancestors)?;
+    Ok(sum_table_width(&widths.max_widths, cellspacing)
         .max(caption_width)
         .min(available_width.max(0)))
 }
@@ -50,13 +49,27 @@ pub(super) fn layout_table<'doc>(
     let rows = collect_table_rows(table);
 
     let grid = build_grid(rows);
-    let (mut col_widths, fixed) =
-        compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
+    let widths = compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
+    let mut col_widths = widths.min_widths.clone();
 
-    let total_min = sum_table_width(&col_widths, cellspacing);
-    let extra = content_box.width.saturating_sub(total_min).max(0);
+    let total_min = sum_table_width(&widths.min_widths, cellspacing);
+    let total_max = sum_table_width(&widths.max_widths, cellspacing);
+    if content_box.width >= total_max {
+        col_widths = widths.max_widths.clone();
+    } else if content_box.width > total_min {
+        expand_columns_toward_max(
+            &mut col_widths,
+            &widths.max_widths,
+            content_box.width.saturating_sub(total_min),
+        );
+    }
+
+    let extra = content_box
+        .width
+        .saturating_sub(sum_table_width(&col_widths, cellspacing))
+        .max(0);
     if extra > 0 {
-        if let Some(idx) = best_extra_column(&col_widths, &fixed) {
+        if let Some(idx) = best_extra_column(&col_widths, &widths.fixed) {
             col_widths[idx] = col_widths[idx].saturating_add(extra);
         }
     }
@@ -137,6 +150,7 @@ pub(super) fn layout_table<'doc>(
             let span_width =
                 cell_span_width(&col_widths, cell.col_index, cell.colspan, cellspacing);
 
+            let border = cell_style.border_width;
             let cell_padding = Edges {
                 top: cellpadding,
                 right: cellpadding,
@@ -151,7 +165,7 @@ pub(super) fn layout_table<'doc>(
                 width: span_width,
                 height: 0,
             };
-            let content = border_box.inset(padding);
+            let content = border_box.inset(add_edges(border, padding));
 
             let background_indices = if cell_paint {
                 engine.push_background(Some(cell.element), border_box, &cell_style, 0)?
@@ -168,16 +182,29 @@ pub(super) fn layout_table<'doc>(
                 cell_paint,
             )?;
             ancestors.pop();
-            let mut cell_height = padding
+            let mut cell_height = border
                 .top
+                .saturating_add(padding.top)
                 .saturating_add(content_height)
                 .saturating_add(padding.bottom);
+            cell_height = cell_height.saturating_add(border.bottom);
             if let Some(min_height) = cell_style.height_px {
                 cell_height = cell_height.max(min_height);
             }
 
             if !background_indices.is_empty() {
                 engine.set_background_height(&background_indices, cell_height);
+            }
+            if cell_paint {
+                engine.paint_border(
+                    Rect {
+                        x: border_box.x,
+                        y: border_box.y,
+                        width: border_box.width,
+                        height: cell_height,
+                    },
+                    &cell_style,
+                );
             }
 
             if needs_opacity_group {
@@ -201,13 +228,19 @@ pub(super) fn layout_table<'doc>(
     })
 }
 
+struct IntrinsicColumnWidths {
+    min_widths: Vec<i32>,
+    max_widths: Vec<i32>,
+    fixed: Vec<bool>,
+}
+
 fn compute_intrinsic_column_widths<'doc>(
     engine: &LayoutEngine<'_>,
     table: &'doc Element,
     table_style: &ComputedStyle,
     ancestors: &mut Vec<&'doc Element>,
     cellspacing: i32,
-) -> Result<(Vec<i32>, Vec<bool>), String> {
+) -> Result<IntrinsicColumnWidths, String> {
     let cellpadding = table
         .attributes
         .get("cellpadding")
@@ -216,7 +249,8 @@ fn compute_intrinsic_column_widths<'doc>(
         .max(0);
     let rows = collect_table_rows(table);
     let grid = build_grid(rows);
-    let mut col_widths = vec![0i32; grid.columns];
+    let mut min_widths = vec![0i32; grid.columns];
+    let mut max_widths = vec![0i32; grid.columns];
     let mut fixed = vec![false; grid.columns];
 
     for row in &grid.rows {
@@ -228,28 +262,57 @@ fn compute_intrinsic_column_widths<'doc>(
                 engine.viewport.width_px,
                 engine.viewport.height_px,
             );
-            let min_width =
-                measure_cell_min_width(engine, cell.element, &cell_style, ancestors, cellpadding)?;
-            let target_width = cell_style
-                .width_px
-                .map(|width| width.resolve_px(0))
-                .unwrap_or(min_width);
+            let (min_width, max_width) =
+                measure_cell_intrinsic_widths(engine, cell.element, &cell_style, ancestors, cellpadding)?;
+            let explicit_width = cell_style.width_px.map(|width| width.resolve_px(0));
+            let min_target = explicit_width.map_or(min_width, |width| min_width.max(width));
+            let max_target = explicit_width.map_or(max_width, |width| max_width.max(width));
 
             apply_cell_target_width(
-                &mut col_widths,
+                &mut min_widths,
+                cell,
+                min_target,
+                cellspacing,
+            );
+            apply_cell_target_width_with_fixed(
+                &mut max_widths,
                 &mut fixed,
                 cell,
-                target_width,
+                max_target,
                 cellspacing,
-                cell_style.width_px.is_some() || cell_style.text_align == TextAlign::Right,
+                explicit_width.is_some() || cell_style.text_align == TextAlign::Right,
             );
         }
     }
 
-    Ok((col_widths, fixed))
+    Ok(IntrinsicColumnWidths {
+        min_widths,
+        max_widths,
+        fixed,
+    })
 }
 
 fn apply_cell_target_width(
+    col_widths: &mut [i32],
+    cell: &GridCell<'_>,
+    target_width: i32,
+    cellspacing: i32,
+) {
+    if cell.colspan == 1 {
+        if let Some(width) = col_widths.get_mut(cell.col_index) {
+            *width = (*width).max(target_width);
+        }
+        return;
+    }
+
+    let current_width = cell_span_width(col_widths, cell.col_index, cell.colspan, cellspacing);
+    let deficit = target_width.saturating_sub(current_width);
+    if deficit > 0 {
+        distribute_span_extra(col_widths, cell.col_index, cell.colspan, deficit);
+    }
+}
+
+fn apply_cell_target_width_with_fixed(
     col_widths: &mut [i32],
     fixed: &mut [bool],
     cell: &GridCell<'_>,
@@ -280,6 +343,52 @@ fn apply_cell_target_width(
                 *slot = true;
             }
         }
+    }
+}
+
+fn expand_columns_toward_max(col_widths: &mut [i32], max_widths: &[i32], extra: i32) {
+    if extra <= 0 {
+        return;
+    }
+
+    let flexes: Vec<i32> = col_widths
+        .iter()
+        .zip(max_widths.iter())
+        .map(|(current, max)| max.saturating_sub(*current).max(0))
+        .collect();
+    let total_flex: i32 = flexes.iter().sum();
+    if total_flex <= 0 {
+        return;
+    }
+
+    let mut distributed = 0i32;
+    let mut remainders = Vec::new();
+    for (idx, flex) in flexes.iter().copied().enumerate() {
+        if flex <= 0 {
+            continue;
+        }
+        let scaled = i64::from(extra) * i64::from(flex);
+        let bump = (scaled / i64::from(total_flex)) as i32;
+        let max_bump = max_widths[idx].saturating_sub(col_widths[idx]).max(0);
+        let applied = bump.min(max_bump);
+        col_widths[idx] = col_widths[idx].saturating_add(applied);
+        distributed = distributed.saturating_add(applied);
+        remainders.push((idx, scaled % i64::from(total_flex)));
+    }
+
+    remainders.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut remaining = extra.saturating_sub(distributed);
+    for (idx, _) in remainders {
+        if remaining <= 0 {
+            break;
+        }
+        let room = max_widths[idx].saturating_sub(col_widths[idx]).max(0);
+        if room <= 0 {
+            continue;
+        }
+        let bump = room.min(remaining);
+        col_widths[idx] = col_widths[idx].saturating_add(bump);
+        remaining = remaining.saturating_sub(bump);
     }
 }
 
@@ -454,7 +563,7 @@ fn parse_usize(value: &str) -> Option<usize> {
     value.trim().parse().ok()
 }
 
-fn measure_caption_min_width<'doc>(
+fn measure_caption_max_width<'doc>(
     engine: &LayoutEngine<'_>,
     table: &'doc Element,
     table_style: &ComputedStyle,
@@ -470,16 +579,16 @@ fn measure_caption_min_width<'doc>(
         engine.viewport.width_px,
         engine.viewport.height_px,
     );
-    let mut width = 0i32;
     ancestors.push(caption);
-    measure_inline_words(
+    let child_nodes: Vec<&Node> = caption.children.iter().collect();
+    let width = super::inline::measure_inline_nodes(
         engine,
-        &caption.children,
+        &child_nodes,
         &style,
         ancestors,
-        &mut width,
-        engine.text_style_for(&style),
-    )?;
+        i32::MAX / 4,
+    )?
+    .width;
     ancestors.pop();
 
     let padding = style.padding.resolve_px(0);
@@ -488,14 +597,14 @@ fn measure_caption_min_width<'doc>(
         .saturating_add(padding.right))
 }
 
-fn measure_cell_min_width<'doc>(
+fn measure_cell_intrinsic_widths<'doc>(
     engine: &LayoutEngine<'_>,
     cell: &'doc Element,
     cell_style: &ComputedStyle,
     ancestors: &mut Vec<&'doc Element>,
     cellpadding: i32,
-) -> Result<i32, String> {
-    let mut max_width = 0i32;
+) -> Result<(i32, i32), String> {
+    let mut min_width = 0i32;
     let text_style = engine.text_style_for(cell_style);
 
     ancestors.push(cell);
@@ -504,16 +613,32 @@ fn measure_cell_min_width<'doc>(
         &cell.children,
         cell_style,
         ancestors,
-        &mut max_width,
+        &mut min_width,
         text_style,
     )?;
+    let child_nodes: Vec<&Node> = cell.children.iter().collect();
+    let max_width = super::inline::measure_inline_nodes(
+        engine,
+        &child_nodes,
+        cell_style,
+        ancestors,
+        i32::MAX / 4,
+    )?
+    .width;
     ancestors.pop();
 
     let padding = cell_style.padding.resolve_px(0);
-    let padding = padding.left.saturating_add(padding.right);
-    Ok(max_width
-        .saturating_add(cellpadding.saturating_mul(2))
-        .saturating_add(padding))
+    let border = cell_style.border_width;
+    let horizontal = cellpadding
+        .saturating_mul(2)
+        .saturating_add(padding.left)
+        .saturating_add(padding.right)
+        .saturating_add(border.left)
+        .saturating_add(border.right);
+    Ok((
+        min_width.saturating_add(horizontal),
+        max_width.saturating_add(horizontal),
+    ))
 }
 
 fn measure_inline_words<'doc>(

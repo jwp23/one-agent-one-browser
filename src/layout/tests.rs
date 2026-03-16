@@ -303,6 +303,51 @@ fn auto_width_tables_shrink_to_contents() {
 }
 
 #[test]
+fn auto_width_tables_use_unwrapped_cell_text() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                table { background: #ff0000; }
+                .wikitable > tr > td,
+                .wikitable > tbody > tr > td { padding: 0; }
+            </style>
+            <table class="wikitable"><tr><td>alpha beta</td></tr></table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 200,
+        height_px: 120,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let table_background = output
+        .display_list
+        .commands
+        .iter()
+        .find_map(|command| {
+            let DisplayCommand::Rect(rect) = command else {
+                return None;
+            };
+            (rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0).then_some(rect)
+        })
+        .expect("table background should render");
+
+    assert!(
+        table_background.width_px >= 10,
+        "auto-width table should size to the unwrapped cell text"
+    );
+}
+
+#[test]
 fn table_captions_render_above_rows() {
     let doc = crate::html::parse_document(
         r#"
@@ -343,6 +388,51 @@ fn table_captions_render_above_rows() {
     let caption_y = caption_y.expect("caption text should render");
     let cell_y = cell_y.expect("cell text should render");
     assert!(caption_y < cell_y, "caption should appear above table rows");
+}
+
+#[test]
+fn positioned_children_of_inline_flex_boxes_use_their_local_containing_block() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .wrap { margin-left: 40px; }
+                .label { display: inline-flex; position: relative; width: 30px; height: 20px; }
+                .icon { position: absolute; left: 0; top: 0; width: 18px; height: 18px; background: #ff0000; }
+            </style>
+            <div class="wrap"><span class="label"><span class="icon"></span>Text</span></div>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 200,
+        height_px: 120,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let icon = output
+        .display_list
+        .commands
+        .iter()
+        .find_map(|command| {
+            let DisplayCommand::Rect(rect) = command else {
+                return None;
+            };
+            (rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0).then_some(rect)
+        })
+        .expect("absolute icon should render");
+
+    assert!(
+        icon.x_px >= 40,
+        "absolute child should be positioned relative to the inline flex container"
+    );
 }
 
 #[test]

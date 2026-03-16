@@ -320,8 +320,8 @@ pub(super) fn apply_declaration(
             }
         }
         "border-radius" => {
-            if let Some(px) = parse_css_border_radius_px(value) {
-                builder.apply_border_radius_px(px.max(0), priority);
+            if let Some(radius) = parse_css_border_radius(value, builder) {
+                builder.apply_border_radius(radius, priority);
             }
         }
         "margin" => {
@@ -641,7 +641,7 @@ fn all_edges(px: i32) -> Edges {
     }
 }
 
-fn parse_css_border_radius_px(value: &str) -> Option<i32> {
+fn parse_css_border_radius(value: &str, builder: &StyleBuilder) -> Option<CssLength> {
     let value = value.trim();
     if value.is_empty() {
         return None;
@@ -649,7 +649,7 @@ fn parse_css_border_radius_px(value: &str) -> Option<i32> {
 
     let first = value.split('/').next().unwrap_or(value);
     let first = first.split_whitespace().next().unwrap_or(first);
-    parse_css_length_px(first)
+    builder.parse_css_length(first)
 }
 
 fn parse_css_opacity_u8(value: &str) -> Option<u8> {

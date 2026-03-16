@@ -1,7 +1,7 @@
 use crate::dom::{Element, Node};
 use crate::geom::{Rect, Size};
 use crate::render::{DisplayCommand, DrawText, FontMetricsPx, LinkHitRegion, TextStyle};
-use crate::style::{ComputedStyle, Display, TextAlign, Visibility, WhiteSpace};
+use crate::style::{ComputedStyle, Display, Position, TextAlign, Visibility, WhiteSpace};
 use std::rc::Rc;
 
 use super::LayoutEngine;
@@ -820,15 +820,60 @@ fn layout_tokens<'doc>(
                         let padding = element_box.style.padding.resolve_px(content_box.width);
                         let content_box = border_box
                             .inset(super::add_edges(element_box.style.border_width, padding));
+                        let mut pushed_positioning = false;
+                        if element_box.style.position != Position::Static {
+                            engine.push_positioned_containing_block(
+                                border_box,
+                                element_box.style.border_width,
+                            );
+                            pushed_positioning = true;
+                        }
                         ancestors.push(element_box.element);
-                        engine.layout_flow_children(
-                            &element_box.element.children,
-                            &element_box.style,
-                            ancestors,
-                            content_box,
-                            element_paint,
-                        )?;
+                        match element_box.style.display {
+                            Display::Table => {
+                                super::table::layout_table(
+                                    engine,
+                                    element_box.element,
+                                    &element_box.style,
+                                    ancestors,
+                                    content_box,
+                                    element_paint,
+                                )?;
+                            }
+                            Display::Flex => {
+                                super::flex::layout_flex_row(
+                                    engine,
+                                    element_box.element,
+                                    &element_box.style,
+                                    ancestors,
+                                    content_box,
+                                    element_paint,
+                                )?;
+                            }
+                            Display::Grid => {
+                                super::grid::layout_grid(
+                                    engine,
+                                    element_box.element,
+                                    &element_box.style,
+                                    ancestors,
+                                    content_box,
+                                    element_paint,
+                                )?;
+                            }
+                            _ => {
+                                engine.layout_flow_children(
+                                    &element_box.element.children,
+                                    &element_box.style,
+                                    ancestors,
+                                    content_box,
+                                    element_paint,
+                                )?;
+                            }
+                        }
                         ancestors.pop();
+                        if pushed_positioning {
+                            let _ = engine.positioned_containing_blocks.pop();
+                        }
                     }
 
                     if needs_opacity_group {

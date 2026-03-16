@@ -98,7 +98,7 @@ pub(super) struct StyleBuilder {
     border_width: Option<Cascaded<Edges>>,
     border_style: Option<Cascaded<BorderStyle>>,
     border_color: Option<Cascaded<Color>>,
-    border_radius_px: Option<Cascaded<i32>>,
+    border_radius: Option<Cascaded<CssLength>>,
     padding: Option<Cascaded<CssEdges>>,
     width_px: Option<Cascaded<Option<CssLength>>>,
     min_width_px: Option<Cascaded<Option<CssLength>>>,
@@ -154,7 +154,7 @@ impl StyleBuilder {
             border_width: None,
             border_style: None,
             border_color: None,
-            border_radius_px: None,
+            border_radius: None,
             padding: None,
             width_px: None,
             min_width_px: None,
@@ -280,10 +280,10 @@ impl StyleBuilder {
                 .border_color
                 .map(|v| v.value)
                 .unwrap_or(self.base.border_color),
-            border_radius_px: self
-                .border_radius_px
+            border_radius: self
+                .border_radius
                 .map(|v| v.value)
-                .unwrap_or(self.base.border_radius_px),
+                .unwrap_or(self.base.border_radius),
             padding: self.padding.map(|v| v.value).unwrap_or(self.base.padding),
             width_px: self.width_px.map(|v| v.value).unwrap_or(self.base.width_px),
             min_width_px: self
@@ -695,8 +695,8 @@ impl StyleBuilder {
         apply_cascade(&mut self.border_color, value, priority);
     }
 
-    pub(super) fn apply_border_radius_px(&mut self, value: i32, priority: CascadePriority) {
-        apply_cascade(&mut self.border_radius_px, value, priority);
+    pub(super) fn apply_border_radius(&mut self, value: CssLength, priority: CascadePriority) {
+        apply_cascade(&mut self.border_radius, value, priority);
     }
 
     pub(super) fn apply_padding(&mut self, value: CssEdges, priority: CascadePriority) {

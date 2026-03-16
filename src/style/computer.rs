@@ -300,7 +300,7 @@ fn build_rule_index(stylesheets: &[Arc<Stylesheet>]) -> (Vec<RuleRef>, SelectorI
 mod tests {
     use super::*;
     use crate::geom::Color;
-    use crate::style::WhiteSpace;
+    use crate::style::{CssLength, WhiteSpace};
 
     #[test]
     fn selector_matches_descendant() {
@@ -354,6 +354,21 @@ mod tests {
             .expect("div element exists");
         let style = computer.compute_style(div, &root_style, &[]);
         assert_eq!(style.white_space, WhiteSpace::NoWrap);
+    }
+
+    #[test]
+    fn parses_percentage_border_radius() {
+        let doc = crate::html::parse_document("<div class='radio'></div>");
+        let computer = StyleComputer::from_css(".radio { border-radius: 50%; }");
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let style = computer.compute_style(div, &root_style, &[]);
+        match style.border_radius {
+            CssLength::Percent(percent) => assert_eq!(percent, 50.0),
+            other => panic!("expected percentage border radius, got {other:?}"),
+        }
     }
 
     #[test]

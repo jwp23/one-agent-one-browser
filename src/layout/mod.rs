@@ -15,7 +15,7 @@ use crate::render::{
     DrawRoundedRectBorder, DrawSvg, LinkHitRegion, TextMeasurer, TextStyle, Viewport,
 };
 use crate::resources::ResourceLoader;
-use crate::style::{ComputedStyle, Display, Float, Position, StyleComputer, Visibility};
+use crate::style::{ComputedStyle, CssLength, Display, Float, Position, StyleComputer, Visibility};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -914,7 +914,7 @@ impl LayoutEngine<'_> {
                     y_px: border_box.y,
                     width_px: border_box.width,
                     height_px: border_box.height,
-                    radius_px: style.border_radius_px,
+                    radius_px: resolve_border_radius_px(style.border_radius, border_box),
                     border_width_px: border.top,
                     color,
                 }));
@@ -1002,7 +1002,8 @@ impl LayoutEngine<'_> {
 
         if empty_element_mask.is_none() && let Some(color) = style.background_color {
             indexes.push(self.list.commands.len());
-            if style.border_radius_px > 0 {
+            let radius_px = resolve_border_radius_px(style.border_radius, border_box);
+            if radius_px > 0 {
                 self.list
                     .commands
                     .push(DisplayCommand::RoundedRect(DrawRoundedRect {
@@ -1010,7 +1011,7 @@ impl LayoutEngine<'_> {
                         y_px: border_box.y,
                         width_px: border_box.width,
                         height_px,
-                        radius_px: style.border_radius_px,
+                        radius_px,
                         color,
                     }));
             } else {
@@ -1099,6 +1100,11 @@ fn background_image_is_empty_element(element: &Element) -> bool {
         Node::Text(text) => text.trim().is_empty(),
         Node::Element(_) => false,
     })
+}
+
+fn resolve_border_radius_px(radius: CssLength, border_box: Rect) -> i32 {
+    let max_radius = border_box.width.min(border_box.height).max(0) / 2;
+    radius.resolve_px(border_box.width.min(border_box.height)).clamp(0, max_radius)
 }
 
 #[cfg(test)]
