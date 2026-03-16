@@ -104,6 +104,14 @@ jobs:
         if: runner.os != 'Linux'
         run: make test
 
+      - name: Upload render-test outputs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: render-test-${{ matrix.artifact_name }}-${{ runner.arch }}
+          path: target/render-test/*
+          if-no-files-found: ignore
+
       - name: Build
         run: make build
 
