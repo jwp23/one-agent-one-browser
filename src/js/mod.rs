@@ -6,7 +6,6 @@ pub fn execute_inline_scripts(document: &mut Document) {
 
     for source in scripts {
         if let Some(classes) = parse_document_element_class_name_assignment(&source)
-            && !should_skip_root_class_assignment(document, &classes)
             && let Some(html) = document.find_first_element_by_name_mut("html")
         {
             html.attributes.classes = classes.split_whitespace().map(str::to_owned).collect();
@@ -21,19 +20,6 @@ pub fn execute_inline_scripts(document: &mut Document) {
 
     inject_vector_appearance_fallback(document);
 }
-
-fn should_skip_root_class_assignment(document: &Document, assigned_classes: &str) -> bool {
-    // We intentionally keep server-rendered no-JS classes unless we have a full JS runtime.
-    let Some(html) = document.find_first_element_by_name("html") else {
-        return false;
-    };
-
-    html.attributes.has_class("client-nojs")
-        && assigned_classes
-            .split_whitespace()
-            .any(|class_name| class_name == "client-js")
-}
-
 #[derive(Debug, PartialEq, Eq)]
 struct TextContentAssignment {
     element_id: String,
@@ -782,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_nojs_root_classes_when_inline_script_switches_to_client_js() {
+    fn executes_document_element_class_assignment_that_switches_to_client_js() {
         let html = r#"
 <html class="client-nojs">
   <body>
@@ -798,8 +784,9 @@ mod tests {
         let html = document
             .find_first_element_by_name("html")
             .expect("missing html element");
-        assert!(html.attributes.has_class("client-nojs"));
-        assert!(!html.attributes.has_class("client-js"));
+        assert!(html.attributes.has_class("client-js"));
+        assert!(html.attributes.has_class("skin-vector"));
+        assert!(!html.attributes.has_class("client-nojs"));
     }
 
     #[test]
