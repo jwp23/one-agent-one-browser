@@ -20,6 +20,13 @@ impl CssLength {
             }
         }
     }
+
+    pub fn definite_px(self) -> Option<i32> {
+        match self {
+            CssLength::Px(px) => Some(px),
+            CssLength::Percent(_) | CssLength::Calc { .. } => None,
+        }
+    }
 }
 
 pub(super) fn parse_css_length(

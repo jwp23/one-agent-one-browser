@@ -1000,7 +1000,9 @@ impl LayoutEngine<'_> {
             .filter(|element| background_image_is_empty_element(element))
             .and_then(|_| style.mask_image.as_ref());
 
-        if empty_element_mask.is_none() && let Some(color) = style.background_color {
+        if empty_element_mask.is_none()
+            && let Some(color) = style.background_color
+        {
             indexes.push(self.list.commands.len());
             let radius_px = resolve_border_radius_px(style.border_radius, border_box);
             if radius_px > 0 {
@@ -1104,7 +1106,9 @@ fn background_image_is_empty_element(element: &Element) -> bool {
 
 fn resolve_border_radius_px(radius: CssLength, border_box: Rect) -> i32 {
     let max_radius = border_box.width.min(border_box.height).max(0) / 2;
-    radius.resolve_px(border_box.width.min(border_box.height)).clamp(0, max_radius)
+    radius
+        .resolve_px(border_box.width.min(border_box.height))
+        .clamp(0, max_radius)
 }
 
 #[cfg(test)]

@@ -583,8 +583,8 @@ pub(super) fn measure_element_max_content_width<'doc>(
     max_width: i32,
 ) -> Result<i32, String> {
     let max_width = max_width.max(0);
-    if let Some(width) = style.width_px {
-        return Ok(width.resolve_px(max_width).max(0).min(max_width));
+    if let Some(width) = style.width_px.and_then(|width| width.definite_px()) {
+        return Ok(width.max(0).min(max_width));
     }
 
     if style.display == Display::Flex {
@@ -594,7 +594,9 @@ pub(super) fn measure_element_max_content_width<'doc>(
     }
 
     if super::inline::is_replaced_element(element) {
-        let size = super::inline::measure_replaced_element_outer_size(element, style, max_width)?;
+        let size = super::inline::measure_replaced_element_outer_size_for_intrinsic_width(
+            element, style, max_width,
+        )?;
         let border_width = size
             .width
             .saturating_sub(style.margin.left.saturating_add(style.margin.right))
@@ -670,8 +672,10 @@ fn measure_flex_container_max_content_width<'doc>(
 
                 let mut width = if let Some(basis) = child_style.flex_basis_px {
                     basis.max(0)
-                } else if let Some(width) = child_style.width_px {
-                    width.resolve_px(max_width).max(0)
+                } else if let Some(width) =
+                    child_style.width_px.and_then(|width| width.definite_px())
+                {
+                    width.max(0)
                 } else {
                     measure_element_max_content_width(
                         engine,
@@ -682,11 +686,17 @@ fn measure_flex_container_max_content_width<'doc>(
                     )?
                 };
 
-                if let Some(min) = child_style.min_width_px {
-                    width = width.max(min.resolve_px(max_width).max(0));
+                if let Some(min) = child_style
+                    .min_width_px
+                    .and_then(|width| width.definite_px())
+                {
+                    width = width.max(min.max(0));
                 }
-                if let Some(max) = child_style.max_width_px {
-                    width = width.min(max.resolve_px(max_width).max(0));
+                if let Some(max) = child_style
+                    .max_width_px
+                    .and_then(|width| width.definite_px())
+                {
+                    width = width.min(max.max(0));
                 }
 
                 (
@@ -748,8 +758,8 @@ fn measure_node_max_content_width<'doc>(
             ) {
                 return Ok(0);
             }
-            if let Some(width) = style.width_px {
-                return Ok(width.resolve_px(max_width).max(0).min(max_width));
+            if let Some(width) = style.width_px.and_then(|width| width.definite_px()) {
+                return Ok(width.max(0).min(max_width));
             }
             measure_element_max_content_width(engine, el, &style, ancestors, max_width)
         }

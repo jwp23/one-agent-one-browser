@@ -3,8 +3,8 @@ use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_htm
 use super::{
     AutoEdges, BackgroundImage, BorderStyle, ComputedStyle, CssEdges, CssLength, Display,
     FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, Float, FontFamily, LineHeight,
-    LinearGradient, Position, TextAlign, TextTransform, Visibility, WhiteSpace,
-    custom_properties, declarations, length,
+    LinearGradient, Position, TextAlign, TextTransform, Visibility, WhiteSpace, custom_properties,
+    declarations, length,
 };
 use crate::css::{Rule, Specificity};
 use crate::dom::Element;
@@ -19,6 +19,7 @@ pub(super) struct MatchedRule<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct CascadePriority {
+    pub(super) important: bool,
     pub(super) specificity: CascadeSpecificity,
     pub(super) order: u32,
 }
@@ -351,6 +352,7 @@ impl StyleBuilder {
 
     pub(super) fn apply_presentational_hints(&mut self, element: &Element) {
         let priority = CascadePriority {
+            important: false,
             specificity: CascadeSpecificity {
                 inline: 0,
                 ids: 0,
@@ -472,14 +474,15 @@ impl StyleBuilder {
 
     pub(super) fn apply_matched_custom_properties(&mut self, matched: &[MatchedRule<'_>]) {
         for matched in matched {
-            let priority = CascadePriority {
-                specificity: CascadeSpecificity::from_selector(matched.specificity),
-                order: matched.order,
-            };
             for decl in &matched.rule.declarations {
                 if !decl.name.starts_with("--") {
                     continue;
                 }
+                let priority = CascadePriority {
+                    important: decl.important,
+                    specificity: CascadeSpecificity::from_selector(matched.specificity),
+                    order: matched.order,
+                };
                 custom_properties::apply_custom_property_declaration(
                     &mut self.custom_properties_declared,
                     &decl.name,
@@ -496,6 +499,7 @@ impl StyleBuilder {
         };
 
         let priority = CascadePriority {
+            important: false,
             specificity: CascadeSpecificity {
                 inline: 1,
                 ids: 0,
@@ -509,6 +513,10 @@ impl StyleBuilder {
             if !decl.name.starts_with("--") {
                 continue;
             }
+            let priority = CascadePriority {
+                important: decl.important,
+                ..priority
+            };
             custom_properties::apply_custom_property_declaration(
                 &mut self.custom_properties_declared,
                 &decl.name,
@@ -527,14 +535,15 @@ impl StyleBuilder {
 
     pub(super) fn apply_matched_styles(&mut self, matched: &[MatchedRule<'_>]) {
         for matched in matched {
-            let priority = CascadePriority {
-                specificity: CascadeSpecificity::from_selector(matched.specificity),
-                order: matched.order,
-            };
             for decl in &matched.rule.declarations {
                 if decl.name.starts_with("--") {
                     continue;
                 }
+                let priority = CascadePriority {
+                    important: decl.important,
+                    specificity: CascadeSpecificity::from_selector(matched.specificity),
+                    order: matched.order,
+                };
                 declarations::apply_declaration(self, &decl.name, &decl.value, priority);
             }
         }
@@ -546,6 +555,7 @@ impl StyleBuilder {
         };
 
         let priority = CascadePriority {
+            important: false,
             specificity: CascadeSpecificity {
                 inline: 1,
                 ids: 0,
@@ -559,6 +569,10 @@ impl StyleBuilder {
             if decl.name.starts_with("--") {
                 continue;
             }
+            let priority = CascadePriority {
+                important: decl.important,
+                ..priority
+            };
             declarations::apply_declaration(self, &decl.name, &decl.value, priority);
         }
     }

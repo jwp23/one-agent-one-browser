@@ -18,7 +18,8 @@ pub(super) fn measure_auto_table_width<'doc>(
         .and_then(parse_i32)
         .unwrap_or(0)
         .max(0);
-    let widths = compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
+    let widths =
+        compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
     let caption_width = measure_caption_max_width(engine, table, table_style, ancestors)?;
     Ok(sum_table_width(&widths.max_widths, cellspacing)
         .max(caption_width)
@@ -49,7 +50,8 @@ pub(super) fn layout_table<'doc>(
     let rows = collect_table_rows(table);
 
     let grid = build_grid(rows);
-    let widths = compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
+    let widths =
+        compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
     let mut col_widths = widths.min_widths.clone();
 
     let total_min = sum_table_width(&widths.min_widths, cellspacing);
@@ -262,18 +264,18 @@ fn compute_intrinsic_column_widths<'doc>(
                 engine.viewport.width_px,
                 engine.viewport.height_px,
             );
-            let (min_width, max_width) =
-                measure_cell_intrinsic_widths(engine, cell.element, &cell_style, ancestors, cellpadding)?;
+            let (min_width, max_width) = measure_cell_intrinsic_widths(
+                engine,
+                cell.element,
+                &cell_style,
+                ancestors,
+                cellpadding,
+            )?;
             let explicit_width = cell_style.width_px.map(|width| width.resolve_px(0));
             let min_target = explicit_width.map_or(min_width, |width| min_width.max(width));
             let max_target = explicit_width.map_or(max_width, |width| max_width.max(width));
 
-            apply_cell_target_width(
-                &mut min_widths,
-                cell,
-                min_target,
-                cellspacing,
-            );
+            apply_cell_target_width(&mut min_widths, cell, min_target, cellspacing);
             apply_cell_target_width_with_fixed(
                 &mut max_widths,
                 &mut fixed,
@@ -581,14 +583,9 @@ fn measure_caption_max_width<'doc>(
     );
     ancestors.push(caption);
     let child_nodes: Vec<&Node> = caption.children.iter().collect();
-    let width = super::inline::measure_inline_nodes(
-        engine,
-        &child_nodes,
-        &style,
-        ancestors,
-        i32::MAX / 4,
-    )?
-    .width;
+    let width =
+        super::inline::measure_inline_nodes(engine, &child_nodes, &style, ancestors, i32::MAX / 4)?
+            .width;
     ancestors.pop();
 
     let padding = style.padding.resolve_px(0);

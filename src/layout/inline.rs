@@ -340,6 +340,23 @@ pub(super) fn measure_replaced_element_outer_size(
     style: &ComputedStyle,
     max_width: i32,
 ) -> Result<Size, String> {
+    measure_replaced_element_outer_size_impl(element, style, max_width, true)
+}
+
+pub(super) fn measure_replaced_element_outer_size_for_intrinsic_width(
+    element: &Element,
+    style: &ComputedStyle,
+    max_width: i32,
+) -> Result<Size, String> {
+    measure_replaced_element_outer_size_impl(element, style, max_width, false)
+}
+
+fn measure_replaced_element_outer_size_impl(
+    element: &Element,
+    style: &ComputedStyle,
+    max_width: i32,
+    allow_percentage_widths: bool,
+) -> Result<Size, String> {
     let max_width = max_width.max(0);
     let margin = style.margin;
     let available_border_width = max_width
@@ -351,13 +368,8 @@ pub(super) fn measure_replaced_element_outer_size(
     let horizontal_inset = inset.left.saturating_add(inset.right);
     let vertical_inset = inset.top.saturating_add(inset.bottom);
 
-    let mut content_width = style.width_px.map(|width| {
-        width
-            .resolve_px(max_width)
-            .max(0)
-            .saturating_sub(horizontal_inset)
-            .max(0)
-    });
+    let mut content_width = specified_width_px(style.width_px, max_width, allow_percentage_widths)
+        .map(|width| width.saturating_sub(horizontal_inset).max(0));
     let mut content_height = style
         .height_px
         .map(|height| height.max(0).saturating_sub(vertical_inset).max(0));
@@ -396,11 +408,15 @@ pub(super) fn measure_replaced_element_outer_size(
         .max(0)
         .saturating_add(vertical_inset);
 
-    if let Some(min_width) = style.min_width_px {
-        border_width = border_width.max(min_width.resolve_px(max_width).max(0));
+    if let Some(min_width) =
+        specified_width_px(style.min_width_px, max_width, allow_percentage_widths)
+    {
+        border_width = border_width.max(min_width.max(0));
     }
-    if let Some(max_width_value) = style.max_width_px {
-        border_width = border_width.min(max_width_value.resolve_px(max_width).max(0));
+    if let Some(max_width_value) =
+        specified_width_px(style.max_width_px, max_width, allow_percentage_widths)
+    {
+        border_width = border_width.min(max_width_value.max(0));
     }
     border_width = border_width.min(available_border_width).max(0);
 
@@ -418,6 +434,18 @@ pub(super) fn measure_replaced_element_outer_size(
             .saturating_add(border_height)
             .saturating_add(margin.bottom),
     })
+}
+
+fn specified_width_px(
+    width: Option<crate::style::CssLength>,
+    max_width: i32,
+    allow_percentage_widths: bool,
+) -> Option<i32> {
+    let width = width?;
+    if allow_percentage_widths {
+        return Some(width.resolve_px(max_width).max(0));
+    }
+    width.definite_px().map(|px| px.max(0))
 }
 
 fn intrinsic_dimensions(element: &Element, style: &ComputedStyle) -> (Option<i32>, Option<i32>) {

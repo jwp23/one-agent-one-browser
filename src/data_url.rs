@@ -7,7 +7,10 @@ pub fn decode_bytes(url: &str) -> Result<Vec<u8>, String> {
         .split_once(',')
         .ok_or_else(|| "Invalid data URL: missing comma".to_owned())?;
 
-    if meta.split(';').any(|part| part.eq_ignore_ascii_case("base64")) {
+    if meta
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"))
+    {
         return decode_base64(data);
     }
 

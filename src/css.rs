@@ -41,6 +41,7 @@ pub struct Rule {
 pub struct Declaration {
     pub name: String,
     pub value: String,
+    pub important: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -856,9 +857,13 @@ impl<'a> DeclarationParser<'a> {
             }
             self.cursor += 1;
 
-            let value = self.consume_value();
+            let (value, important) = self.consume_value();
             if !name.is_empty() && !value.is_empty() {
-                declarations.push(Declaration { name, value });
+                declarations.push(Declaration {
+                    name,
+                    value,
+                    important,
+                });
             }
 
             self.skip_ws_and_comments();
@@ -921,7 +926,7 @@ impl<'a> DeclarationParser<'a> {
         Some(name.to_ascii_lowercase())
     }
 
-    fn consume_value(&mut self) -> String {
+    fn consume_value(&mut self) -> (String, bool) {
         let start = self.cursor;
         let mut depth_parens = 0usize;
         let mut quote: Option<char> = None;
@@ -960,7 +965,7 @@ impl<'a> DeclarationParser<'a> {
             }
         }
 
-        self.input[start..self.cursor].trim().to_owned()
+        strip_important_annotation(self.input[start..self.cursor].trim())
     }
 
     fn consume_until(&mut self, delimiter: char) {
@@ -975,6 +980,57 @@ impl<'a> DeclarationParser<'a> {
     fn peek_char(&self) -> Option<char> {
         self.input[self.cursor..].chars().next()
     }
+}
+
+fn strip_important_annotation(value: &str) -> (String, bool) {
+    let mut depth_parens = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut last_bang_idx = None;
+
+    for (idx, ch) in value.char_indices() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' => depth_parens = depth_parens.saturating_add(1),
+            ')' => depth_parens = depth_parens.saturating_sub(1),
+            '!' if depth_parens == 0 => last_bang_idx = Some(idx),
+            _ => {}
+        }
+    }
+
+    let Some(bang_idx) = last_bang_idx else {
+        return (value.trim().to_owned(), false);
+    };
+
+    let suffix = &value[bang_idx + 1..];
+    if !is_important_keyword(suffix) {
+        return (value.trim().to_owned(), false);
+    }
+
+    (value[..bang_idx].trim_end().to_owned(), true)
+}
+
+fn is_important_keyword(value: &str) -> bool {
+    let normalized = value
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    normalized.eq_ignore_ascii_case("important")
 }
 
 #[cfg(test)]
@@ -1070,6 +1126,18 @@ mod tests {
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].name, "padding");
         assert_eq!(decls[0].value, "2px");
+        assert!(!decls[0].important);
+    }
+
+    #[test]
+    fn parses_important_inline_declarations() {
+        let decls = parse_inline_declarations("display: none !important; color: #000000");
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].name, "display");
+        assert_eq!(decls[0].value, "none");
+        assert!(decls[0].important);
+        assert_eq!(decls[1].name, "color");
+        assert!(!decls[1].important);
     }
 
     #[test]

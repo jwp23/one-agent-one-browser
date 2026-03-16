@@ -208,6 +208,125 @@ fn flex_row_shrinks_items_to_fit_container_width() {
 }
 
 #[test]
+fn hidden_inputs_do_not_take_space_in_flex_layout() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .row { display: flex; flex-wrap: wrap; width: 100px; }
+                .a, .b { width: 40px; height: 10px; }
+                .a { background: #ff0000; }
+                .b { background: #0000ff; }
+            </style>
+            <div class="row">
+                <div class="a"></div>
+                <input type="hidden" value="Special:Search">
+                <div class="b"></div>
+            </div>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 140,
+        height_px: 80,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut red = None;
+    let mut blue = None;
+    for command in &output.display_list.commands {
+        let DisplayCommand::Rect(rect) = command else {
+            continue;
+        };
+        if rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0 {
+            red = Some(rect.clone());
+        } else if rect.color.r == 0 && rect.color.g == 0 && rect.color.b == 255 {
+            blue = Some(rect.clone());
+        }
+    }
+
+    let red = red.expect("red flex item should render");
+    let blue = blue.expect("blue flex item should render");
+    assert_eq!(
+        blue.y_px, red.y_px,
+        "hidden inputs should not force later flex items onto a new line"
+    );
+    assert!(
+        blue.x_px >= red.x_px.saturating_add(red.width_px),
+        "visible flex items should remain on the same row"
+    );
+}
+
+#[test]
+fn percentage_width_descendants_do_not_force_flex_item_intrinsic_width() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .row { display: flex; flex-wrap: wrap; width: 120px; }
+                .start { width: 20px; height: 10px; background: #ff0000; }
+                .search { flex-grow: 1; background: #00ff00; }
+                .fill { width: 100%; }
+                .inner { width: 40px; height: 10px; }
+            </style>
+            <div class="row">
+                <div class="start"></div>
+                <div class="search">
+                    <div class="fill">
+                        <div class="inner"></div>
+                    </div>
+                </div>
+            </div>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 140,
+        height_px: 80,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut red = None;
+    let mut green = None;
+    for command in &output.display_list.commands {
+        let DisplayCommand::Rect(rect) = command else {
+            continue;
+        };
+        if rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0 {
+            red = Some(rect.clone());
+        } else if rect.color.r == 0 && rect.color.g == 255 && rect.color.b == 0 {
+            green = Some(rect.clone());
+        }
+    }
+
+    let red = red.expect("red flex item should render");
+    let green = green.expect("green flex item should render");
+    assert_eq!(
+        green.y_px, red.y_px,
+        "percentage widths inside flex items should not make the item wrap during intrinsic sizing"
+    );
+    assert_eq!(
+        green.x_px,
+        red.x_px.saturating_add(red.width_px),
+        "the flexible item should stay on the first line beside the fixed item"
+    );
+}
+
+#[test]
 fn grid_containers_fallback_to_block_flow() {
     let doc = crate::html::parse_document(
         r#"

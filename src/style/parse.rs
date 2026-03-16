@@ -214,8 +214,11 @@ fn parse_css_calc_length_px_f32(
             ')' => depth = depth.saturating_sub(1),
             '+' | '-' if depth == 0 && idx > start => {
                 let term = value[start..idx].trim();
-                let amount =
-                    parse_css_length_px_f32_with_viewport(term, viewport_width_px, viewport_height_px)?;
+                let amount = parse_css_length_px_f32_with_viewport(
+                    term,
+                    viewport_width_px,
+                    viewport_height_px,
+                )?;
                 if op == '-' {
                     total -= amount;
                 } else {

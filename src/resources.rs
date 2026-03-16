@@ -1,5 +1,5 @@
-use crate::debug;
 use crate::data_url;
+use crate::debug;
 use crate::net;
 use crate::url::Url;
 use std::cell::RefCell;

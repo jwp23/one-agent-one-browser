@@ -86,7 +86,11 @@ impl StyleComputer {
         builder.apply_matched_styles(&matched);
         builder.apply_inline_style(element);
 
-        builder.finish()
+        let mut style = builder.finish();
+        if is_hidden_input(element) {
+            style.display = Display::None;
+        }
+        style
     }
 
     fn match_rules<'a>(
@@ -187,6 +191,10 @@ fn default_display_for_element(element: &Element) -> Display {
         return Display::Block;
     }
 
+    if is_hidden_input(element) {
+        return Display::None;
+    }
+
     if matches!(
         element.name.as_str(),
         "head" | "style" | "script" | "meta" | "link" | "title"
@@ -211,6 +219,14 @@ fn default_display_for_element(element: &Element) -> Display {
         "br" => Display::Inline,
         _ => Display::Inline,
     }
+}
+
+fn is_hidden_input(element: &Element) -> bool {
+    element.name == "input"
+        && element
+            .attributes
+            .get("type")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("hidden"))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -369,6 +385,46 @@ mod tests {
             CssLength::Percent(percent) => assert_eq!(percent, 50.0),
             other => panic!("expected percentage border radius, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn stylesheet_important_overrides_inline_style() {
+        let doc = crate::html::parse_document(
+            "<div class='search-toggle' style='display: inline-flex'></div>",
+        );
+        let computer = StyleComputer::from_css(".search-toggle { display: none !important; }");
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let style = computer.compute_style(div, &root_style, &[]);
+        assert_eq!(style.display, Display::None);
+    }
+
+    #[test]
+    fn inline_important_overrides_stylesheet_important() {
+        let doc = crate::html::parse_document(
+            "<div class='search-toggle' style='display: inline-flex !important'></div>",
+        );
+        let computer = StyleComputer::from_css(".search-toggle { display: none !important; }");
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+        let style = computer.compute_style(div, &root_style, &[]);
+        assert_eq!(style.display, Display::Flex);
+    }
+
+    #[test]
+    fn hidden_inputs_stay_display_none_even_with_inline_display_override() {
+        let doc = crate::html::parse_document("<input type='hidden' style='display: block'>");
+        let computer = StyleComputer::empty();
+        let root_style = ComputedStyle::root_defaults();
+        let input = doc
+            .find_first_element_by_name("input")
+            .expect("input element exists");
+        let style = computer.compute_style(input, &root_style, &[]);
+        assert_eq!(style.display, Display::None);
     }
 
     #[test]
