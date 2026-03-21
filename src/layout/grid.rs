@@ -25,10 +25,17 @@ struct PositionedItem<'doc> {
 }
 
 #[derive(Clone, Copy, Debug)]
+enum ClampMinTrack {
+    Fixed(i32),
+    Content,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum Track {
     Fixed(i32),
     Fr(f32),
     Content,
+    Clamp { min: ClampMinTrack, max_px: i32 },
 }
 
 pub(super) fn layout_grid<'doc>(
@@ -370,7 +377,25 @@ fn parse_track_token(token: &str) -> Track {
     let lower = token.to_ascii_lowercase();
     if lower.starts_with("minmax(") && lower.ends_with(')') {
         let inner = &token[7..token.len().saturating_sub(1)];
-        if let Some(second) = split_minmax_arguments(inner).get(1) {
+        let args = split_minmax_arguments(inner);
+        if let Some(second) = args.get(1) {
+            let second = second.trim();
+            if let Some(fr) = second
+                .to_ascii_lowercase()
+                .strip_suffix("fr")
+                .and_then(|v| v.trim().parse::<f32>().ok())
+            {
+                return Track::Fr(fr.max(0.0));
+            }
+            if let Some(max_px) = parse_length_px(second) {
+                return Track::Clamp {
+                    min: args
+                        .first()
+                        .map(|value| parse_clamp_min_track(value))
+                        .unwrap_or(ClampMinTrack::Fixed(0)),
+                    max_px: max_px.max(0),
+                };
+            }
             return parse_track_token(second);
         }
         return Track::Content;
@@ -391,6 +416,12 @@ fn parse_track_token(token: &str) -> Track {
         "auto" | "min-content" | "max-content" => Track::Content,
         _ => Track::Content,
     }
+}
+
+fn parse_clamp_min_track(token: &str) -> ClampMinTrack {
+    parse_length_px(token)
+        .map(|px| ClampMinTrack::Fixed(px.max(0)))
+        .unwrap_or(ClampMinTrack::Content)
 }
 
 fn split_minmax_arguments(input: &str) -> Vec<&str> {
@@ -456,6 +487,7 @@ fn resolve_column_widths<'doc>(
 ) -> Result<Vec<i32>, String> {
     let mut widths = vec![0i32; column_count];
     let mut total_fr = 0.0f32;
+    let mut clamp_tracks = Vec::new();
 
     for (idx, track) in tracks.iter().enumerate().take(column_count) {
         match *track {
@@ -466,28 +498,18 @@ fn resolve_column_widths<'doc>(
                 total_fr += fr.max(0.0);
             }
             Track::Content => {
-                let mut content_width = 0i32;
-                for item in items {
-                    let Some(placement) = item.placement else {
-                        continue;
-                    };
-                    if placement.col_start != idx || placement.col_end != idx.saturating_add(1) {
-                        continue;
+                widths[idx] =
+                    measure_track_content_width(engine, items, ancestors, idx, container_width)?;
+            }
+            Track::Clamp { min, max_px } => {
+                let min_px = match min {
+                    ClampMinTrack::Fixed(px) => px.max(0),
+                    ClampMinTrack::Content => {
+                        measure_track_content_width(engine, items, ancestors, idx, container_width)?
                     }
-                    let candidate = if let Some(width) = item.style.width_px {
-                        width.resolve_px(container_width).max(0)
-                    } else {
-                        flex::measure_element_max_content_width(
-                            engine,
-                            item.element,
-                            &item.style,
-                            ancestors,
-                            container_width.max(0),
-                        )?
-                    };
-                    content_width = content_width.max(candidate);
-                }
-                widths[idx] = content_width.max(0);
+                };
+                widths[idx] = min_px;
+                clamp_tracks.push((idx, min_px, max_px.max(min_px).max(0)));
             }
         }
     }
@@ -502,7 +524,36 @@ fn resolve_column_widths<'doc>(
         .max(0);
     let fixed_sum: i32 = widths.iter().copied().fold(0i32, i32::saturating_add);
     let available = container_width.saturating_sub(total_gap).max(0);
-    let remaining = available.saturating_sub(fixed_sum).max(0);
+    let mut remaining = available.saturating_sub(fixed_sum).max(0);
+
+    if remaining > 0 && !clamp_tracks.is_empty() {
+        let expandable_tracks: Vec<(usize, i32, i32)> = clamp_tracks
+            .iter()
+            .copied()
+            .filter(|(_, min_px, max_px)| max_px.saturating_sub(*min_px).max(0) > 0)
+            .collect();
+        let total_cap: i32 = expandable_tracks
+            .iter()
+            .map(|(_, min_px, max_px)| max_px.saturating_sub(*min_px).max(0))
+            .fold(0i32, i32::saturating_add);
+        let expandable = remaining.min(total_cap).max(0);
+        if expandable > 0 && total_cap > 0 {
+            let mut distributed = 0i32;
+            for (pos, (idx, min_px, max_px)) in expandable_tracks.iter().enumerate() {
+                let cap = max_px.saturating_sub(*min_px).max(0);
+                let extra = if pos + 1 == expandable_tracks.len() {
+                    expandable.saturating_sub(distributed)
+                } else {
+                    ((expandable as i64) * (cap as i64) / (total_cap as i64)) as i32
+                }
+                .min(cap)
+                .max(0);
+                widths[*idx] = widths[*idx].saturating_add(extra);
+                distributed = distributed.saturating_add(extra);
+            }
+            remaining = remaining.saturating_sub(distributed).max(0);
+        }
+    }
 
     if total_fr > 0.0 {
         let mut distributed = 0i32;
@@ -522,6 +573,38 @@ fn resolve_column_widths<'doc>(
     }
 
     Ok(widths)
+}
+
+fn measure_track_content_width<'doc>(
+    engine: &LayoutEngine<'_>,
+    items: &[GridItem<'doc>],
+    ancestors: &mut Vec<&'doc Element>,
+    column_index: usize,
+    container_width: i32,
+) -> Result<i32, String> {
+    let mut content_width = 0i32;
+    for item in items {
+        let Some(placement) = item.placement else {
+            continue;
+        };
+        if placement.col_start != column_index || placement.col_end != column_index.saturating_add(1)
+        {
+            continue;
+        }
+        let candidate = if let Some(width) = item.style.width_px {
+            width.resolve_px(container_width).max(0)
+        } else {
+            flex::measure_element_max_content_width(
+                engine,
+                item.element,
+                &item.style,
+                ancestors,
+                container_width.max(0),
+            )?
+        };
+        content_width = content_width.max(candidate);
+    }
+    Ok(content_width.max(0))
 }
 
 fn column_offset(widths: &[i32], gap: i32, col_start: usize) -> i32 {

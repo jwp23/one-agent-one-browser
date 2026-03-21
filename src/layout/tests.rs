@@ -657,6 +657,166 @@ fn grid_template_places_named_areas_into_columns() {
 }
 
 #[test]
+fn grid_minmax_fixed_track_shrinks_to_available_space() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .layout {
+                    display: grid;
+                    width: 200px;
+                    column-gap: 10px;
+                    grid-template-columns: minmax(0, 150px) min-content;
+                    grid-template-areas: 'main side';
+                }
+                .main { grid-area: main; height: 20px; background: #ff0000; }
+                .side { grid-area: side; width: 60px; height: 20px; background: #00ff00; }
+            </style>
+            <div class="layout">
+                <div class="main"></div>
+                <div class="side"></div>
+            </div>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 240,
+        height_px: 120,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut red = None;
+    let mut green = None;
+    for command in &output.display_list.commands {
+        let DisplayCommand::Rect(rect) = command else {
+            continue;
+        };
+        if rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0 {
+            red = Some(rect.clone());
+        } else if rect.color.r == 0 && rect.color.g == 255 && rect.color.b == 0 {
+            green = Some(rect.clone());
+        }
+    }
+
+    let red = red.expect("main area should be painted");
+    let green = green.expect("side area should be painted");
+    assert_eq!(red.width_px, 130);
+    assert_eq!(green.x_px, 140);
+}
+
+#[test]
+fn grid_minmax_intrinsic_minimum_is_preserved() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .layout {
+                    display: grid;
+                    width: 25px;
+                    grid-template-columns: minmax(min-content, 150px) 20px;
+                    grid-template-areas: 'main side';
+                }
+                .main { grid-area: main; }
+                .side { grid-area: side; height: 10px; background: #00ff00; }
+            </style>
+            <div class="layout">
+                <div class="main">abcdefghij</div>
+                <div class="side"></div>
+            </div>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 80,
+        height_px: 80,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let green = output
+        .display_list
+        .commands
+        .iter()
+        .find_map(|command| {
+            let DisplayCommand::Rect(rect) = command else {
+                return None;
+            };
+            (rect.color.r == 0 && rect.color.g == 255 && rect.color.b == 0).then_some(rect)
+        })
+        .expect("side area should be painted");
+
+    assert_eq!(green.x_px, 10);
+}
+
+#[test]
+fn grid_clamp_distribution_keeps_last_fixed_track_offset() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .layout {
+                    display: grid;
+                    width: 51px;
+                    grid-template-columns:
+                        minmax(0, 100px)
+                        minmax(0, 100px)
+                        minmax(50px, 50px);
+                    grid-template-areas: 'a b c';
+                }
+                .a { grid-area: a; height: 10px; background: #ff0000; }
+                .b { grid-area: b; height: 10px; background: #00ff00; }
+                .c { grid-area: c; height: 10px; background: #0000ff; }
+            </style>
+            <div class="layout">
+                <div class="a"></div>
+                <div class="b"></div>
+                <div class="c"></div>
+            </div>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 80,
+        height_px: 80,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let blue = output
+        .display_list
+        .commands
+        .iter()
+        .find_map(|command| {
+            let DisplayCommand::Rect(rect) = command else {
+                return None;
+            };
+            (rect.color.r == 0 && rect.color.g == 0 && rect.color.b == 255).then_some(rect)
+        })
+        .expect("fixed third area should be painted");
+
+    assert_eq!(blue.x_px, 1);
+}
+
+#[test]
 fn spanning_grid_area_does_not_force_first_row_height() {
     let doc = crate::html::parse_document(
         r#"
