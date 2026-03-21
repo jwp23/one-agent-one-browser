@@ -151,9 +151,12 @@ impl BrowserApp {
                         }
                     };
                     let html_source = String::from_utf8_lossy(&bytes).into_owned();
-                    let mut document = crate::html::parse_document(&html_source);
-                    crate::js::execute_inline_scripts(&mut document);
-
+                    let parsed_document = crate::html::parse_document(&html_source);
+                    loader.html_source = Some(html_source);
+                    loader.scripts = loader.fetch_scripts(&parsed_document)?;
+                    let document = loader
+                        .build_document()?
+                        .ok_or_else(|| "Missing HTML source after load".to_owned())?;
                     loader.stylesheets = loader.fetch_stylesheets(&document)?;
                     loader.html_loaded = true;
 
@@ -186,48 +189,85 @@ impl BrowserApp {
                     continue;
                 }
 
-                let slot = loader
+                if let Some(slot) = loader
                     .stylesheets
                     .iter_mut()
-                    .find(|slot| slot.request_id() == Some(event.id));
-                let Some(slot) = slot else {
-                    continue;
-                };
-
-                match event.result {
-                    Ok(bytes) => {
-                        let css = String::from_utf8_lossy(&bytes).into_owned();
-                        slot.set_stylesheet(Arc::new(Stylesheet::parse(&css)));
-                        self.style_sources = stylesheet_sources_from_loader(&loader.stylesheets);
-                        self.styles = StyleComputer::empty();
-                        self.styles_viewport = None;
-                        self.cached_layout = None;
-                        self.styles_dirty = true;
-                        self.last_stylesheet_change = Some(Instant::now());
-                        if debug::enabled(debug::Target::Css, debug::Level::Debug) {
-                            let url = debug::shorten(&event.url, 64);
-                            debug::log(
-                                debug::Target::Css,
-                                debug::Level::Debug,
-                                format_args!(
-                                    "css+ id={} url={url} bytes={}",
-                                    event.id.as_u64(),
-                                    bytes.len()
-                                ),
-                            );
+                    .find(|slot| slot.request_id() == Some(event.id))
+                {
+                    match event.result {
+                        Ok(bytes) => {
+                            let css = String::from_utf8_lossy(&bytes).into_owned();
+                            slot.set_stylesheet(Arc::new(Stylesheet::parse(&css)));
+                            self.style_sources =
+                                stylesheet_sources_from_loader(&loader.stylesheets);
+                            self.styles = StyleComputer::empty();
+                            self.styles_viewport = None;
+                            self.cached_layout = None;
+                            self.styles_dirty = true;
+                            self.last_stylesheet_change = Some(Instant::now());
+                            if debug::enabled(debug::Target::Css, debug::Level::Debug) {
+                                let url = debug::shorten(&event.url, 64);
+                                debug::log(
+                                    debug::Target::Css,
+                                    debug::Level::Debug,
+                                    format_args!(
+                                        "css+ id={} url={url} bytes={}",
+                                        event.id.as_u64(),
+                                        bytes.len()
+                                    ),
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            slot.set_stylesheet(Arc::new(Stylesheet::parse("")));
+                            if debug::enabled(debug::Target::Css, debug::Level::Warn) {
+                                let url = debug::shorten(&event.url, 64);
+                                let err = debug::shorten(&err, 48);
+                                debug::log(
+                                    debug::Target::Css,
+                                    debug::Level::Warn,
+                                    format_args!(
+                                        "css! id={} url={url} err={err}",
+                                        event.id.as_u64()
+                                    ),
+                                );
+                            }
                         }
                     }
-                    Err(err) => {
-                        slot.set_stylesheet(Arc::new(Stylesheet::parse("")));
-                        if debug::enabled(debug::Target::Css, debug::Level::Warn) {
-                            let url = debug::shorten(&event.url, 64);
-                            let err = debug::shorten(&err, 48);
-                            debug::log(
-                                debug::Target::Css,
-                                debug::Level::Warn,
-                                format_args!("css! id={} url={url} err={err}", event.id.as_u64()),
-                            );
+                    continue;
+                }
+
+                if let Some(slot) = loader
+                    .scripts
+                    .iter_mut()
+                    .find(|slot| slot.request_id() == Some(event.id))
+                {
+                    match event.result {
+                        Ok(bytes) => {
+                            let source = String::from_utf8_lossy(&bytes).into_owned();
+                            slot.set_source(source);
                         }
+                        Err(err) => {
+                            slot.set_source(String::new());
+                            if debug::enabled(debug::Target::Nav, debug::Level::Warn) {
+                                let url = debug::shorten(&event.url, 64);
+                                let err = debug::shorten(&err, 48);
+                                debug::log(
+                                    debug::Target::Nav,
+                                    debug::Level::Warn,
+                                    format_args!(
+                                        "js! id={} url={url} err={err}",
+                                        event.id.as_u64()
+                                    ),
+                                );
+                            }
+                        }
+                    }
+
+                    if let Some(document) = loader.build_document()? {
+                        self.document = document;
+                        self.cached_layout = None;
+                        needs_redraw = true;
                     }
                 }
             }

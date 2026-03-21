@@ -577,8 +577,7 @@ mod tests {
 
     #[test]
     fn rem_uses_initial_root_size_on_root_and_computed_root_size_for_descendants() {
-        let doc =
-            crate::html::parse_document("<div class='root'><div class='child'></div></div>");
+        let doc = crate::html::parse_document("<div class='root'><div class='child'></div></div>");
         let computer = StyleComputer::from_css(
             ".root { font-size: 62.5%; width: 2rem; } .child { width: 2rem; }",
         );

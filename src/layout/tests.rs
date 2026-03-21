@@ -646,7 +646,10 @@ fn inline_padding_override_beats_wikitable_author_css() {
         .expect("cell background should render");
 
     assert_eq!(red.width_px, 1, "inline padding should override author CSS");
-    assert_eq!(red.height_px, 10, "inline padding should override author CSS");
+    assert_eq!(
+        red.height_px, 10,
+        "inline padding should override author CSS"
+    );
 }
 
 #[test]

@@ -92,9 +92,7 @@ impl FontSize {
                 parent_factor,
                 root_factor,
                 px,
-            } => {
-                (parent_factor * parent_font_size_px) + (root_factor * root_font_size_px) + px
-            }
+            } => (parent_factor * parent_font_size_px) + (root_factor * root_font_size_px) + px,
         };
         px.round() as i32
     }
@@ -359,7 +357,10 @@ impl StyleBuilder {
                 .unwrap_or(self.base.border_color),
             border_radius: self
                 .border_radius
-                .map(|v| v.value.resolve_font_relative(font_size_px, root_font_size_px))
+                .map(|v| {
+                    v.value
+                        .resolve_font_relative(font_size_px, root_font_size_px)
+                })
                 .unwrap_or(self.base.border_radius),
             border_spacing_px: self
                 .border_spacing_px
@@ -367,7 +368,10 @@ impl StyleBuilder {
                 .unwrap_or(self.base.border_spacing_px),
             padding: self
                 .padding
-                .map(|v| v.value.resolve_font_relative(font_size_px, root_font_size_px))
+                .map(|v| {
+                    v.value
+                        .resolve_font_relative(font_size_px, root_font_size_px)
+                })
                 .unwrap_or(self.base.padding),
             width_px: self
                 .width_px

@@ -1,6 +1,6 @@
 use super::parse::{
-    absolute_css_length_to_px, parse_css_length_px_f32_with_viewport, parse_css_length_px_with_viewport,
-    split_css_number_unit,
+    absolute_css_length_to_px, parse_css_length_px_f32_with_viewport,
+    parse_css_length_px_with_viewport, split_css_number_unit,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -32,10 +32,8 @@ impl CssLength {
                 px,
                 em,
                 rem,
-            } => {
-                ((reference_px as f32) * (percent / 100.0) + px + (em * 16.0) + (rem * 16.0))
-                    .round() as i32
-            }
+            } => ((reference_px as f32) * (percent / 100.0) + px + (em * 16.0) + (rem * 16.0))
+                .round() as i32,
         }
     }
 
@@ -65,7 +63,10 @@ impl CssLength {
                 px,
                 em,
                 rem,
-            } => (percent, px + (em * font_size_px) + (rem * root_font_size_px)),
+            } => (
+                percent,
+                px + (em * font_size_px) + (rem * root_font_size_px),
+            ),
         };
         normalize_css_length(percent, px)
     }
@@ -91,8 +92,13 @@ pub(super) fn parse_css_length(
             "%" => Some(CssLength::Percent(number)),
             "em" => Some(CssLength::Em(number)),
             "rem" => Some(CssLength::Rem(number)),
-            _ => absolute_css_length_to_px(number, unit.as_str(), viewport_width_px, viewport_height_px)
-                .map(|px| CssLength::Px(px.round() as i32)),
+            _ => absolute_css_length_to_px(
+                number,
+                unit.as_str(),
+                viewport_width_px,
+                viewport_height_px,
+            )
+            .map(|px| CssLength::Px(px.round() as i32)),
         };
     }
 

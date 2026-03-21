@@ -192,7 +192,7 @@ impl<'a> Parser<'a> {
             let Some(selectors_text) = self.consume_until('{') else {
                 break;
             };
-            let selectors = parse_selector_group(selectors_text);
+            let selectors = parse_selectors(selectors_text);
 
             if self.peek_char() != Some('{') {
                 break;
@@ -468,7 +468,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn parse_selector_group(input: &str) -> Vec<Selector> {
+pub(crate) fn parse_selectors(input: &str) -> Vec<Selector> {
     input
         .split(',')
         .map(str::trim)

@@ -8,19 +8,20 @@ pub fn parse_document(source: &str) -> Document {
 struct Parser<'a> {
     input: &'a str,
     cursor: usize,
+    next_element_id: crate::dom::ElementId,
 }
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        Self { input, cursor: 0 }
+        Self {
+            input,
+            cursor: 0,
+            next_element_id: 1,
+        }
     }
 
     fn parse_document(&mut self) -> Document {
-        let mut stack: Vec<Element> = vec![Element {
-            name: "#document".to_owned(),
-            attributes: Attributes::default(),
-            children: Vec::new(),
-        }];
+        let mut stack: Vec<Element> = vec![self.new_element("#document", Attributes::default())];
 
         while let Some(fragment) = self.next_fragment() {
             match fragment {
@@ -44,20 +45,12 @@ impl<'a> Parser<'a> {
                             .last_mut()
                             .expect("stack never empty")
                             .children
-                            .push(Node::Element(Element {
-                                name,
-                                attributes,
-                                children: Vec::new(),
-                            }));
+                            .push(Node::Element(self.new_element(name, attributes)));
                         continue;
                     }
 
                     if is_raw_text_element(&name) {
-                        stack.push(Element {
-                            name: name.clone(),
-                            attributes,
-                            children: Vec::new(),
-                        });
+                        stack.push(self.new_element(name.clone(), attributes));
 
                         let text = self.consume_raw_text_until_end_tag(&name);
                         if !text.is_empty() {
@@ -70,11 +63,7 @@ impl<'a> Parser<'a> {
                         self.close_element(&mut stack, &name);
                         continue;
                     } else {
-                        stack.push(Element {
-                            name,
-                            attributes,
-                            children: Vec::new(),
-                        });
+                        stack.push(self.new_element(name, attributes));
                     }
                 }
                 Fragment::EndTag { name } => {
@@ -89,7 +78,18 @@ impl<'a> Parser<'a> {
 
         let root = stack.pop().expect("stack had root");
 
-        Document { root }
+        Document::new(root, self.next_element_id)
+    }
+
+    fn new_element(&mut self, name: impl Into<String>, attributes: Attributes) -> Element {
+        let element = Element {
+            node_id: self.next_element_id,
+            name: name.into(),
+            attributes,
+            children: Vec::new(),
+        };
+        self.next_element_id = self.next_element_id.saturating_add(1);
+        element
     }
 
     fn close_element(&self, stack: &mut Vec<Element>, name: &str) {
@@ -431,6 +431,7 @@ mod tests {
             vec![
                 Node::Text("Hello ".to_owned()),
                 Node::Element(Element {
+                    node_id: 0,
                     name: "strong".to_owned(),
                     attributes: Attributes::default(),
                     children: vec![Node::Text("World".to_owned())],

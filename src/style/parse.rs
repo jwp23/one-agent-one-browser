@@ -125,8 +125,10 @@ pub(super) fn parse_css_font_size(
         "%" => Some(FontSize::ParentFactor(number / 100.0)),
         "em" => Some(FontSize::ParentFactor(number)),
         "rem" => Some(FontSize::RootFactor(number)),
-        _ => absolute_css_length_to_px(number, unit.as_str(), viewport_width_px, viewport_height_px)
-            .map(|px| FontSize::Px(px.round() as i32)),
+        _ => {
+            absolute_css_length_to_px(number, unit.as_str(), viewport_width_px, viewport_height_px)
+                .map(|px| FontSize::Px(px.round() as i32))
+        }
     }
 }
 
@@ -328,8 +330,12 @@ fn apply_font_size_term(
         "em" => *parent_factor += sign * number,
         "rem" => *root_factor += sign * number,
         _ => {
-            let amount =
-                absolute_css_length_to_px(number, unit.as_str(), viewport_width_px, viewport_height_px)?;
+            let amount = absolute_css_length_to_px(
+                number,
+                unit.as_str(),
+                viewport_width_px,
+                viewport_height_px,
+            )?;
             *px += sign * amount;
         }
     }

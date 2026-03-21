@@ -16,7 +16,7 @@ pub(super) fn match_rule(
     best.map(|spec| (spec, rule.order))
 }
 
-fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Element]) -> bool {
+pub(crate) fn selector_matches(selector: &Selector, element: &Element, ancestors: &[&Element]) -> bool {
     if selector.parts.is_empty() {
         return false;
     }

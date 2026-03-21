@@ -1,14 +1,32 @@
+mod engine;
+
 use crate::dom::{Document, Element, Node};
 
 pub fn execute_inline_scripts(document: &mut Document) {
     let mut scripts = Vec::new();
     collect_inline_classic_scripts(&document.root, &mut scripts);
 
-    for source in scripts {
+    execute_script_sources(document, &scripts);
+}
+
+pub fn execute_script_sources(document: &mut Document, sources: &[String]) {
+    for source in sources {
+        if engine::execute(document, source).is_ok() {
+            continue;
+        }
+
         if let Some(classes) = parse_document_element_class_name_assignment(&source)
             && let Some(html) = document.find_first_element_by_name_mut("html")
         {
             html.attributes.classes = classes.split_whitespace().map(str::to_owned).collect();
+        }
+
+        for mutation in parse_dom_class_list_mutations(source) {
+            apply_class_list_mutation(document, &mutation);
+        }
+
+        for mutation in parse_jquery_class_mutations(source) {
+            apply_class_list_mutation(document, &mutation);
         }
 
         for assignment in parse_text_content_assignments(&source) {
@@ -24,6 +42,26 @@ pub fn execute_inline_scripts(document: &mut Document) {
 struct TextContentAssignment {
     element_id: String,
     text: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ClassListMutation {
+    target: ScriptElementTarget,
+    operation: ClassListOperation,
+    classes: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ScriptElementTarget {
+    DocumentElement,
+    Body,
+    Selector(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClassListOperation {
+    Add,
+    Remove,
 }
 
 fn collect_inline_classic_scripts(element: &Element, out: &mut Vec<String>) {
@@ -95,6 +133,50 @@ fn parse_text_content_assignments(script: &str) -> Vec<TextContentAssignment> {
     out
 }
 
+fn parse_dom_class_list_mutations(script: &str) -> Vec<ClassListMutation> {
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+
+    while cursor < script.len() {
+        let Some(offset) = script[cursor..].find("document.") else {
+            break;
+        };
+        let start = cursor + offset;
+        let next = match parse_dom_class_list_mutation(script, start) {
+            Some((mutation, next)) => {
+                out.push(mutation);
+                next
+            }
+            None => start + "document.".len(),
+        };
+        cursor = next.min(script.len());
+    }
+
+    out
+}
+
+fn parse_jquery_class_mutations(script: &str) -> Vec<ClassListMutation> {
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+
+    while cursor < script.len() {
+        let Some(offset) = script[cursor..].find("$(") else {
+            break;
+        };
+        let start = cursor + offset;
+        let next = match parse_jquery_class_mutation(script, start) {
+            Some((mutation, next)) => {
+                out.push(mutation);
+                next
+            }
+            None => start + 2,
+        };
+        cursor = next.min(script.len());
+    }
+
+    out
+}
+
 fn parse_document_element_class_name_assignment(script: &str) -> Option<String> {
     const MARKER: &str = "document.documentElement.className";
     let start = script.find(MARKER)?;
@@ -111,6 +193,149 @@ fn parse_document_element_class_name_assignment(script: &str) -> Option<String> 
 
     let (identifier, _) = parse_js_identifier(script, cursor)?;
     parse_js_variable_string_literal(script, identifier.as_str())
+}
+
+fn parse_dom_class_list_mutation(script: &str, start: usize) -> Option<(ClassListMutation, usize)> {
+    let (target, next) = parse_dom_target(script, start)?;
+    let mut cursor = skip_whitespace(script, next);
+    cursor = consume_char(script, cursor, '.')?;
+    if !script[cursor..].starts_with("classList") {
+        return None;
+    }
+    cursor += "classList".len();
+    cursor = skip_whitespace(script, cursor);
+    cursor = consume_char(script, cursor, '.')?;
+
+    let (operation_name, next) = parse_js_identifier(script, cursor)?;
+    let operation = match operation_name.as_str() {
+        "add" => ClassListOperation::Add,
+        "remove" => ClassListOperation::Remove,
+        _ => return None,
+    };
+    cursor = skip_whitespace(script, next);
+    cursor = consume_char(script, cursor, '(')?;
+    cursor = skip_whitespace(script, cursor);
+
+    let (classes, next) = parse_js_string_arguments(script, cursor)?;
+    cursor = skip_whitespace(script, next);
+    cursor = consume_char(script, cursor, ')')?;
+    cursor = skip_whitespace(script, cursor);
+    if let Some(next) = consume_char(script, cursor, ';') {
+        cursor = next;
+    }
+
+    Some((
+        ClassListMutation {
+            target,
+            operation,
+            classes,
+        },
+        cursor,
+    ))
+}
+
+fn parse_jquery_class_mutation(script: &str, start: usize) -> Option<(ClassListMutation, usize)> {
+    if !script[start..].starts_with("$(") {
+        return None;
+    }
+
+    let mut cursor = start + 2;
+    cursor = skip_whitespace(script, cursor);
+    let (selector, next) = parse_js_string_literal(script, cursor)?;
+    cursor = skip_whitespace(script, next);
+    cursor = consume_char(script, cursor, ')')?;
+    cursor = skip_whitespace(script, cursor);
+    cursor = consume_char(script, cursor, '.')?;
+
+    let (operation_name, next) = parse_js_identifier(script, cursor)?;
+    let operation = match operation_name.as_str() {
+        "addClass" => ClassListOperation::Add,
+        "removeClass" => ClassListOperation::Remove,
+        _ => return None,
+    };
+    cursor = skip_whitespace(script, next);
+    cursor = consume_char(script, cursor, '(')?;
+    cursor = skip_whitespace(script, cursor);
+
+    let (classes, next) = parse_js_string_arguments(script, cursor)?;
+    cursor = skip_whitespace(script, next);
+    cursor = consume_char(script, cursor, ')')?;
+    cursor = skip_whitespace(script, cursor);
+    if let Some(next) = consume_char(script, cursor, ';') {
+        cursor = next;
+    }
+
+    Some((
+        ClassListMutation {
+            target: ScriptElementTarget::Selector(selector),
+            operation,
+            classes,
+        },
+        cursor,
+    ))
+}
+
+fn parse_dom_target(script: &str, start: usize) -> Option<(ScriptElementTarget, usize)> {
+    const DOCUMENT_ELEMENT: &str = "document.documentElement";
+    const BODY: &str = "document.body";
+    const GET_BY_ID: &str = "document.getElementById";
+    const QUERY_SELECTOR: &str = "document.querySelector";
+
+    if script[start..].starts_with(DOCUMENT_ELEMENT) {
+        return Some((
+            ScriptElementTarget::DocumentElement,
+            start + DOCUMENT_ELEMENT.len(),
+        ));
+    }
+
+    if script[start..].starts_with(BODY) {
+        return Some((ScriptElementTarget::Body, start + BODY.len()));
+    }
+
+    if script[start..].starts_with(GET_BY_ID) {
+        let mut cursor = start + GET_BY_ID.len();
+        cursor = skip_whitespace(script, cursor);
+        cursor = consume_char(script, cursor, '(')?;
+        cursor = skip_whitespace(script, cursor);
+        let (id, next) = parse_js_string_literal(script, cursor)?;
+        cursor = skip_whitespace(script, next);
+        cursor = consume_char(script, cursor, ')')?;
+        return Some((ScriptElementTarget::Selector(format!("#{id}")), cursor));
+    }
+
+    if script[start..].starts_with(QUERY_SELECTOR) {
+        let mut cursor = start + QUERY_SELECTOR.len();
+        cursor = skip_whitespace(script, cursor);
+        cursor = consume_char(script, cursor, '(')?;
+        cursor = skip_whitespace(script, cursor);
+        let (selector, next) = parse_js_string_literal(script, cursor)?;
+        cursor = skip_whitespace(script, next);
+        cursor = consume_char(script, cursor, ')')?;
+        return Some((ScriptElementTarget::Selector(selector), cursor));
+    }
+
+    None
+}
+
+fn parse_js_string_arguments(source: &str, start: usize) -> Option<(Vec<String>, usize)> {
+    let mut args = Vec::new();
+    let mut cursor = start;
+
+    loop {
+        cursor = skip_whitespace(source, cursor);
+        let (value, next) = parse_js_string_literal(source, cursor)?;
+        args.extend(
+            value
+                .split_whitespace()
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned),
+        );
+        cursor = skip_whitespace(source, next);
+        let Some(next) = consume_char(source, cursor, ',') else {
+            return Some((args, cursor));
+        };
+        cursor = next;
+    }
 }
 
 fn parse_js_variable_string_literal(script: &str, variable_name: &str) -> Option<String> {
@@ -151,6 +376,56 @@ fn parse_js_variable_string_literal(script: &str, variable_name: &str) -> Option
         }
     }
     None
+}
+
+fn apply_class_list_mutation(document: &mut Document, mutation: &ClassListMutation) {
+    let Some(element) = find_script_target_mut(document, &mutation.target) else {
+        return;
+    };
+
+    match mutation.operation {
+        ClassListOperation::Add => {
+            for class_name in &mutation.classes {
+                if !element.attributes.has_class(class_name) {
+                    element.attributes.classes.push(class_name.clone());
+                }
+            }
+        }
+        ClassListOperation::Remove => {
+            element.attributes.classes.retain(|existing| {
+                !mutation
+                    .classes
+                    .iter()
+                    .any(|class_name| class_name == existing)
+            });
+        }
+    }
+}
+
+fn find_script_target_mut<'a>(
+    document: &'a mut Document,
+    target: &ScriptElementTarget,
+) -> Option<&'a mut Element> {
+    match target {
+        ScriptElementTarget::DocumentElement => document.find_first_element_by_name_mut("html"),
+        ScriptElementTarget::Body => document.find_first_element_by_name_mut("body"),
+        ScriptElementTarget::Selector(selector) => {
+            if let Some(id) = selector.strip_prefix('#') {
+                return document.find_first_element_by_id_mut(id);
+            }
+            if is_simple_tag_name(selector) {
+                return document.find_first_element_by_name_mut(selector);
+            }
+            None
+        }
+    }
+}
+
+fn is_simple_tag_name(selector: &str) -> bool {
+    !selector.is_empty()
+        && selector
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
 }
 
 fn parse_js_identifier(source: &str, start: usize) -> Option<(String, usize)> {
@@ -632,11 +907,7 @@ fn build_element_owned(name: &str, attrs: Vec<(String, String)>, children: Vec<N
     for (key, value) in attrs {
         attributes.insert(key, value);
     }
-    Element {
-        name: name.to_owned(),
-        attributes,
-        children,
-    }
+    Element::new(name, attributes, children)
 }
 
 fn contains_descendant_class(element: &Element, class_name: &str) -> bool {
@@ -809,6 +1080,72 @@ mod tests {
         assert!(html.attributes.has_class("foo"));
         assert!(html.attributes.has_class("bar"));
         assert!(!html.attributes.has_class("initial"));
+    }
+
+    #[test]
+    fn executes_document_element_class_list_mutations() {
+        let html = r#"
+<html class="client-nojs">
+  <body>
+    <script>
+      document.documentElement.classList.add("client-js", "vector-animations-ready");
+      document.documentElement.classList.remove("client-nojs");
+    </script>
+  </body>
+</html>
+"#;
+        let mut document = crate::html::parse_document(html);
+        execute_inline_scripts(&mut document);
+        let html = document
+            .find_first_element_by_name("html")
+            .expect("missing html element");
+        assert!(html.attributes.has_class("client-js"));
+        assert!(html.attributes.has_class("vector-animations-ready"));
+        assert!(!html.attributes.has_class("client-nojs"));
+    }
+
+    #[test]
+    fn executes_get_element_by_id_class_list_mutations() {
+        let html = r#"
+<html>
+  <body>
+    <div id="target" class="collapsed"></div>
+    <script>
+      document.getElementById("target").classList.add("expanded");
+      document.getElementById("target").classList.remove("collapsed");
+    </script>
+  </body>
+</html>
+"#;
+        let mut document = crate::html::parse_document(html);
+        execute_inline_scripts(&mut document);
+        let target = document
+            .find_first_element_by_id("target")
+            .expect("missing target element");
+        assert!(target.attributes.has_class("expanded"));
+        assert!(!target.attributes.has_class("collapsed"));
+    }
+
+    #[test]
+    fn executes_jquery_add_class_mutation() {
+        let html = r#"
+<html class="client-nojs">
+  <body>
+    <script>
+      $('html').addClass('ve-available vector-animations-ready');
+      $('html').removeClass('client-nojs');
+    </script>
+  </body>
+</html>
+"#;
+        let mut document = crate::html::parse_document(html);
+        execute_inline_scripts(&mut document);
+        let html = document
+            .find_first_element_by_name("html")
+            .expect("missing html element");
+        assert!(html.attributes.has_class("ve-available"));
+        assert!(html.attributes.has_class("vector-animations-ready"));
+        assert!(!html.attributes.has_class("client-nojs"));
     }
 
     #[test]

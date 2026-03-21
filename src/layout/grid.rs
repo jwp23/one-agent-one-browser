@@ -587,7 +587,8 @@ fn measure_track_content_width<'doc>(
         let Some(placement) = item.placement else {
             continue;
         };
-        if placement.col_start != column_index || placement.col_end != column_index.saturating_add(1)
+        if placement.col_start != column_index
+            || placement.col_end != column_index.saturating_add(1)
         {
             continue;
         }

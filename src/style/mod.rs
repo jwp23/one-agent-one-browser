@@ -5,7 +5,7 @@ mod custom_properties;
 mod declarations;
 mod length;
 mod parse;
-mod selectors;
+pub(crate) mod selectors;
 
 use crate::geom::{Color, Edges};
 use std::borrow::Cow;
@@ -371,10 +371,18 @@ impl CssEdges {
 
     pub fn resolve_font_relative(self, font_size_px: i32, root_font_size_px: i32) -> CssEdges {
         CssEdges {
-            top: self.top.resolve_font_relative(font_size_px, root_font_size_px),
-            right: self.right.resolve_font_relative(font_size_px, root_font_size_px),
-            bottom: self.bottom.resolve_font_relative(font_size_px, root_font_size_px),
-            left: self.left.resolve_font_relative(font_size_px, root_font_size_px),
+            top: self
+                .top
+                .resolve_font_relative(font_size_px, root_font_size_px),
+            right: self
+                .right
+                .resolve_font_relative(font_size_px, root_font_size_px),
+            bottom: self
+                .bottom
+                .resolve_font_relative(font_size_px, root_font_size_px),
+            left: self
+                .left
+                .resolve_font_relative(font_size_px, root_font_size_px),
         }
     }
 }
