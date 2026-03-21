@@ -16,8 +16,7 @@ pub fn execute(document: &mut Document, source: &str) -> Result<(), String> {
 #[derive(Clone, Debug)]
 enum Statement {
     VariableDeclaration {
-        name: String,
-        init: Option<Expression>,
+        declarations: Vec<VariableDeclarator>,
     },
     FunctionDeclaration {
         name: String,
@@ -36,6 +35,28 @@ enum Statement {
         catch_param: String,
         catch_block: Vec<Statement>,
     },
+    While {
+        test: Expression,
+        body: Box<Statement>,
+    },
+    For {
+        init: Option<ForInit>,
+        test: Option<Expression>,
+        update: Option<Expression>,
+        body: Box<Statement>,
+    },
+    Expression(Expression),
+}
+
+#[derive(Clone, Debug)]
+struct VariableDeclarator {
+    name: String,
+    init: Option<Expression>,
+}
+
+#[derive(Clone, Debug)]
+enum ForInit {
+    VariableDeclaration(Vec<VariableDeclarator>),
     Expression(Expression),
 }
 
@@ -55,13 +76,26 @@ enum UnaryOperator {
 #[derive(Clone, Copy, Debug)]
 enum BinaryOperator {
     Add,
+    Subtract,
+    Divide,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
     In,
     Equal,
     NotEqual,
     StrictEqual,
     StrictNotEqual,
+    BitXor,
     LogicalAnd,
     LogicalOr,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum UpdateOperator {
+    Increment,
+    Decrement,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +131,11 @@ enum Expression {
     Assignment {
         target: Box<Expression>,
         value: Box<Expression>,
+    },
+    Update {
+        target: Box<Expression>,
+        operator: UpdateOperator,
+        prefix: bool,
     },
     Unary {
         operator: UnaryOperator,
@@ -134,6 +173,8 @@ enum Token {
     KeywordTypeof,
     KeywordTry,
     KeywordCatch,
+    KeywordWhile,
+    KeywordFor,
     KeywordIn,
     Dot,
     LeftParen,
@@ -152,6 +193,18 @@ enum Token {
     BangEqual,
     BangEqualEqual,
     Plus,
+    PlusPlus,
+    PlusEqual,
+    Minus,
+    MinusMinus,
+    MinusEqual,
+    Slash,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Caret,
+    CaretEqual,
     AndAnd,
     OrOr,
     Eof,
@@ -181,7 +234,11 @@ impl<'a> Lexer<'a> {
                 '/' if self.starts_with("/*") => {
                     self.consume_block_comment()?;
                 }
-                '/' => out.push(self.consume_regex_literal()?),
+                '/' if should_parse_regex(out.last()) => out.push(self.consume_regex_literal()?),
+                '/' => {
+                    self.advance_char();
+                    out.push(Token::Slash);
+                }
                 '.' => {
                     self.advance_char();
                     out.push(Token::Dot);
@@ -222,9 +279,53 @@ impl<'a> Lexer<'a> {
                     self.advance_char();
                     out.push(Token::Colon);
                 }
+                '+' if self.starts_with("++") => {
+                    self.cursor += 2;
+                    out.push(Token::PlusPlus);
+                }
+                '+' if self.starts_with("+=") => {
+                    self.cursor += 2;
+                    out.push(Token::PlusEqual);
+                }
                 '+' => {
                     self.advance_char();
                     out.push(Token::Plus);
+                }
+                '-' if self.starts_with("--") => {
+                    self.cursor += 2;
+                    out.push(Token::MinusMinus);
+                }
+                '-' if self.starts_with("-=") => {
+                    self.cursor += 2;
+                    out.push(Token::MinusEqual);
+                }
+                '-' => {
+                    self.advance_char();
+                    out.push(Token::Minus);
+                }
+                '<' if self.starts_with("<=") => {
+                    self.cursor += 2;
+                    out.push(Token::LessEqual);
+                }
+                '<' => {
+                    self.advance_char();
+                    out.push(Token::Less);
+                }
+                '>' if self.starts_with(">=") => {
+                    self.cursor += 2;
+                    out.push(Token::GreaterEqual);
+                }
+                '>' => {
+                    self.advance_char();
+                    out.push(Token::Greater);
+                }
+                '^' if self.starts_with("^=") => {
+                    self.cursor += 2;
+                    out.push(Token::CaretEqual);
+                }
+                '^' => {
+                    self.advance_char();
+                    out.push(Token::Caret);
                 }
                 '&' if self.starts_with("&&") => {
                     self.cursor += 2;
@@ -278,6 +379,8 @@ impl<'a> Lexer<'a> {
                         "typeof" => Token::KeywordTypeof,
                         "try" => Token::KeywordTry,
                         "catch" => Token::KeywordCatch,
+                        "while" => Token::KeywordWhile,
+                        "for" => Token::KeywordFor,
                         "in" => Token::KeywordIn,
                         _ => Token::Identifier(identifier),
                     });
@@ -471,14 +574,9 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Statement, String> {
         if self.match_any(&[Token::KeywordVar, Token::KeywordLet, Token::KeywordConst]) {
-            let name = self.expect_identifier()?;
-            let init = if self.match_token(&Token::Equal) {
-                Some(self.parse_expression()?)
-            } else {
-                None
-            };
+            let declarations = self.parse_variable_declaration_list()?;
             self.match_token(&Token::Semicolon);
-            return Ok(Statement::VariableDeclaration { name, init });
+            return Ok(Statement::VariableDeclaration { declarations });
         }
 
         if self.match_token(&Token::KeywordFunction) {
@@ -531,6 +629,48 @@ impl Parser {
             });
         }
 
+        if self.match_token(&Token::KeywordWhile) {
+            self.expect(&Token::LeftParen)?;
+            let test = self.parse_expression()?;
+            self.expect(&Token::RightParen)?;
+            let body = Box::new(self.parse_statement()?);
+            return Ok(Statement::While { test, body });
+        }
+
+        if self.match_token(&Token::KeywordFor) {
+            self.expect(&Token::LeftParen)?;
+            let init = if self.match_token(&Token::Semicolon) {
+                None
+            } else if self.match_any(&[Token::KeywordVar, Token::KeywordLet, Token::KeywordConst]) {
+                let declarations = self.parse_variable_declaration_list()?;
+                self.expect(&Token::Semicolon)?;
+                Some(ForInit::VariableDeclaration(declarations))
+            } else {
+                let expression = self.parse_expression()?;
+                self.expect(&Token::Semicolon)?;
+                Some(ForInit::Expression(expression))
+            };
+            let test = if self.check(&Token::Semicolon) {
+                None
+            } else {
+                Some(self.parse_expression()?)
+            };
+            self.expect(&Token::Semicolon)?;
+            let update = if self.check(&Token::RightParen) {
+                None
+            } else {
+                Some(self.parse_expression()?)
+            };
+            self.expect(&Token::RightParen)?;
+            let body = Box::new(self.parse_statement()?);
+            return Ok(Statement::For {
+                init,
+                test,
+                update,
+                body,
+            });
+        }
+
         if self.check(&Token::LeftBrace) {
             return Ok(Statement::Block(self.parse_block_statements()?));
         }
@@ -570,6 +710,23 @@ impl Parser {
         Ok((params, body))
     }
 
+    fn parse_variable_declaration_list(&mut self) -> Result<Vec<VariableDeclarator>, String> {
+        let mut declarations = Vec::new();
+        loop {
+            let name = self.expect_identifier()?;
+            let init = if self.match_token(&Token::Equal) {
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+            declarations.push(VariableDeclarator { name, init });
+            if !self.match_token(&Token::Comma) {
+                break;
+            }
+        }
+        Ok(declarations)
+    }
+
     fn parse_expression(&mut self) -> Result<Expression, String> {
         self.parse_assignment()
     }
@@ -581,6 +738,39 @@ impl Parser {
             return Ok(Expression::Assignment {
                 target: Box::new(expression),
                 value: Box::new(value),
+            });
+        }
+        if self.match_token(&Token::PlusEqual) {
+            let value = self.parse_assignment()?;
+            return Ok(Expression::Assignment {
+                target: Box::new(expression.clone()),
+                value: Box::new(Expression::Binary {
+                    left: Box::new(expression),
+                    operator: BinaryOperator::Add,
+                    right: Box::new(value),
+                }),
+            });
+        }
+        if self.match_token(&Token::MinusEqual) {
+            let value = self.parse_assignment()?;
+            return Ok(Expression::Assignment {
+                target: Box::new(expression.clone()),
+                value: Box::new(Expression::Binary {
+                    left: Box::new(expression),
+                    operator: BinaryOperator::Subtract,
+                    right: Box::new(value),
+                }),
+            });
+        }
+        if self.match_token(&Token::CaretEqual) {
+            let value = self.parse_assignment()?;
+            return Ok(Expression::Assignment {
+                target: Box::new(expression.clone()),
+                value: Box::new(Expression::Binary {
+                    left: Box::new(expression),
+                    operator: BinaryOperator::BitXor,
+                    right: Box::new(value),
+                }),
             });
         }
         Ok(expression)
@@ -613,7 +803,7 @@ impl Parser {
     }
 
     fn parse_equality(&mut self) -> Result<Expression, String> {
-        let mut expression = self.parse_in_expression()?;
+        let mut expression = self.parse_relational()?;
         loop {
             let operator = if self.match_token(&Token::EqualEqualEqual) {
                 Some(BinaryOperator::StrictEqual)
@@ -630,7 +820,7 @@ impl Parser {
             let Some(operator) = operator else {
                 break;
             };
-            let right = self.parse_in_expression()?;
+            let right = self.parse_relational()?;
             expression = Expression::Binary {
                 left: Box::new(expression),
                 operator,
@@ -640,13 +830,29 @@ impl Parser {
         Ok(expression)
     }
 
-    fn parse_in_expression(&mut self) -> Result<Expression, String> {
+    fn parse_relational(&mut self) -> Result<Expression, String> {
         let mut expression = self.parse_additive()?;
-        while self.match_token(&Token::KeywordIn) {
+        loop {
+            let operator = if self.match_token(&Token::KeywordIn) {
+                Some(BinaryOperator::In)
+            } else if self.match_token(&Token::Less) {
+                Some(BinaryOperator::Less)
+            } else if self.match_token(&Token::LessEqual) {
+                Some(BinaryOperator::LessEqual)
+            } else if self.match_token(&Token::Greater) {
+                Some(BinaryOperator::Greater)
+            } else if self.match_token(&Token::GreaterEqual) {
+                Some(BinaryOperator::GreaterEqual)
+            } else {
+                None
+            };
+            let Some(operator) = operator else {
+                break;
+            };
             let right = self.parse_additive()?;
             expression = Expression::Binary {
                 left: Box::new(expression),
-                operator: BinaryOperator::In,
+                operator,
                 right: Box::new(right),
             };
         }
@@ -654,12 +860,37 @@ impl Parser {
     }
 
     fn parse_additive(&mut self) -> Result<Expression, String> {
+        let mut expression = self.parse_multiplicative()?;
+        loop {
+            let operator = if self.match_token(&Token::Plus) {
+                Some(BinaryOperator::Add)
+            } else if self.match_token(&Token::Minus) {
+                Some(BinaryOperator::Subtract)
+            } else if self.match_token(&Token::Caret) {
+                Some(BinaryOperator::BitXor)
+            } else {
+                None
+            };
+            let Some(operator) = operator else {
+                break;
+            };
+            let right = self.parse_multiplicative()?;
+            expression = Expression::Binary {
+                left: Box::new(expression),
+                operator,
+                right: Box::new(right),
+            };
+        }
+        Ok(expression)
+    }
+
+    fn parse_multiplicative(&mut self) -> Result<Expression, String> {
         let mut expression = self.parse_unary()?;
-        while self.match_token(&Token::Plus) {
+        while self.match_token(&Token::Slash) {
             let right = self.parse_unary()?;
             expression = Expression::Binary {
                 left: Box::new(expression),
-                operator: BinaryOperator::Add,
+                operator: BinaryOperator::Divide,
                 right: Box::new(right),
             };
         }
@@ -667,6 +898,20 @@ impl Parser {
     }
 
     fn parse_unary(&mut self) -> Result<Expression, String> {
+        if self.match_token(&Token::PlusPlus) {
+            return Ok(Expression::Update {
+                target: Box::new(self.parse_unary()?),
+                operator: UpdateOperator::Increment,
+                prefix: true,
+            });
+        }
+        if self.match_token(&Token::MinusMinus) {
+            return Ok(Expression::Update {
+                target: Box::new(self.parse_unary()?),
+                operator: UpdateOperator::Decrement,
+                prefix: true,
+            });
+        }
         if self.match_token(&Token::Bang) {
             return Ok(Expression::Unary {
                 operator: UnaryOperator::Not,
@@ -680,7 +925,7 @@ impl Parser {
             });
         }
         if self.match_token(&Token::KeywordNew) {
-            let callee = self.parse_call_member()?;
+            let callee = self.parse_member_expression()?;
             let arguments = if self.match_token(&Token::LeftParen) {
                 self.parse_call_arguments()?
             } else {
@@ -691,13 +936,41 @@ impl Parser {
                 arguments,
             });
         }
-        self.parse_call_member()
+        self.parse_postfix()
+    }
+
+    fn parse_postfix(&mut self) -> Result<Expression, String> {
+        let expression = self.parse_call_member()?;
+        if self.match_token(&Token::PlusPlus) {
+            return Ok(Expression::Update {
+                target: Box::new(expression),
+                operator: UpdateOperator::Increment,
+                prefix: false,
+            });
+        }
+        if self.match_token(&Token::MinusMinus) {
+            return Ok(Expression::Update {
+                target: Box::new(expression),
+                operator: UpdateOperator::Decrement,
+                prefix: false,
+            });
+        }
+        Ok(expression)
     }
 
     fn parse_call_member(&mut self) -> Result<Expression, String> {
-        let mut expression = self.parse_primary()?;
+        let mut expression = self.parse_member_expression()?;
 
         loop {
+            if self.match_token(&Token::LeftParen) {
+                let arguments = self.parse_call_arguments()?;
+                expression = Expression::Call {
+                    callee: Box::new(expression),
+                    arguments,
+                };
+                continue;
+            }
+
             if self.match_token(&Token::Dot) {
                 let property = self.expect_identifier()?;
                 expression = Expression::Member {
@@ -717,11 +990,31 @@ impl Parser {
                 continue;
             }
 
-            if self.match_token(&Token::LeftParen) {
-                let arguments = self.parse_call_arguments()?;
-                expression = Expression::Call {
-                    callee: Box::new(expression),
-                    arguments,
+            break;
+        }
+
+        Ok(expression)
+    }
+
+    fn parse_member_expression(&mut self) -> Result<Expression, String> {
+        let mut expression = self.parse_primary()?;
+
+        loop {
+            if self.match_token(&Token::Dot) {
+                let property = self.expect_identifier()?;
+                expression = Expression::Member {
+                    object: Box::new(expression),
+                    property,
+                };
+                continue;
+            }
+
+            if self.match_token(&Token::LeftBracket) {
+                let property = self.parse_expression()?;
+                self.expect(&Token::RightBracket)?;
+                expression = Expression::ComputedMember {
+                    object: Box::new(expression),
+                    property: Box::new(property),
                 };
                 continue;
             }
@@ -883,6 +1176,7 @@ enum Value {
     Object(ObjectRef),
     Array(ArrayRef),
     Function(Rc<FunctionValue>),
+    BoundFunction(Rc<BoundFunctionValue>),
     Window,
     Document,
     LiveElement(ElementId),
@@ -912,6 +1206,14 @@ enum FunctionKind {
 }
 
 #[derive(Clone)]
+struct BoundFunctionValue {
+    target: Value,
+    this_value: Value,
+    preset_arguments: Vec<Value>,
+    properties: ObjectRef,
+}
+
+#[derive(Clone)]
 struct UserFunction {
     params: Vec<String>,
     body: Vec<Statement>,
@@ -922,8 +1224,12 @@ struct UserFunction {
 enum NativeFunction {
     Dollar,
     ArrayIsArray,
+    ObjectCreate,
+    ObjectHasOwnProperty,
     RegExpConstructor,
     FunctionConstructor,
+    FunctionCall,
+    FunctionBind,
     Noop,
 }
 
@@ -964,14 +1270,79 @@ impl<'a> Executor<'a> {
         executor.declare_global("window", Value::Window);
         executor.declare_global("document", Value::Document);
         executor.declare_global("$", executor.create_native_function(NativeFunction::Dollar));
+        let console = executor.create_plain_object();
+        let _ = executor.set_property_value(
+            console.clone(),
+            "log",
+            executor.create_native_function(NativeFunction::Noop),
+        );
+        let _ = executor.set_property_value(
+            console.clone(),
+            "warn",
+            executor.create_native_function(NativeFunction::Noop),
+        );
+        executor.declare_global("console", console);
+
+        let local_storage = executor.create_plain_object();
+        let _ = executor.set_property_value(
+            local_storage.clone(),
+            "getItem",
+            executor.create_native_function(NativeFunction::Noop),
+        );
+        let _ = executor.set_property_value(
+            local_storage.clone(),
+            "setItem",
+            executor.create_native_function(NativeFunction::Noop),
+        );
+        let _ = executor.set_property_value(
+            local_storage.clone(),
+            "removeItem",
+            executor.create_native_function(NativeFunction::Noop),
+        );
+        executor.declare_global("localStorage", local_storage);
+
+        let performance = executor.create_plain_object();
+        let timing = executor.create_plain_object();
+        let _ = executor.set_property_value(timing.clone(), "navigationStart", Value::Number(0.0));
+        let _ = executor.set_property_value(
+            performance.clone(),
+            "mark",
+            executor.create_native_function(NativeFunction::Noop),
+        );
+        let _ = executor.set_property_value(performance.clone(), "timing", timing);
+        executor.declare_global("performance", performance);
+
+        let object_ctor = executor.create_native_function(NativeFunction::Noop);
+        let _ = executor.set_property_value(
+            object_ctor.clone(),
+            "create",
+            executor.create_native_function(NativeFunction::ObjectCreate),
+        );
+        let _ = executor.set_property_value(
+            object_ctor.clone(),
+            "hasOwnProperty",
+            executor.create_native_function(NativeFunction::ObjectHasOwnProperty),
+        );
+        executor.declare_global("Object", object_ctor);
+
         executor.declare_global(
             "RegExp",
             executor.create_native_function(NativeFunction::RegExpConstructor),
         );
-        executor.declare_global(
-            "Function",
-            executor.create_native_function(NativeFunction::FunctionConstructor),
+        let function_ctor = executor.create_native_function(NativeFunction::FunctionConstructor);
+        let function_proto = executor.create_plain_object();
+        let _ = executor.set_property_value(
+            function_proto.clone(),
+            "call",
+            executor.create_native_function(NativeFunction::FunctionCall),
         );
+        let _ = executor.set_property_value(
+            function_proto.clone(),
+            "bind",
+            executor.create_native_function(NativeFunction::FunctionBind),
+        );
+        let _ = executor.set_property_value(function_ctor.clone(), "prototype", function_proto);
+        executor.declare_global("Function", function_ctor);
 
         let array_ctor = executor.create_native_function(NativeFunction::Noop);
         let _ = executor.set_property_value(
@@ -1013,14 +1384,18 @@ impl<'a> Executor<'a> {
 
     fn execute_statement(&mut self, statement: &Statement) -> Result<ControlFlow, String> {
         match statement {
-            Statement::VariableDeclaration { name, init } => {
-                let value = if let Some(init) = init {
-                    self.evaluate_expression(init)?
-                } else {
-                    Value::Undefined
-                };
-                self.declare_binding(name, value.clone());
-                Ok(ControlFlow::Continue(value))
+            Statement::VariableDeclaration { declarations } => {
+                let mut last = Value::Undefined;
+                for declaration in declarations {
+                    let value = if let Some(init) = &declaration.init {
+                        self.evaluate_expression(init)?
+                    } else {
+                        Value::Undefined
+                    };
+                    self.declare_binding(&declaration.name, value.clone());
+                    last = value;
+                }
+                Ok(ControlFlow::Continue(last))
             }
             Statement::FunctionDeclaration { name, params, body } => {
                 let function = self.create_user_function(params.clone(), body.clone());
@@ -1068,6 +1443,56 @@ impl<'a> Executor<'a> {
                     result
                 }
             },
+            Statement::While { test, body } => {
+                let mut last = Value::Undefined;
+                while self.evaluate_expression(test)?.is_truthy() {
+                    match self.execute_statement(body)? {
+                        ControlFlow::Continue(value) => last = value,
+                        ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                    }
+                }
+                Ok(ControlFlow::Continue(last))
+            }
+            Statement::For {
+                init,
+                test,
+                update,
+                body,
+            } => {
+                let mut last = Value::Undefined;
+                if let Some(init) = init {
+                    match init {
+                        ForInit::VariableDeclaration(declarations) => {
+                            for declaration in declarations {
+                                let value = if let Some(init) = &declaration.init {
+                                    self.evaluate_expression(init)?
+                                } else {
+                                    Value::Undefined
+                                };
+                                self.declare_binding(&declaration.name, value);
+                            }
+                        }
+                        ForInit::Expression(expression) => {
+                            last = self.evaluate_expression(expression)?;
+                        }
+                    }
+                }
+                loop {
+                    if let Some(test) = test
+                        && !self.evaluate_expression(test)?.is_truthy()
+                    {
+                        break;
+                    }
+                    match self.execute_statement(body)? {
+                        ControlFlow::Continue(value) => last = value,
+                        ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                    }
+                    if let Some(update) = update {
+                        last = self.evaluate_expression(update)?;
+                    }
+                }
+                Ok(ControlFlow::Continue(last))
+            }
             Statement::Expression(expression) => {
                 Ok(ControlFlow::Continue(self.evaluate_expression(expression)?))
             }
@@ -1120,6 +1545,11 @@ impl<'a> Executor<'a> {
                 self.assign_target(target, value.clone())?;
                 Ok(value)
             }
+            Expression::Update {
+                target,
+                operator,
+                prefix,
+            } => self.evaluate_update(target, *operator, *prefix),
             Expression::Unary { operator, argument } => self.evaluate_unary(*operator, argument),
             Expression::Binary {
                 left,
@@ -1145,6 +1575,26 @@ impl<'a> Executor<'a> {
         match operator {
             UnaryOperator::Not => Ok(Value::Bool(!self.evaluate_expression(argument)?.is_truthy())),
             UnaryOperator::Typeof => Ok(Value::String(self.evaluate_expression(argument)?.type_name())),
+        }
+    }
+
+    fn evaluate_update(
+        &mut self,
+        target: &Expression,
+        operator: UpdateOperator,
+        prefix: bool,
+    ) -> Result<Value, String> {
+        let current = self.read_target_value(target)?;
+        let delta = match operator {
+            UpdateOperator::Increment => 1.0,
+            UpdateOperator::Decrement => -1.0,
+        };
+        let updated = Value::Number(current.to_number_value() + delta);
+        self.assign_target(target, updated.clone())?;
+        if prefix {
+            Ok(updated)
+        } else {
+            Ok(current)
         }
     }
 
@@ -1181,6 +1631,36 @@ impl<'a> Executor<'a> {
                 }
                 Ok(Value::Number(left.to_number_value() + right.to_number_value()))
             }
+            BinaryOperator::Subtract => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Number(left.to_number_value() - right.to_number_value()))
+            }
+            BinaryOperator::Divide => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Number(left.to_number_value() / right.to_number_value()))
+            }
+            BinaryOperator::Less => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Bool(compare_values(&left, &right) < 0))
+            }
+            BinaryOperator::LessEqual => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Bool(compare_values(&left, &right) <= 0))
+            }
+            BinaryOperator::Greater => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Bool(compare_values(&left, &right) > 0))
+            }
+            BinaryOperator::GreaterEqual => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Bool(compare_values(&left, &right) >= 0))
+            }
             BinaryOperator::In => {
                 let property = self.evaluate_expression(left)?.to_property_key();
                 let object = self.evaluate_expression(right)?;
@@ -1205,6 +1685,11 @@ impl<'a> Executor<'a> {
                 let left = self.evaluate_expression(left)?;
                 let right = self.evaluate_expression(right)?;
                 Ok(Value::Bool(!strict_equals(&left, &right)))
+            }
+            BinaryOperator::BitXor => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Number(((left.to_number_value() as i32) ^ (right.to_number_value() as i32)) as f64))
             }
         }
     }
@@ -1256,6 +1741,22 @@ impl<'a> Executor<'a> {
                 }
                 let object = self.evaluate_expression(object)?;
                 self.set_member_value(object, property_name.as_str(), value)
+            }
+            _ => Err("Unsupported assignment target".to_owned()),
+        }
+    }
+
+    fn read_target_value(&mut self, target: &Expression) -> Result<Value, String> {
+        match target {
+            Expression::Identifier(name) => Ok(self.lookup_binding(name).unwrap_or(Value::Undefined)),
+            Expression::Member { object, property } => {
+                let object = self.evaluate_expression(object)?;
+                self.get_member_value(object, property)
+            }
+            Expression::ComputedMember { object, property } => {
+                let object = self.evaluate_expression(object)?;
+                let property = self.evaluate_expression(property)?.to_property_key();
+                self.get_member_value(object, property.as_str())
             }
             _ => Err("Unsupported assignment target".to_owned()),
         }
@@ -1313,33 +1814,41 @@ impl<'a> Executor<'a> {
         this_value: Value,
         arguments: &[Value],
     ) -> Result<Value, String> {
-        let Value::Function(function) = callee else {
-            return Err("Unsupported JS call target".to_owned());
-        };
-
-        match function.kind.clone() {
-            FunctionKind::Native(kind) => self.call_native_function(kind, this_value, arguments),
-            FunctionKind::User(function) => {
-                let previous_scope = self.scope.clone();
-                let next_scope = Scope::new(Some(function.env.clone()));
-                {
-                    let mut bindings = next_scope.borrow_mut();
-                    bindings.bindings.insert("this".to_owned(), this_value);
-                    for (index, param) in function.params.iter().enumerate() {
-                        bindings.bindings.insert(
-                            param.clone(),
-                            arguments.get(index).cloned().unwrap_or(Value::Undefined),
-                        );
+        match callee {
+            Value::Function(function) => match function.kind.clone() {
+                FunctionKind::Native(kind) => self.call_native_function(kind, this_value, arguments),
+                FunctionKind::User(function) => {
+                    let previous_scope = self.scope.clone();
+                    let next_scope = Scope::new(Some(function.env.clone()));
+                    {
+                        let mut bindings = next_scope.borrow_mut();
+                        bindings.bindings.insert("this".to_owned(), this_value);
+                        for (index, param) in function.params.iter().enumerate() {
+                            bindings.bindings.insert(
+                                param.clone(),
+                                arguments.get(index).cloned().unwrap_or(Value::Undefined),
+                            );
+                        }
                     }
+                    self.scope = next_scope;
+                    let result = match self.execute_statements(&function.body)? {
+                        ControlFlow::Continue(_) => Value::Undefined,
+                        ControlFlow::Return(value) => value,
+                    };
+                    self.scope = previous_scope;
+                    Ok(result)
                 }
-                self.scope = next_scope;
-                let result = match self.execute_statements(&function.body)? {
-                    ControlFlow::Continue(_) => Value::Undefined,
-                    ControlFlow::Return(value) => value,
-                };
-                self.scope = previous_scope;
-                Ok(result)
+            },
+            Value::BoundFunction(function) => {
+                let mut bound_arguments = function.preset_arguments.clone();
+                bound_arguments.extend_from_slice(arguments);
+                self.call_value(
+                    function.target.clone(),
+                    function.this_value.clone(),
+                    &bound_arguments,
+                )
             }
+            _ => Err("Unsupported JS call target".to_owned()),
         }
     }
 
@@ -1351,7 +1860,8 @@ impl<'a> Executor<'a> {
         match function.kind.clone() {
             FunctionKind::Native(kind) => self.call_native_function(kind, Value::Undefined, arguments),
             FunctionKind::User(_) => {
-                let instance = self.create_plain_object();
+                let prototype = function.properties.borrow().get("prototype").cloned();
+                let instance = self.create_object_with_prototype(prototype);
                 let value = self.call_value(Value::Function(function), instance.clone(), arguments)?;
                 Ok(match value {
                     Value::Undefined => instance,
@@ -1364,7 +1874,7 @@ impl<'a> Executor<'a> {
     fn call_native_function(
         &mut self,
         kind: NativeFunction,
-        _this_value: Value,
+        this_value: Value,
         arguments: &[Value],
     ) -> Result<Value, String> {
         match kind {
@@ -1376,6 +1886,14 @@ impl<'a> Executor<'a> {
             }
             NativeFunction::ArrayIsArray => {
                 Ok(Value::Bool(matches!(arguments.first(), Some(Value::Array(_)))))
+            }
+            NativeFunction::ObjectCreate => {
+                let prototype = arguments.first().cloned();
+                Ok(self.create_object_with_prototype(prototype))
+            }
+            NativeFunction::ObjectHasOwnProperty => {
+                let property = first_string_argument(arguments)?;
+                Ok(Value::Bool(self.has_own_property(this_value, property.as_str())))
             }
             NativeFunction::RegExpConstructor => {
                 let source = arguments
@@ -1390,6 +1908,16 @@ impl<'a> Executor<'a> {
             }
             NativeFunction::FunctionConstructor => {
                 Ok(self.create_native_function(NativeFunction::Noop))
+            }
+            NativeFunction::FunctionCall => {
+                let Some(this_arg) = arguments.first().cloned() else {
+                    return Ok(Value::Undefined);
+                };
+                self.call_value(this_value, this_arg, &arguments[1..])
+            }
+            NativeFunction::FunctionBind => {
+                let this_arg = arguments.first().cloned().unwrap_or(Value::Undefined);
+                Ok(self.create_bound_function(this_value, this_arg, arguments[1..].to_vec()))
             }
             NativeFunction::Noop => Ok(Value::Undefined),
         }
@@ -1544,6 +2072,10 @@ impl<'a> Executor<'a> {
                     .to_string_value();
                 Ok(Value::String(simple_replace(text, pattern, replacement.as_str())))
             }
+            "startsWith" => {
+                let prefix = first_string_argument(arguments)?;
+                Ok(Value::Bool(text.starts_with(prefix.as_str())))
+            }
             _ => Err(format!("Unsupported string method: {property}")),
         }
     }
@@ -1564,6 +2096,19 @@ impl<'a> Executor<'a> {
                     let _ = self.call_value(callback.clone(), Value::Undefined, &args)?;
                 }
                 Ok(Value::Undefined)
+            }
+            "shift" => Ok(items.borrow_mut().drain(..1).next().unwrap_or(Value::Undefined)),
+            "push" => {
+                let mut items = items.borrow_mut();
+                items.extend_from_slice(arguments);
+                Ok(Value::Number(items.len() as f64))
+            }
+            "pop" => Ok(items.borrow_mut().pop().unwrap_or(Value::Undefined)),
+            "includes" => {
+                let needle = arguments.first().cloned().unwrap_or(Value::Undefined);
+                Ok(Value::Bool(
+                    items.borrow().iter().any(|value| strict_equals(value, &needle)),
+                ))
             }
             _ => Err(format!("Unsupported array method: {property}")),
         }
@@ -1610,7 +2155,9 @@ impl<'a> Executor<'a> {
             Value::Window => match property {
                 "document" => Ok(Value::Document),
                 "window" => Ok(Value::Window),
-                "localStorage" => Ok(self.create_plain_object()),
+                "localStorage" => Ok(self.lookup_binding("localStorage").unwrap_or(Value::Undefined)),
+                "performance" => Ok(self.lookup_binding("performance").unwrap_or(Value::Undefined)),
+                "console" => Ok(self.lookup_binding("console").unwrap_or(Value::Undefined)),
                 _ => Ok(self.lookup_binding(property).unwrap_or(Value::Undefined)),
             },
             Value::Document => match property {
@@ -1691,19 +2238,27 @@ impl<'a> Executor<'a> {
                 Ok(Value::Undefined)
             }
             Value::Object(properties) => {
-                Ok(properties
-                    .borrow()
-                    .get(property)
-                    .cloned()
-                    .unwrap_or(Value::Undefined))
+                Ok(lookup_object_property(&properties, property).unwrap_or(Value::Undefined))
             }
             Value::Function(function) => {
-                Ok(function
-                    .properties
-                    .borrow()
-                    .get(property)
-                    .cloned()
-                    .unwrap_or(Value::Undefined))
+                if let Some(value) = function.properties.borrow().get(property).cloned() {
+                    return Ok(value);
+                }
+                match property {
+                    "call" => Ok(self.create_native_function(NativeFunction::FunctionCall)),
+                    "bind" => Ok(self.create_native_function(NativeFunction::FunctionBind)),
+                    _ => Ok(Value::Undefined),
+                }
+            }
+            Value::BoundFunction(function) => {
+                if let Some(value) = function.properties.borrow().get(property).cloned() {
+                    return Ok(value);
+                }
+                match property {
+                    "call" => Ok(self.create_native_function(NativeFunction::FunctionCall)),
+                    "bind" => Ok(self.create_native_function(NativeFunction::FunctionBind)),
+                    _ => Ok(Value::Undefined),
+                }
             }
             Value::String(text) => {
                 if property == "length" {
@@ -1729,7 +2284,7 @@ impl<'a> Executor<'a> {
 
     fn has_property(&mut self, object: Value, property: &str) -> bool {
         match object {
-            Value::Window => matches!(property, "document" | "window" | "localStorage")
+            Value::Window => matches!(property, "document" | "window" | "localStorage" | "performance" | "console")
                 || self.lookup_binding(property).is_some(),
             Value::Document => matches!(
                 property,
@@ -1749,8 +2304,15 @@ impl<'a> Executor<'a> {
                 property == "length"
                     || parse_array_index(property).is_some_and(|index| index < ids.len())
             }
-            Value::Object(properties) => properties.borrow().contains_key(property),
-            Value::Function(function) => function.properties.borrow().contains_key(property),
+            Value::Object(properties) => lookup_object_property(&properties, property).is_some(),
+            Value::Function(function) => {
+                function.properties.borrow().contains_key(property)
+                    || matches!(property, "call" | "bind")
+            }
+            Value::BoundFunction(function) => {
+                function.properties.borrow().contains_key(property)
+                    || matches!(property, "call" | "bind")
+            }
             Value::String(text) => {
                 property == "length"
                     || parse_array_index(property).is_some_and(|index| index < text.chars().count())
@@ -1822,6 +2384,10 @@ impl<'a> Executor<'a> {
                 Ok(())
             }
             Value::Function(function) => {
+                function.properties.borrow_mut().insert(property.to_owned(), value);
+                Ok(())
+            }
+            Value::BoundFunction(function) => {
                 function.properties.borrow_mut().insert(property.to_owned(), value);
                 Ok(())
             }
@@ -1950,7 +2516,15 @@ impl<'a> Executor<'a> {
     }
 
     fn create_plain_object(&self) -> Value {
-        Value::Object(Rc::new(RefCell::new(HashMap::new())))
+        self.create_object_with_prototype(None)
+    }
+
+    fn create_object_with_prototype(&self, prototype: Option<Value>) -> Value {
+        let mut properties = HashMap::new();
+        if let Some(prototype) = prototype {
+            properties.insert("__proto__".to_owned(), prototype);
+        }
+        Value::Object(Rc::new(RefCell::new(properties)))
     }
 
     fn create_native_function(&self, kind: NativeFunction) -> Value {
@@ -1961,14 +2535,74 @@ impl<'a> Executor<'a> {
     }
 
     fn create_user_function(&self, params: Vec<String>, body: Vec<Statement>) -> Value {
-        Value::Function(Rc::new(FunctionValue {
+        let function = Value::Function(Rc::new(FunctionValue {
             kind: FunctionKind::User(UserFunction {
                 params,
                 body,
                 env: self.scope.clone(),
             }),
             properties: Rc::new(RefCell::new(HashMap::new())),
+        }));
+        let prototype = self.create_plain_object();
+        let _ = self.set_property_value(prototype.clone(), "constructor", function.clone());
+        let _ = self.set_property_value(function.clone(), "prototype", prototype);
+        function
+    }
+
+    fn create_bound_function(
+        &self,
+        target: Value,
+        this_value: Value,
+        preset_arguments: Vec<Value>,
+    ) -> Value {
+        Value::BoundFunction(Rc::new(BoundFunctionValue {
+            target,
+            this_value,
+            preset_arguments,
+            properties: Rc::new(RefCell::new(HashMap::new())),
         }))
+    }
+
+    fn has_own_property(&self, object: Value, property: &str) -> bool {
+        match object {
+            Value::Object(properties) => properties.borrow().contains_key(property),
+            Value::Function(function) => function.properties.borrow().contains_key(property),
+            Value::BoundFunction(function) => function.properties.borrow().contains_key(property),
+            Value::Array(items) => {
+                property == "length"
+                    || parse_array_index(property).is_some_and(|index| index < items.borrow().len())
+            }
+            Value::NodeList(ids) | Value::JQueryCollection(ids) => {
+                property == "length"
+                    || parse_array_index(property).is_some_and(|index| index < ids.len())
+            }
+            Value::String(text) => {
+                property == "length"
+                    || parse_array_index(property).is_some_and(|index| index < text.chars().count())
+            }
+            Value::Regex(_) => matches!(property, "source" | "flags"),
+            Value::LiveElement(_) => matches!(
+                property,
+                "classList" | "className" | "textContent" | "id" | "checked" | "disabled" | "value"
+            ),
+            Value::Window => matches!(
+                property,
+                "document" | "window" | "localStorage" | "performance" | "console"
+            ) || self.lookup_binding(property).is_some(),
+            Value::Document => matches!(
+                property,
+                "documentElement"
+                    | "body"
+                    | "head"
+                    | "cookie"
+                    | "getElementById"
+                    | "querySelector"
+                    | "querySelectorAll"
+                    | "createElement"
+                    | "createTextNode"
+            ),
+            _ => false,
+        }
     }
 
     fn set_property_value(
@@ -1983,6 +2617,10 @@ impl<'a> Executor<'a> {
                 Ok(())
             }
             Value::Function(function) => {
+                function.properties.borrow_mut().insert(property.to_owned(), value);
+                Ok(())
+            }
+            Value::BoundFunction(function) => {
                 function.properties.borrow_mut().insert(property.to_owned(), value);
                 Ok(())
             }
@@ -2064,6 +2702,7 @@ impl Value {
             Value::Bool(_) => "boolean".to_owned(),
             Value::Number(_) => "number".to_owned(),
             Value::Function(_) => "function".to_owned(),
+            Value::BoundFunction(_) => "function".to_owned(),
             _ => "object".to_owned(),
         }
     }
@@ -2141,6 +2780,40 @@ fn number_to_string(value: f64) -> String {
     }
 }
 
+fn compare_values(left: &Value, right: &Value) -> i32 {
+    match (left, right) {
+        (Value::String(left), Value::String(right)) => match left.cmp(right) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        },
+        _ => {
+            let left = left.to_number_value();
+            let right = right.to_number_value();
+            if left < right {
+                -1
+            } else if left > right {
+                1
+            } else {
+                0
+            }
+        }
+    }
+}
+
+fn lookup_object_property(properties: &ObjectRef, property: &str) -> Option<Value> {
+    if let Some(value) = properties.borrow().get(property).cloned() {
+        return Some(value);
+    }
+    let prototype = properties.borrow().get("__proto__").cloned();
+    match prototype {
+        Some(Value::Object(prototype)) => lookup_object_property(&prototype, property),
+        Some(Value::Function(function)) => function.properties.borrow().get(property).cloned(),
+        Some(Value::BoundFunction(function)) => function.properties.borrow().get(property).cloned(),
+        _ => None,
+    }
+}
+
 fn strict_equals(left: &Value, right: &Value) -> bool {
     match (left, right) {
         (Value::Undefined, Value::Undefined) | (Value::Null, Value::Null) => true,
@@ -2156,6 +2829,7 @@ fn strict_equals(left: &Value, right: &Value) -> bool {
         (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
         (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
         (Value::Function(left), Value::Function(right)) => Rc::ptr_eq(left, right),
+        (Value::BoundFunction(left), Value::BoundFunction(right)) => Rc::ptr_eq(left, right),
         (Value::JQueryCollection(left), Value::JQueryCollection(right)) => left == right,
         (Value::NodeList(left), Value::NodeList(right)) => left == right,
         _ => false,
@@ -2236,6 +2910,27 @@ fn is_identifier_start(ch: char) -> bool {
 
 fn is_identifier_continue(ch: char) -> bool {
     is_identifier_start(ch) || ch.is_ascii_digit()
+}
+
+fn should_parse_regex(previous: Option<&Token>) -> bool {
+    !matches!(
+        previous,
+        Some(
+            Token::Identifier(_)
+                | Token::String(_)
+                | Token::Number(_)
+                | Token::Regex { .. }
+                | Token::KeywordTrue
+                | Token::KeywordFalse
+                | Token::KeywordNull
+                | Token::KeywordThis
+                | Token::RightParen
+                | Token::RightBracket
+                | Token::RightBrace
+                | Token::PlusPlus
+                | Token::MinusMinus
+        )
+    )
 }
 
 fn set_detached_member_value(target: &mut Value, property: &str, value: &Value) -> bool {
@@ -2416,5 +3111,76 @@ mod tests {
         assert!(html.attributes.has_class("client-js"));
         assert!(html.attributes.has_class("skin-vector"));
         assert!(!html.attributes.has_class("client-nojs"));
+    }
+
+    #[test]
+    fn supports_prototype_backed_constructors_and_startup_style_loops() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            function Map() {
+                this.values = Object.create(null);
+            }
+            Map.prototype = {
+                constructor: Map,
+                set: function(selection, value) {
+                    this.values[selection] = value;
+                    return true;
+                },
+                get: function(selection, fallback) {
+                    if (selection in this.values) {
+                        return this.values[selection];
+                    }
+                    return fallback;
+                }
+            };
+
+            var queue = [1, 2, 3], sum = 0;
+            while (queue.length > 0) {
+                sum += queue.shift();
+            }
+
+            for (var i = 0; i < 2; i++) {
+                sum++;
+            }
+
+            var map = new Map();
+            map.set("client-js", "ready");
+            document.documentElement.textContent = map.get("client-js", "missing") + " " + sum;
+            "#,
+        )
+        .expect("script should execute");
+
+        let html = document
+            .find_first_element_by_name("html")
+            .expect("missing html element");
+        assert_eq!(collect_text_content(html), "ready 8");
+    }
+
+    #[test]
+    fn supports_startup_style_array_and_string_helpers() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var prefixes = ["alpha"];
+            prefixes.push("beta");
+            var last = prefixes.pop();
+            var containsAlpha = prefixes.includes("alpha");
+            var title = "@import demo";
+            if (containsAlpha && title.startsWith("@import")) {
+                document.body.textContent = last;
+            }
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "beta");
     }
 }
