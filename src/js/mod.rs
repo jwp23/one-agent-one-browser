@@ -11,57 +11,10 @@ pub fn execute_inline_scripts(document: &mut Document) {
 
 pub fn execute_script_sources(document: &mut Document, sources: &[String]) {
     for source in sources {
-        if engine::execute(document, source).is_ok() {
-            continue;
-        }
-
-        if let Some(classes) = parse_document_element_class_name_assignment(&source)
-            && let Some(html) = document.find_first_element_by_name_mut("html")
-        {
-            html.attributes.classes = classes.split_whitespace().map(str::to_owned).collect();
-        }
-
-        for mutation in parse_dom_class_list_mutations(source) {
-            apply_class_list_mutation(document, &mutation);
-        }
-
-        for mutation in parse_jquery_class_mutations(source) {
-            apply_class_list_mutation(document, &mutation);
-        }
-
-        for assignment in parse_text_content_assignments(&source) {
-            if let Some(element) = document.find_first_element_by_id_mut(&assignment.element_id) {
-                element.set_text_content(assignment.text);
-            }
-        }
+        let _ = engine::execute(document, source);
     }
 
     inject_vector_appearance_fallback(document);
-}
-#[derive(Debug, PartialEq, Eq)]
-struct TextContentAssignment {
-    element_id: String,
-    text: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ClassListMutation {
-    target: ScriptElementTarget,
-    operation: ClassListOperation,
-    classes: Vec<String>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ScriptElementTarget {
-    DocumentElement,
-    Body,
-    Selector(String),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClassListOperation {
-    Add,
-    Remove,
 }
 
 fn collect_inline_classic_scripts(element: &Element, out: &mut Vec<String>) {
@@ -107,468 +60,6 @@ fn is_classic_javascript_type(script_type: Option<&str>) -> bool {
         mime.as_str(),
         "text/javascript" | "application/javascript" | "text/ecmascript" | "application/ecmascript"
     )
-}
-
-fn parse_text_content_assignments(script: &str) -> Vec<TextContentAssignment> {
-    const GET_BY_ID: &str = "document.getElementById";
-
-    let mut out = Vec::new();
-    let mut cursor = 0usize;
-
-    while cursor < script.len() {
-        let Some(offset) = script[cursor..].find(GET_BY_ID) else {
-            break;
-        };
-        let start = cursor + offset;
-        let next = match parse_text_content_assignment(script, start) {
-            Some((assignment, next)) => {
-                out.push(assignment);
-                next
-            }
-            None => start + GET_BY_ID.len(),
-        };
-        cursor = next.min(script.len());
-    }
-
-    out
-}
-
-fn parse_dom_class_list_mutations(script: &str) -> Vec<ClassListMutation> {
-    let mut out = Vec::new();
-    let mut cursor = 0usize;
-
-    while cursor < script.len() {
-        let Some(offset) = script[cursor..].find("document.") else {
-            break;
-        };
-        let start = cursor + offset;
-        let next = match parse_dom_class_list_mutation(script, start) {
-            Some((mutation, next)) => {
-                out.push(mutation);
-                next
-            }
-            None => start + "document.".len(),
-        };
-        cursor = next.min(script.len());
-    }
-
-    out
-}
-
-fn parse_jquery_class_mutations(script: &str) -> Vec<ClassListMutation> {
-    let mut out = Vec::new();
-    let mut cursor = 0usize;
-
-    while cursor < script.len() {
-        let Some(offset) = script[cursor..].find("$(") else {
-            break;
-        };
-        let start = cursor + offset;
-        let next = match parse_jquery_class_mutation(script, start) {
-            Some((mutation, next)) => {
-                out.push(mutation);
-                next
-            }
-            None => start + 2,
-        };
-        cursor = next.min(script.len());
-    }
-
-    out
-}
-
-fn parse_document_element_class_name_assignment(script: &str) -> Option<String> {
-    const MARKER: &str = "document.documentElement.className";
-    let start = script.find(MARKER)?;
-    let mut cursor = start + MARKER.len();
-    cursor = skip_whitespace(script, cursor);
-    cursor = consume_char(script, cursor, '=')?;
-    cursor = skip_whitespace(script, cursor);
-
-    let ch = script[cursor..].chars().next()?;
-    if ch == '\'' || ch == '"' {
-        let (class_value, _) = parse_js_string_literal(script, cursor)?;
-        return Some(class_value);
-    }
-
-    let (identifier, _) = parse_js_identifier(script, cursor)?;
-    parse_js_variable_string_literal(script, identifier.as_str())
-}
-
-fn parse_dom_class_list_mutation(script: &str, start: usize) -> Option<(ClassListMutation, usize)> {
-    let (target, next) = parse_dom_target(script, start)?;
-    let mut cursor = skip_whitespace(script, next);
-    cursor = consume_char(script, cursor, '.')?;
-    if !script[cursor..].starts_with("classList") {
-        return None;
-    }
-    cursor += "classList".len();
-    cursor = skip_whitespace(script, cursor);
-    cursor = consume_char(script, cursor, '.')?;
-
-    let (operation_name, next) = parse_js_identifier(script, cursor)?;
-    let operation = match operation_name.as_str() {
-        "add" => ClassListOperation::Add,
-        "remove" => ClassListOperation::Remove,
-        _ => return None,
-    };
-    cursor = skip_whitespace(script, next);
-    cursor = consume_char(script, cursor, '(')?;
-    cursor = skip_whitespace(script, cursor);
-
-    let (classes, next) = parse_js_string_arguments(script, cursor)?;
-    cursor = skip_whitespace(script, next);
-    cursor = consume_char(script, cursor, ')')?;
-    cursor = skip_whitespace(script, cursor);
-    if let Some(next) = consume_char(script, cursor, ';') {
-        cursor = next;
-    }
-
-    Some((
-        ClassListMutation {
-            target,
-            operation,
-            classes,
-        },
-        cursor,
-    ))
-}
-
-fn parse_jquery_class_mutation(script: &str, start: usize) -> Option<(ClassListMutation, usize)> {
-    if !script[start..].starts_with("$(") {
-        return None;
-    }
-
-    let mut cursor = start + 2;
-    cursor = skip_whitespace(script, cursor);
-    let (selector, next) = parse_js_string_literal(script, cursor)?;
-    cursor = skip_whitespace(script, next);
-    cursor = consume_char(script, cursor, ')')?;
-    cursor = skip_whitespace(script, cursor);
-    cursor = consume_char(script, cursor, '.')?;
-
-    let (operation_name, next) = parse_js_identifier(script, cursor)?;
-    let operation = match operation_name.as_str() {
-        "addClass" => ClassListOperation::Add,
-        "removeClass" => ClassListOperation::Remove,
-        _ => return None,
-    };
-    cursor = skip_whitespace(script, next);
-    cursor = consume_char(script, cursor, '(')?;
-    cursor = skip_whitespace(script, cursor);
-
-    let (classes, next) = parse_js_string_arguments(script, cursor)?;
-    cursor = skip_whitespace(script, next);
-    cursor = consume_char(script, cursor, ')')?;
-    cursor = skip_whitespace(script, cursor);
-    if let Some(next) = consume_char(script, cursor, ';') {
-        cursor = next;
-    }
-
-    Some((
-        ClassListMutation {
-            target: ScriptElementTarget::Selector(selector),
-            operation,
-            classes,
-        },
-        cursor,
-    ))
-}
-
-fn parse_dom_target(script: &str, start: usize) -> Option<(ScriptElementTarget, usize)> {
-    const DOCUMENT_ELEMENT: &str = "document.documentElement";
-    const BODY: &str = "document.body";
-    const GET_BY_ID: &str = "document.getElementById";
-    const QUERY_SELECTOR: &str = "document.querySelector";
-
-    if script[start..].starts_with(DOCUMENT_ELEMENT) {
-        return Some((
-            ScriptElementTarget::DocumentElement,
-            start + DOCUMENT_ELEMENT.len(),
-        ));
-    }
-
-    if script[start..].starts_with(BODY) {
-        return Some((ScriptElementTarget::Body, start + BODY.len()));
-    }
-
-    if script[start..].starts_with(GET_BY_ID) {
-        let mut cursor = start + GET_BY_ID.len();
-        cursor = skip_whitespace(script, cursor);
-        cursor = consume_char(script, cursor, '(')?;
-        cursor = skip_whitespace(script, cursor);
-        let (id, next) = parse_js_string_literal(script, cursor)?;
-        cursor = skip_whitespace(script, next);
-        cursor = consume_char(script, cursor, ')')?;
-        return Some((ScriptElementTarget::Selector(format!("#{id}")), cursor));
-    }
-
-    if script[start..].starts_with(QUERY_SELECTOR) {
-        let mut cursor = start + QUERY_SELECTOR.len();
-        cursor = skip_whitespace(script, cursor);
-        cursor = consume_char(script, cursor, '(')?;
-        cursor = skip_whitespace(script, cursor);
-        let (selector, next) = parse_js_string_literal(script, cursor)?;
-        cursor = skip_whitespace(script, next);
-        cursor = consume_char(script, cursor, ')')?;
-        return Some((ScriptElementTarget::Selector(selector), cursor));
-    }
-
-    None
-}
-
-fn parse_js_string_arguments(source: &str, start: usize) -> Option<(Vec<String>, usize)> {
-    let mut args = Vec::new();
-    let mut cursor = start;
-
-    loop {
-        cursor = skip_whitespace(source, cursor);
-        let (value, next) = parse_js_string_literal(source, cursor)?;
-        args.extend(
-            value
-                .split_whitespace()
-                .filter(|part| !part.is_empty())
-                .map(str::to_owned),
-        );
-        cursor = skip_whitespace(source, next);
-        let Some(next) = consume_char(source, cursor, ',') else {
-            return Some((args, cursor));
-        };
-        cursor = next;
-    }
-}
-
-fn parse_js_variable_string_literal(script: &str, variable_name: &str) -> Option<String> {
-    for keyword in ["var", "let", "const"] {
-        let mut cursor = 0usize;
-        while cursor < script.len() {
-            let Some(offset) = script[cursor..].find(keyword) else {
-                break;
-            };
-            let start = cursor + offset;
-            let before_ok = start == 0
-                || !script[..start]
-                    .chars()
-                    .next_back()
-                    .is_some_and(is_js_identifier_char);
-            if !before_ok {
-                cursor = start + keyword.len();
-                continue;
-            }
-            let mut pos = start + keyword.len();
-            pos = skip_whitespace(script, pos);
-            let Some((name, next)) = parse_js_identifier(script, pos) else {
-                cursor = start + keyword.len();
-                continue;
-            };
-            if name != variable_name {
-                cursor = next;
-                continue;
-            }
-            pos = skip_whitespace(script, next);
-            let Some(after_equals) = consume_char(script, pos, '=') else {
-                cursor = next;
-                continue;
-            };
-            let value_start = skip_whitespace(script, after_equals);
-            let (value, _) = parse_js_string_literal(script, value_start)?;
-            return Some(value);
-        }
-    }
-    None
-}
-
-fn apply_class_list_mutation(document: &mut Document, mutation: &ClassListMutation) {
-    let Some(element) = find_script_target_mut(document, &mutation.target) else {
-        return;
-    };
-
-    match mutation.operation {
-        ClassListOperation::Add => {
-            for class_name in &mutation.classes {
-                if !element.attributes.has_class(class_name) {
-                    element.attributes.classes.push(class_name.clone());
-                }
-            }
-        }
-        ClassListOperation::Remove => {
-            element.attributes.classes.retain(|existing| {
-                !mutation
-                    .classes
-                    .iter()
-                    .any(|class_name| class_name == existing)
-            });
-        }
-    }
-}
-
-fn find_script_target_mut<'a>(
-    document: &'a mut Document,
-    target: &ScriptElementTarget,
-) -> Option<&'a mut Element> {
-    match target {
-        ScriptElementTarget::DocumentElement => document.find_first_element_by_name_mut("html"),
-        ScriptElementTarget::Body => document.find_first_element_by_name_mut("body"),
-        ScriptElementTarget::Selector(selector) => {
-            if let Some(id) = selector.strip_prefix('#') {
-                return document.find_first_element_by_id_mut(id);
-            }
-            if is_simple_tag_name(selector) {
-                return document.find_first_element_by_name_mut(selector);
-            }
-            None
-        }
-    }
-}
-
-fn is_simple_tag_name(selector: &str) -> bool {
-    !selector.is_empty()
-        && selector
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
-}
-
-fn parse_js_identifier(source: &str, start: usize) -> Option<(String, usize)> {
-    let mut cursor = start;
-    let first = source[cursor..].chars().next()?;
-    if !is_js_identifier_start_char(first) {
-        return None;
-    }
-    cursor += first.len_utf8();
-
-    while cursor < source.len() {
-        let Some(ch) = source[cursor..].chars().next() else {
-            break;
-        };
-        if !is_js_identifier_char(ch) {
-            break;
-        }
-        cursor += ch.len_utf8();
-    }
-
-    Some((source[start..cursor].to_owned(), cursor))
-}
-
-fn is_js_identifier_start_char(ch: char) -> bool {
-    ch == '_' || ch == '$' || ch.is_ascii_alphabetic()
-}
-
-fn is_js_identifier_char(ch: char) -> bool {
-    is_js_identifier_start_char(ch) || ch.is_ascii_digit()
-}
-
-fn parse_text_content_assignment(
-    script: &str,
-    start: usize,
-) -> Option<(TextContentAssignment, usize)> {
-    const GET_BY_ID: &str = "document.getElementById";
-    const TEXT_CONTENT: &str = "textContent";
-
-    if !script[start..].starts_with(GET_BY_ID) {
-        return None;
-    }
-
-    let mut cursor = start + GET_BY_ID.len();
-    cursor = skip_whitespace(script, cursor);
-    cursor = consume_char(script, cursor, '(')?;
-    cursor = skip_whitespace(script, cursor);
-
-    let (element_id, next) = parse_js_string_literal(script, cursor)?;
-    cursor = skip_whitespace(script, next);
-    cursor = consume_char(script, cursor, ')')?;
-    cursor = skip_whitespace(script, cursor);
-    cursor = consume_char(script, cursor, '.')?;
-
-    if !script[cursor..].starts_with(TEXT_CONTENT) {
-        return None;
-    }
-    cursor += TEXT_CONTENT.len();
-    cursor = skip_whitespace(script, cursor);
-    cursor = consume_char(script, cursor, '=')?;
-    cursor = skip_whitespace(script, cursor);
-
-    let (text, next) = parse_js_string_literal(script, cursor)?;
-    cursor = skip_whitespace(script, next);
-    if let Some(next) = consume_char(script, cursor, ';') {
-        cursor = next;
-    }
-
-    Some((TextContentAssignment { element_id, text }, cursor))
-}
-
-fn parse_js_string_literal(source: &str, start: usize) -> Option<(String, usize)> {
-    let quote = source[start..].chars().next()?;
-    if quote != '\'' && quote != '"' {
-        return None;
-    }
-
-    let mut out = String::new();
-    let mut escaped = false;
-    let mut cursor = start + quote.len_utf8();
-
-    while cursor < source.len() {
-        let ch = source[cursor..].chars().next()?;
-        cursor += ch.len_utf8();
-
-        if escaped {
-            escaped = false;
-            match ch {
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                '\\' => out.push('\\'),
-                '\'' => out.push('\''),
-                '"' => out.push('"'),
-                'u' => {
-                    let after = cursor;
-                    let end = after.checked_add(4)?;
-                    if end > source.len() {
-                        return None;
-                    }
-                    let hex = &source[after..end];
-                    let value = u32::from_str_radix(hex, 16).ok()?;
-                    let chr = char::from_u32(value)?;
-                    out.push(chr);
-                    cursor = end;
-                }
-                _ => out.push(ch),
-            }
-            continue;
-        }
-
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-        if ch == quote {
-            return Some((out, cursor));
-        }
-        out.push(ch);
-    }
-
-    None
-}
-
-fn skip_whitespace(source: &str, start: usize) -> usize {
-    let mut cursor = start;
-    while cursor < source.len() {
-        let Some(ch) = source[cursor..].chars().next() else {
-            break;
-        };
-        if !ch.is_ascii_whitespace() {
-            break;
-        }
-        cursor += ch.len_utf8();
-    }
-    cursor
-}
-
-fn consume_char(source: &str, start: usize, expected: char) -> Option<usize> {
-    let ch = source[start..].chars().next()?;
-    if ch != expected {
-        return None;
-    }
-    Some(start + ch.len_utf8())
 }
 
 fn inject_vector_appearance_fallback(document: &mut Document) {
@@ -970,19 +461,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_get_element_by_id_text_content_assignment() {
-        let script = r#"document.getElementById("greeting").textContent = "Hello World!";"#;
-        let assignments = parse_text_content_assignments(script);
-        assert_eq!(
-            assignments,
-            vec![TextContentAssignment {
-                element_id: "greeting".to_owned(),
-                text: "Hello World!".to_owned(),
-            }]
-        );
-    }
-
-    #[test]
     fn executes_inline_script_assignment_against_dom() {
         let html = r#"
 <!DOCTYPE html>
@@ -1024,18 +502,6 @@ mod tests {
             .find_first_element_by_id("greeting")
             .expect("missing greeting");
         assert_eq!(greeting.children, vec![Node::Text("Welcome".to_owned())]);
-    }
-
-    #[test]
-    fn parses_document_element_class_assignment_via_variable() {
-        let script = r#"
-            var className = "client-js vector-feature-a-enabled";
-            document.documentElement.className = className;
-        "#;
-        assert_eq!(
-            parse_document_element_class_name_assignment(script),
-            Some("client-js vector-feature-a-enabled".to_owned())
-        );
     }
 
     #[test]
@@ -1145,6 +611,36 @@ mod tests {
             .expect("missing html element");
         assert!(html.attributes.has_class("ve-available"));
         assert!(html.attributes.has_class("vector-animations-ready"));
+        assert!(!html.attributes.has_class("client-nojs"));
+    }
+
+    #[test]
+    fn executes_wikipedia_client_bootstrap_script() {
+        let html = r#"
+<html class="client-nojs">
+  <body>
+    <script>
+      (function(){
+        var className="client-js skin-vector";
+        var cookie=document.cookie.match(/(?:^|; )enwikimwclientpreferences=([^;]+)/);
+        if(cookie){
+          cookie[1].split('%2C').forEach(function(pref){
+            className=className.replace(new RegExp('(^| )'+pref.replace(/-clientpref-\w+$|[^\w-]+/g,'')+'-clientpref-\\w+( |$)'),'$1'+pref+'$2');
+          });
+        }
+        document.documentElement.className=className;
+      }());
+    </script>
+  </body>
+</html>
+"#;
+        let mut document = crate::html::parse_document(html);
+        execute_inline_scripts(&mut document);
+        let html = document
+            .find_first_element_by_name("html")
+            .expect("missing html element");
+        assert!(html.attributes.has_class("client-js"));
+        assert!(html.attributes.has_class("skin-vector"));
         assert!(!html.attributes.has_class("client-nojs"));
     }
 
