@@ -4,6 +4,8 @@
 - Never consider backwards-compatibility, legacy or similar concerns, I'm the only user, and it's a new greenfield project, we can freely make any changes we want.
 - Make sure you never introduce any new compilation warnings, address them if you encounter them.
 - Engine-first: when rendering, DOM, CSS, or JavaScript behavior is missing or incorrect, update the relevant engine/runtime code instead of adding page-specific workarounds, special cases, or test-only shims unless the user explicitly asks for a temporary workaround.
+- Do not add site-specific, page-specific, class-specific, or id-specific rendering/style fallbacks to compensate for missing engine behavior or missing stylesheet support unless the user explicitly asks for a temporary workaround.
+- If a rendering fix seems to require special-casing a site, page, class, or id, treat that as evidence the engine is missing CSS loading/parsing/cascade/layout behavior and fix the engine instead.
 
 ## Mindset & Principles
 - Flag missing info and unsupported assumptions.
@@ -33,6 +35,7 @@
 - Decompose: split work into small, reviewable steps/commits.
 - Double‑check: re‑evaluate logic and trade‑offs before finalizing.
 - Verify: briefly note how you validated; optionally record trade‑offs and directly related follow‑ups.
+- For rendering/styling bugs, do not declare success until you verify the specific affected page/section visually, preferably with a screenshot or equivalent targeted inspection.
 - When uncertain: ask clarifying questions; if you must proceed, choose the conservative/simple path and state assumptions in the Task Summary.
 
 ## Code Quality & Style
