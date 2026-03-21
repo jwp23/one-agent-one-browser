@@ -87,7 +87,13 @@ impl StyleComputer {
         builder.apply_inline_style(element);
 
         let mut style = builder.finish();
-        if style.clip_rect.is_some_and(|clip_rect| clip_rect.is_empty()) {
+        if ancestors.is_empty() {
+            style.root_font_size_px = style.font_size_px;
+        }
+        if style
+            .clip_rect
+            .is_some_and(|clip_rect| clip_rect.is_empty())
+        {
             // Common visually-hidden patterns use an empty clip rect.
             style.visibility = Visibility::Hidden;
         }
@@ -516,5 +522,80 @@ mod tests {
         ];
         let style = computer.compute_style(menu, &root_style, &ancestors);
         assert_eq!(style.color, crate::geom::Color::WHITE);
+    }
+
+    #[test]
+    fn table_cell_padding_from_child_selector_group_applies() {
+        let doc = crate::html::parse_document(
+            "<table class='exampletable'><tbody><tr><td>x</td></tr></tbody></table>",
+        );
+        let computer = StyleComputer::from_css(
+            ".exampletable > tr > td, .exampletable > * > tr > td { padding: 0.2em 0.4em; }",
+        );
+        let root_style = ComputedStyle::root_defaults();
+
+        let table = doc
+            .find_first_element_by_name("table")
+            .expect("table element exists");
+        let tbody = table
+            .find_first_element_by_name("tbody")
+            .expect("tbody element exists");
+        let tr = tbody.find_first_element_by_name("tr").expect("tr exists");
+        let td = tr.find_first_element_by_name("td").expect("td exists");
+
+        let table_style = computer.compute_style(table, &root_style, &[]);
+        let tbody_style = computer.compute_style(tbody, &table_style, &[table]);
+        let tr_style = computer.compute_style(tr, &tbody_style, &[table, tbody]);
+        let td_style = computer.compute_style(td, &tr_style, &[table, tbody, tr]);
+
+        assert_eq!(
+            td_style.padding.resolve_px(0),
+            crate::geom::Edges {
+                top: 3,
+                right: 6,
+                bottom: 3,
+                left: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn font_size_percentage_resolves_em_width_on_same_element() {
+        let doc = crate::html::parse_document("<div class='infobox'></div>");
+        let computer = StyleComputer::from_css(".infobox { font-size: 88%; width: 22em; }");
+        let root_style = ComputedStyle::root_defaults();
+        let div = doc
+            .find_first_element_by_name("div")
+            .expect("div element exists");
+
+        let style = computer.compute_style(div, &root_style, &[]);
+
+        assert_eq!(style.font_size_px, 14);
+        assert_eq!(style.root_font_size_px, 14);
+        assert!(matches!(style.width_px, Some(CssLength::Px(308))));
+    }
+
+    #[test]
+    fn rem_uses_initial_root_size_on_root_and_computed_root_size_for_descendants() {
+        let doc =
+            crate::html::parse_document("<div class='root'><div class='child'></div></div>");
+        let computer = StyleComputer::from_css(
+            ".root { font-size: 62.5%; width: 2rem; } .child { width: 2rem; }",
+        );
+        let root_style = ComputedStyle::root_defaults();
+        let root = doc
+            .find_first_element_by_name("div")
+            .expect("root element exists");
+        let child = root
+            .find_first_element_by_name("div")
+            .expect("child element exists");
+
+        let root_computed = computer.compute_style(root, &root_style, &[]);
+        let child_computed = computer.compute_style(child, &root_computed, &[root]);
+
+        assert_eq!(root_computed.font_size_px, 10);
+        assert_eq!(root_computed.root_font_size_px, 10);
+        assert!(matches!(root_computed.width_px, Some(CssLength::Px(32))));
+        assert!(matches!(child_computed.width_px, Some(CssLength::Px(20))));
     }
 }

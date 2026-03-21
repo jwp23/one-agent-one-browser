@@ -1,6 +1,8 @@
 use crate::geom::{Color, Edges};
 use crate::style::FontFamily;
 
+use super::builder::FontSize;
+
 pub(super) fn parse_css_color(value: &str) -> Option<Color> {
     let value = value.trim();
     if let Some(color) = Color::from_css_hex(value) {
@@ -103,7 +105,32 @@ pub(super) fn parse_css_length_px(value: &str) -> Option<i32> {
     parse_css_length_px_with_viewport(value, None, None)
 }
 
-pub(super) fn parse_css_length_px_f32_with_viewport(
+pub(super) fn parse_css_font_size(
+    value: &str,
+    viewport_width_px: Option<i32>,
+    viewport_height_px: Option<i32>,
+) -> Option<FontSize> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(args) = parse_css_function_args(value, "calc") {
+        return parse_css_calc_font_size(args, viewport_width_px, viewport_height_px);
+    }
+
+    let (number, unit) = split_css_number_unit(value)?;
+    let unit = unit.trim().to_ascii_lowercase();
+    match unit.as_str() {
+        "%" => Some(FontSize::ParentFactor(number / 100.0)),
+        "em" => Some(FontSize::ParentFactor(number)),
+        "rem" => Some(FontSize::RootFactor(number)),
+        _ => absolute_css_length_to_px(number, unit.as_str(), viewport_width_px, viewport_height_px)
+            .map(|px| FontSize::Px(px.round() as i32)),
+    }
+}
+
+pub(crate) fn parse_css_length_px_f32_with_viewport(
     value: &str,
     viewport_width_px: Option<i32>,
     viewport_height_px: Option<i32>,
@@ -133,33 +160,8 @@ pub(super) fn parse_css_length_px_f32_with_viewport(
             .reduce(f32::min);
     }
 
-    let mut end = 0usize;
-    for (idx, ch) in value.char_indices() {
-        if !(ch.is_ascii_digit() || ch == '.' || ch == '-') {
-            break;
-        }
-        end = idx + ch.len_utf8();
-    }
-    if end == 0 {
-        return None;
-    }
-
-    let number: f32 = value[..end].parse().ok()?;
-    let unit = value[end..].trim().to_ascii_lowercase();
-    match unit.as_str() {
-        "px" | "" => Some(number),
-        "pt" => Some(number * (96.0 / 72.0)),
-        "rem" | "em" => Some(number * 16.0),
-        "vw" => {
-            let width_px = viewport_width_px?;
-            Some(number * (width_px as f32) / 100.0)
-        }
-        "vh" => {
-            let height_px = viewport_height_px?;
-            Some(number * (height_px as f32) / 100.0)
-        }
-        _ => None,
-    }
+    let (number, unit) = split_css_number_unit(value)?;
+    absolute_css_length_to_px(number, unit, viewport_width_px, viewport_height_px)
 }
 
 pub(super) fn parse_css_length_px_with_viewport(
@@ -243,6 +245,139 @@ fn parse_css_calc_length_px_f32(
         total += amount;
     }
     Some(total)
+}
+
+fn parse_css_calc_font_size(
+    value: &str,
+    viewport_width_px: Option<i32>,
+    viewport_height_px: Option<i32>,
+) -> Option<FontSize> {
+    let mut parent_factor = 0.0f32;
+    let mut root_factor = 0.0f32;
+    let mut px = 0.0f32;
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut op = '+';
+
+    for (idx, ch) in value.char_indices() {
+        match ch {
+            '(' => depth = depth.saturating_add(1),
+            ')' => depth = depth.saturating_sub(1),
+            '+' | '-' if depth == 0 && idx > start => {
+                let term = value[start..idx].trim();
+                apply_font_size_term(
+                    term,
+                    op,
+                    &mut parent_factor,
+                    &mut root_factor,
+                    &mut px,
+                    viewport_width_px,
+                    viewport_height_px,
+                )?;
+                op = ch;
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    let term = value[start..].trim();
+    if term.is_empty() {
+        return None;
+    }
+    apply_font_size_term(
+        term,
+        op,
+        &mut parent_factor,
+        &mut root_factor,
+        &mut px,
+        viewport_width_px,
+        viewport_height_px,
+    )?;
+
+    if parent_factor == 0.0 && root_factor == 0.0 {
+        return Some(FontSize::Px(px.round() as i32));
+    }
+    if root_factor == 0.0 && px == 0.0 {
+        return Some(FontSize::ParentFactor(parent_factor));
+    }
+    if parent_factor == 0.0 && px == 0.0 {
+        return Some(FontSize::RootFactor(root_factor));
+    }
+    Some(FontSize::Calc {
+        parent_factor,
+        root_factor,
+        px,
+    })
+}
+
+fn apply_font_size_term(
+    term: &str,
+    op: char,
+    parent_factor: &mut f32,
+    root_factor: &mut f32,
+    px: &mut f32,
+    viewport_width_px: Option<i32>,
+    viewport_height_px: Option<i32>,
+) -> Option<()> {
+    let sign = if op == '-' { -1.0 } else { 1.0 };
+    let (number, unit) = split_css_number_unit(term)?;
+    let unit = unit.trim().to_ascii_lowercase();
+    match unit.as_str() {
+        "%" => *parent_factor += sign * (number / 100.0),
+        "em" => *parent_factor += sign * number,
+        "rem" => *root_factor += sign * number,
+        _ => {
+            let amount =
+                absolute_css_length_to_px(number, unit.as_str(), viewport_width_px, viewport_height_px)?;
+            *px += sign * amount;
+        }
+    }
+    Some(())
+}
+
+pub(super) fn split_css_number_unit(value: &str) -> Option<(f32, &str)> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let mut end = 0usize;
+    for (idx, ch) in value.char_indices() {
+        if !(ch.is_ascii_digit() || ch == '.' || ch == '-') {
+            break;
+        }
+        end = idx + ch.len_utf8();
+    }
+    if end == 0 {
+        return None;
+    }
+
+    let number: f32 = value[..end].parse().ok()?;
+    Some((number, value[end..].trim()))
+}
+
+pub(super) fn absolute_css_length_to_px(
+    number: f32,
+    unit: &str,
+    viewport_width_px: Option<i32>,
+    viewport_height_px: Option<i32>,
+) -> Option<f32> {
+    let unit = unit.trim().to_ascii_lowercase();
+    match unit.as_str() {
+        "px" | "" => Some(number),
+        "pt" => Some(number * (96.0 / 72.0)),
+        "em" | "rem" => Some(number * 16.0),
+        "vw" => {
+            let width_px = viewport_width_px?;
+            Some(number * (width_px as f32) / 100.0)
+        }
+        "vh" => {
+            let height_px = viewport_height_px?;
+            Some(number * (height_px as f32) / 100.0)
+        }
+        _ => None,
+    }
 }
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {

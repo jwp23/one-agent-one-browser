@@ -1,5 +1,7 @@
 use super::CustomProperties;
-use super::parse::{parse_css_color, parse_css_length_px_with_viewport, parse_html_length_px};
+use super::parse::{
+    parse_css_color, parse_css_font_size, parse_css_length_px_with_viewport, parse_html_length_px,
+};
 use super::{
     AutoEdges, BackgroundImage, BorderStyle, ClipRect, ComputedStyle, CssEdges, CssLength, Display,
     FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, Float, FontFamily, LineHeight,
@@ -66,6 +68,38 @@ impl LetterSpacing {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum FontSize {
+    Px(i32),
+    ParentFactor(f32),
+    RootFactor(f32),
+    Calc {
+        parent_factor: f32,
+        root_factor: f32,
+        px: f32,
+    },
+}
+
+impl FontSize {
+    fn resolve_px(self, parent_font_size_px: i32, root_font_size_px: i32) -> i32 {
+        let parent_font_size_px = parent_font_size_px.max(0) as f32;
+        let root_font_size_px = root_font_size_px.max(0) as f32;
+        let px = match self {
+            FontSize::Px(px) => px as f32,
+            FontSize::ParentFactor(factor) => factor * parent_font_size_px,
+            FontSize::RootFactor(factor) => factor * root_font_size_px,
+            FontSize::Calc {
+                parent_factor,
+                root_factor,
+                px,
+            } => {
+                (parent_factor * parent_font_size_px) + (root_factor * root_font_size_px) + px
+            }
+        };
+        px.round() as i32
+    }
+}
+
 pub(super) struct StyleBuilder {
     base: ComputedStyle,
     viewport: Option<(i32, i32)>,
@@ -87,7 +121,7 @@ pub(super) struct StyleBuilder {
     background_image: Option<Cascaded<Option<BackgroundImage>>>,
     mask_image: Option<Cascaded<Option<BackgroundImage>>>,
     font_family: Option<Cascaded<FontFamily>>,
-    font_size_px: Option<Cascaded<i32>>,
+    font_size_px: Option<Cascaded<FontSize>>,
     letter_spacing: Option<Cascaded<LetterSpacing>>,
     bold: Option<Cascaded<bool>>,
     underline: Option<Cascaded<bool>>,
@@ -101,6 +135,7 @@ pub(super) struct StyleBuilder {
     border_style: Option<Cascaded<BorderStyle>>,
     border_color: Option<Cascaded<Color>>,
     border_radius: Option<Cascaded<CssLength>>,
+    border_spacing_px: Option<Cascaded<i32>>,
     padding: Option<Cascaded<CssEdges>>,
     width_px: Option<Cascaded<Option<CssLength>>>,
     min_width_px: Option<Cascaded<Option<CssLength>>>,
@@ -158,6 +193,7 @@ impl StyleBuilder {
             border_style: None,
             border_color: None,
             border_radius: None,
+            border_spacing_px: None,
             padding: None,
             width_px: None,
             min_width_px: None,
@@ -194,11 +230,23 @@ impl StyleBuilder {
         length::parse_css_length(value, viewport_width_px, viewport_height_px)
     }
 
+    pub(super) fn parse_css_font_size(&self, value: &str) -> Option<FontSize> {
+        let (viewport_width_px, viewport_height_px) = match self.viewport {
+            Some((width, height)) => (Some(width), Some(height)),
+            None => (None, None),
+        };
+        parse_css_font_size(value, viewport_width_px, viewport_height_px)
+    }
+
     pub(super) fn finish(self) -> ComputedStyle {
         let font_size_px = self
             .font_size_px
-            .map(|v| v.value)
+            .map(|v| {
+                v.value
+                    .resolve_px(self.base.font_size_px, self.base.root_font_size_px)
+            })
             .unwrap_or(self.base.font_size_px);
+        let root_font_size_px = self.base.root_font_size_px;
         let letter_spacing_px = self
             .letter_spacing
             .map(|v| v.value)
@@ -218,13 +266,34 @@ impl StyleBuilder {
                 .clip_rect
                 .map(|v| v.value)
                 .unwrap_or(self.base.clip_rect),
-            top_px: self.top_px.map(|v| v.value).unwrap_or(self.base.top_px),
-            right_px: self.right_px.map(|v| v.value).unwrap_or(self.base.right_px),
+            top_px: self
+                .top_px
+                .map(|v| {
+                    v.value
+                        .map(|length| length.resolve_font_relative(font_size_px, root_font_size_px))
+                })
+                .unwrap_or(self.base.top_px),
+            right_px: self
+                .right_px
+                .map(|v| {
+                    v.value
+                        .map(|length| length.resolve_font_relative(font_size_px, root_font_size_px))
+                })
+                .unwrap_or(self.base.right_px),
             bottom_px: self
                 .bottom_px
-                .map(|v| v.value)
+                .map(|v| {
+                    v.value
+                        .map(|length| length.resolve_font_relative(font_size_px, root_font_size_px))
+                })
                 .unwrap_or(self.base.bottom_px),
-            left_px: self.left_px.map(|v| v.value).unwrap_or(self.base.left_px),
+            left_px: self
+                .left_px
+                .map(|v| {
+                    v.value
+                        .map(|length| length.resolve_font_relative(font_size_px, root_font_size_px))
+                })
+                .unwrap_or(self.base.left_px),
             opacity: self.opacity.map(|v| v.value).unwrap_or(self.base.opacity),
             color: self.color.map(|v| v.value).unwrap_or(self.base.color),
             background_color: self
@@ -247,6 +316,7 @@ impl StyleBuilder {
                 .font_family
                 .map(|v| v.value)
                 .unwrap_or(self.base.font_family),
+            root_font_size_px,
             font_size_px,
             letter_spacing_px,
             bold: self.bold.map(|v| v.value).unwrap_or(self.base.bold),
@@ -289,17 +359,36 @@ impl StyleBuilder {
                 .unwrap_or(self.base.border_color),
             border_radius: self
                 .border_radius
-                .map(|v| v.value)
+                .map(|v| v.value.resolve_font_relative(font_size_px, root_font_size_px))
                 .unwrap_or(self.base.border_radius),
-            padding: self.padding.map(|v| v.value).unwrap_or(self.base.padding),
-            width_px: self.width_px.map(|v| v.value).unwrap_or(self.base.width_px),
+            border_spacing_px: self
+                .border_spacing_px
+                .map(|v| v.value)
+                .unwrap_or(self.base.border_spacing_px),
+            padding: self
+                .padding
+                .map(|v| v.value.resolve_font_relative(font_size_px, root_font_size_px))
+                .unwrap_or(self.base.padding),
+            width_px: self
+                .width_px
+                .map(|v| {
+                    v.value
+                        .map(|length| length.resolve_font_relative(font_size_px, root_font_size_px))
+                })
+                .unwrap_or(self.base.width_px),
             min_width_px: self
                 .min_width_px
-                .map(|v| v.value)
+                .map(|v| {
+                    v.value
+                        .map(|length| length.resolve_font_relative(font_size_px, root_font_size_px))
+                })
                 .unwrap_or(self.base.min_width_px),
             max_width_px: self
                 .max_width_px
-                .map(|v| v.value)
+                .map(|v| {
+                    v.value
+                        .map(|length| length.resolve_font_relative(font_size_px, root_font_size_px))
+                })
                 .unwrap_or(self.base.max_width_px),
             height_px: self
                 .height_px
@@ -668,6 +757,10 @@ impl StyleBuilder {
     }
 
     pub(super) fn apply_font_size_px(&mut self, value: i32, priority: CascadePriority) {
+        self.apply_font_size(FontSize::Px(value), priority);
+    }
+
+    pub(super) fn apply_font_size(&mut self, value: FontSize, priority: CascadePriority) {
         apply_cascade(&mut self.font_size_px, value, priority);
     }
 
@@ -721,6 +814,10 @@ impl StyleBuilder {
 
     pub(super) fn apply_border_radius(&mut self, value: CssLength, priority: CascadePriority) {
         apply_cascade(&mut self.border_radius, value, priority);
+    }
+
+    pub(super) fn apply_border_spacing(&mut self, value: i32, priority: CascadePriority) {
+        apply_cascade(&mut self.border_spacing_px, value, priority);
     }
 
     pub(super) fn apply_padding(&mut self, value: CssEdges, priority: CascadePriority) {

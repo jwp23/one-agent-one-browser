@@ -65,11 +65,11 @@ fn media_expression_matches(expr: &str, viewport: Viewport) -> bool {
     let value = parts.next().unwrap_or("").trim();
 
     match feature.as_str() {
-        "min-width" => match parse_length_px(value) {
+        "min-width" => match parse_length_px(value, viewport) {
             Some(px) => viewport.width_px as f32 >= px,
             None => false,
         },
-        "max-width" => match parse_length_px(value) {
+        "max-width" => match parse_length_px(value, viewport) {
             Some(px) => viewport.width_px as f32 <= px,
             None => false,
         },
@@ -77,10 +77,12 @@ fn media_expression_matches(expr: &str, viewport: Viewport) -> bool {
     }
 }
 
-fn parse_length_px(input: &str) -> Option<f32> {
-    let value = input.trim();
-    let value = value.strip_suffix("px").unwrap_or(value).trim();
-    value.parse::<f32>().ok()
+fn parse_length_px(input: &str, viewport: Viewport) -> Option<f32> {
+    crate::style::parse_css_length_px_f32_with_viewport(
+        input,
+        Some(viewport.width_px),
+        Some(viewport.height_px),
+    )
 }
 
 fn split_commas(input: &str) -> impl Iterator<Item = &str> {
@@ -252,6 +254,24 @@ mod tests {
             "all and (max-width: 903.98px)",
             Viewport {
                 width_px: 1024,
+                height_px: 10
+            }
+        ));
+    }
+
+    #[test]
+    fn matches_calc_max_width() {
+        assert!(media_query_matches(
+            "screen and (max-width: calc(1120px - 1px))",
+            Viewport {
+                width_px: 1024,
+                height_px: 10
+            }
+        ));
+        assert!(!media_query_matches(
+            "screen and (max-width: calc(1120px - 1px))",
+            Viewport {
+                width_px: 1120,
                 height_px: 10
             }
         ));

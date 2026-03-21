@@ -14,6 +14,7 @@ pub use background::{BackgroundImage, GradientDirection, LinearGradient};
 pub use computer::StyleComputer;
 pub use custom_properties::CustomProperties;
 pub use length::CssLength;
+pub(crate) use parse::parse_css_length_px_f32_with_viewport;
 
 use builder::{CascadePriority, Cascaded, LetterSpacing, StyleBuilder};
 
@@ -179,6 +180,7 @@ pub struct ComputedStyle {
     pub background_image: Option<BackgroundImage>,
     pub mask_image: Option<BackgroundImage>,
     pub font_family: FontFamily,
+    pub root_font_size_px: i32,
     pub font_size_px: i32,
     pub letter_spacing_px: i32,
     pub bold: bool,
@@ -193,6 +195,7 @@ pub struct ComputedStyle {
     pub border_style: BorderStyle,
     pub border_color: Color,
     pub border_radius: CssLength,
+    pub border_spacing_px: i32,
     pub padding: CssEdges,
     pub width_px: Option<CssLength>,
     pub min_width_px: Option<CssLength>,
@@ -232,6 +235,7 @@ impl ComputedStyle {
             background_image: None,
             mask_image: None,
             font_family: FontFamily::SansSerif,
+            root_font_size_px: 16,
             font_size_px: 16,
             letter_spacing_px: 0,
             bold: false,
@@ -246,6 +250,7 @@ impl ComputedStyle {
             border_style: BorderStyle::None,
             border_color: Color::BLACK,
             border_radius: CssLength::Px(0),
+            border_spacing_px: 0,
             padding: CssEdges::ZERO,
             width_px: None,
             min_width_px: None,
@@ -285,6 +290,7 @@ impl ComputedStyle {
             background_image: None,
             mask_image: None,
             font_family: parent.font_family,
+            root_font_size_px: parent.root_font_size_px,
             font_size_px: parent.font_size_px,
             letter_spacing_px: parent.letter_spacing_px,
             bold: parent.bold,
@@ -299,6 +305,7 @@ impl ComputedStyle {
             border_style: BorderStyle::None,
             border_color: parent.color,
             border_radius: CssLength::Px(0),
+            border_spacing_px: 0,
             padding: CssEdges::ZERO,
             width_px: None,
             min_width_px: None,
@@ -359,6 +366,15 @@ impl CssEdges {
             right: self.right.resolve_px(reference_width_px),
             bottom: self.bottom.resolve_px(reference_width_px),
             left: self.left.resolve_px(reference_width_px),
+        }
+    }
+
+    pub fn resolve_font_relative(self, font_size_px: i32, root_font_size_px: i32) -> CssEdges {
+        CssEdges {
+            top: self.top.resolve_font_relative(font_size_px, root_font_size_px),
+            right: self.right.resolve_font_relative(font_size_px, root_font_size_px),
+            bottom: self.bottom.resolve_font_relative(font_size_px, root_font_size_px),
+            left: self.left.resolve_font_relative(font_size_px, root_font_size_px),
         }
     }
 }

@@ -5,9 +5,9 @@ use super::parse::{
     parse_css_font_family, parse_css_length_px,
 };
 use super::{
-    AutoEdges, BorderStyle, CascadePriority, ClipRect, CssEdges, CssLength, Display, FlexAlignItems,
-    FlexDirection, FlexJustifyContent, FlexWrap, Float, LetterSpacing, Position, StyleBuilder,
-    TextAlign, TextTransform, Visibility, WhiteSpace,
+    AutoEdges, BorderStyle, CascadePriority, ClipRect, CssEdges, CssLength, Display,
+    FlexAlignItems, FlexDirection, FlexJustifyContent, FlexWrap, Float, LetterSpacing, Position,
+    StyleBuilder, TextAlign, TextTransform, Visibility, WhiteSpace,
 };
 
 pub(super) fn apply_declaration(
@@ -185,8 +185,8 @@ pub(super) fn apply_declaration(
             builder.apply_font_family(parse_css_font_family(value), priority);
         }
         "font-size" => {
-            if let Some(px) = builder.parse_css_length_px(value) {
-                builder.apply_font_size_px(px, priority);
+            if let Some(font_size) = builder.parse_css_font_size(value) {
+                builder.apply_font_size(font_size, priority);
             }
         }
         "letter-spacing" => {
@@ -255,6 +255,12 @@ pub(super) fn apply_declaration(
         "padding" => {
             if let Some(edges) = parse_css_box_edges_length(builder, value) {
                 builder.apply_padding(edges, priority);
+            }
+        }
+        "border-spacing" => {
+            let first = value.split_whitespace().next().unwrap_or("");
+            if let Some(px) = builder.parse_css_length_px(first) {
+                builder.apply_border_spacing(px.max(0), priority);
             }
         }
         "padding-left" => {

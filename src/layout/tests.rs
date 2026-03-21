@@ -513,6 +513,143 @@ fn auto_width_tables_use_unwrapped_cell_text() {
 }
 
 #[test]
+fn tables_apply_css_border_spacing_between_cells() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                table { background: #ff0000; border-spacing: 2px; }
+                td { padding: 0; background: #00ff00; }
+            </style>
+            <table><tr><td>a</td><td>b</td></tr></table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 120,
+        height_px: 80,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut green_cells = Vec::new();
+    for command in &output.display_list.commands {
+        let DisplayCommand::Rect(rect) = command else {
+            continue;
+        };
+        if rect.color.r == 0 && rect.color.g == 255 && rect.color.b == 0 {
+            green_cells.push(rect.clone());
+        }
+    }
+
+    assert_eq!(green_cells.len(), 2, "both table cells should be painted");
+    green_cells.sort_by_key(|rect| rect.x_px);
+    let first = &green_cells[0];
+    let second = &green_cells[1];
+    let gap = second.x_px - (first.x_px + first.width_px);
+    assert_eq!(gap, 2, "table layout should honor CSS border-spacing");
+}
+
+#[test]
+fn wikitable_cells_honor_author_css_padding() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .wikitable > * > tr > td {
+                    padding: 0.2em 0.4em;
+                    background: #ff0000;
+                }
+            </style>
+            <table class="wikitable"><tbody><tr><td>x</td></tr></tbody></table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 80,
+        height_px: 80,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let red = output
+        .display_list
+        .commands
+        .iter()
+        .find_map(|command| {
+            let DisplayCommand::Rect(rect) = command else {
+                return None;
+            };
+            (rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0).then_some(rect)
+        })
+        .expect("cell background should render");
+
+    assert_eq!(
+        red.width_px, 13,
+        "wikitable author CSS should add horizontal padding"
+    );
+    assert_eq!(
+        red.height_px, 16,
+        "wikitable author CSS should add vertical padding"
+    );
+}
+
+#[test]
+fn inline_padding_override_beats_wikitable_author_css() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .wikitable > * > tr > td {
+                    padding: 0.2em 0.4em;
+                }
+            </style>
+            <table class="wikitable"><tbody><tr><td style="padding: 0; background: #ff0000;">x</td></tr></tbody></table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 80,
+        height_px: 80,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let red = output
+        .display_list
+        .commands
+        .iter()
+        .find_map(|command| {
+            let DisplayCommand::Rect(rect) = command else {
+                return None;
+            };
+            (rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0).then_some(rect)
+        })
+        .expect("cell background should render");
+
+    assert_eq!(red.width_px, 1, "inline padding should override author CSS");
+    assert_eq!(red.height_px, 10, "inline padding should override author CSS");
+}
+
+#[test]
 fn table_captions_render_above_rows() {
     let doc = crate::html::parse_document(
         r#"
@@ -553,6 +690,72 @@ fn table_captions_render_above_rows() {
     let caption_y = caption_y.expect("caption text should render");
     let cell_y = cell_y.expect("cell text should render");
     assert!(caption_y < cell_y, "caption should appear above table rows");
+}
+
+#[test]
+fn auto_wikitable_keeps_short_text_on_one_line_when_max_content_fits() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                .wikitable th, .wikitable td {
+                    padding: 0.2em 0.4em;
+                    border: 1px solid #000;
+                }
+            </style>
+            <table class="wikitable">
+                <tr><th colspan="4">reality television</th></tr>
+                <tr><th>Year</th><th>Title</th><th>Role</th><th>Source</th></tr>
+                <tr><td>2013</td><td>Heroes of Cosplay</td><td>Riki LeCotey</td><td></td></tr>
+                <tr><td>2014</td><td>Heroes of Cosplay</td><td>Riki LeCotey</td><td></td></tr>
+            </table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 500,
+        height_px: 220,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut heroes_y = Vec::new();
+    let mut cosplay_y = Vec::new();
+    let mut riki_y = Vec::new();
+    let mut lecotey_y = Vec::new();
+    for command in &output.display_list.commands {
+        let DisplayCommand::Text(text) = command else {
+            continue;
+        };
+        match text.text.as_str() {
+            "Heroes" => heroes_y.push(text.y_px),
+            "Cosplay" => cosplay_y.push(text.y_px),
+            "Riki" => riki_y.push(text.y_px),
+            "LeCotey" => lecotey_y.push(text.y_px),
+            _ => {}
+        }
+    }
+
+    assert!(
+        heroes_y
+            .iter()
+            .zip(cosplay_y.iter())
+            .all(|(heroes, cosplay)| heroes == cosplay),
+        "title cells should keep 'Heroes of Cosplay' on one line"
+    );
+    assert!(
+        riki_y
+            .iter()
+            .zip(lecotey_y.iter())
+            .all(|(riki, lecotey)| riki == lecotey),
+        "role cells should keep 'Riki LeCotey' on one line"
+    );
 }
 
 #[test]
@@ -922,6 +1125,134 @@ fn table_layout_supports_tbody_and_th_cells() {
 
     assert!(saw_header, "table header text should be rendered");
     assert!(saw_value, "table data text should be rendered");
+}
+
+#[test]
+fn table_cells_stretch_backgrounds_to_taller_row_height() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                table { width: 5px; border-spacing: 0; }
+                td { padding: 0; }
+                .short { background: #ff0000; }
+                .tall { background: #00ff00; width: 1px; }
+            </style>
+            <table>
+                <tr>
+                    <td class="short">x</td>
+                    <td class="tall">a a a</td>
+                </tr>
+            </table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 120,
+        height_px: 120,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut red = None;
+    let mut green = None;
+    for command in &output.display_list.commands {
+        let DisplayCommand::Rect(rect) = command else {
+            continue;
+        };
+        if rect.color.r == 255 && rect.color.g == 0 && rect.color.b == 0 {
+            red = Some(rect.clone());
+        } else if rect.color.r == 0 && rect.color.g == 255 && rect.color.b == 0 {
+            green = Some(rect.clone());
+        }
+    }
+
+    let red = red.expect("short cell background should render");
+    let green = green.expect("tall cell background should render");
+    assert_eq!(
+        red.height_px, green.height_px,
+        "shorter cells should stretch their painted background to the row height"
+    );
+    assert!(
+        red.height_px > 10,
+        "the row should be taller than a single line of text"
+    );
+}
+
+#[test]
+fn table_cells_stretch_borders_to_taller_row_height() {
+    let doc = crate::html::parse_document(
+        r#"
+            <style>
+                body { margin: 0; }
+                table { width: 5px; border-spacing: 0; }
+                td { padding: 0; border: 1px solid #0000ff; }
+                .short { background: #ff0000; }
+                .tall { background: #00ff00; width: 1px; }
+            </style>
+            <table>
+                <tr>
+                    <td class="short">x</td>
+                    <td class="tall">a a a</td>
+                </tr>
+            </table>
+        "#,
+    );
+    let viewport = Viewport {
+        width_px: 120,
+        height_px: 120,
+    };
+    let styles = crate::style::StyleComputer::from_document(&doc);
+    let output = layout_document(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        viewport,
+        &crate::resources::NoResources,
+    )
+    .expect("layout should succeed");
+
+    let mut left_border: Option<crate::render::DrawRoundedRectBorder> = None;
+    let mut right_border: Option<crate::render::DrawRoundedRectBorder> = None;
+    for command in &output.display_list.commands {
+        let DisplayCommand::RoundedRectBorder(border) = command else {
+            continue;
+        };
+        if border.color.r != 0 || border.color.g != 0 || border.color.b != 255 {
+            continue;
+        }
+        let replace_left = match &left_border {
+            Some(existing) => border.x_px < existing.x_px,
+            None => true,
+        };
+        if replace_left {
+            left_border = Some(border.clone());
+        }
+        let replace_right = match &right_border {
+            Some(existing) => border.x_px > existing.x_px,
+            None => true,
+        };
+        if replace_right {
+            right_border = Some(border.clone());
+        }
+    }
+
+    let left_border = left_border.expect("left cell border should render");
+    let right_border = right_border.expect("right cell border should render");
+    assert_eq!(
+        left_border.height_px, right_border.height_px,
+        "shorter cells should stretch their border box to the row height"
+    );
+    assert!(
+        left_border.height_px > 12,
+        "the bordered row should be taller than a single line plus borders"
+    );
 }
 
 #[test]

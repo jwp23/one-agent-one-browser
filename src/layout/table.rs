@@ -5,6 +5,16 @@ use crate::style::{ComputedStyle, Display, TextAlign, Visibility};
 
 use super::LayoutEngine;
 
+struct RowCellLayout<'doc> {
+    element: &'doc Element,
+    style: ComputedStyle,
+    x: i32,
+    span_width: i32,
+    border: Edges,
+    padding: Edges,
+    paint: bool,
+}
+
 pub(super) fn measure_auto_table_width<'doc>(
     engine: &LayoutEngine<'_>,
     table: &'doc Element,
@@ -12,15 +22,18 @@ pub(super) fn measure_auto_table_width<'doc>(
     ancestors: &mut Vec<&'doc Element>,
     available_width: i32,
 ) -> Result<i32, String> {
-    let cellspacing = table
-        .attributes
-        .get("cellspacing")
-        .and_then(parse_i32)
-        .unwrap_or(0)
-        .max(0);
-    let widths =
-        compute_intrinsic_column_widths(engine, table, table_style, ancestors, cellspacing)?;
-    let caption_width = measure_caption_max_width(engine, table, table_style, ancestors)?;
+    let cellspacing = table_cellspacing_px(table, table_style);
+    let mut table_ancestors = ancestors.clone();
+    table_ancestors.push(table);
+    let widths = compute_intrinsic_column_widths(
+        engine,
+        table,
+        table_style,
+        &mut table_ancestors,
+        cellspacing,
+    )?;
+    let caption_width =
+        measure_caption_max_width(engine, table, table_style, &mut table_ancestors)?;
     Ok(sum_table_width(&widths.max_widths, cellspacing)
         .max(caption_width)
         .min(available_width.max(0)))
@@ -40,12 +53,7 @@ pub(super) fn layout_table<'doc>(
         .and_then(parse_i32)
         .unwrap_or(0)
         .max(0);
-    let cellspacing = table
-        .attributes
-        .get("cellspacing")
-        .and_then(parse_i32)
-        .unwrap_or(0)
-        .max(0);
+    let cellspacing = table_cellspacing_px(table, table_style);
 
     let rows = collect_table_rows(table);
 
@@ -109,14 +117,31 @@ pub(super) fn layout_table<'doc>(
     }
 
     for row in &grid.rows {
+        let ancestor_len = ancestors.len();
+        let mut row_parent_style = table_style;
+        let row_group_style = row.group.map(|group| {
+            let style = engine.styles.compute_style_in_viewport(
+                group,
+                table_style,
+                ancestors,
+                engine.viewport.width_px,
+                engine.viewport.height_px,
+            );
+            ancestors.push(group);
+            style
+        });
+        if let Some(style) = row_group_style.as_ref() {
+            row_parent_style = style;
+        }
         let row_style = engine.styles.compute_style_in_viewport(
             row.element,
-            table_style,
+            row_parent_style,
             ancestors,
             engine.viewport.width_px,
             engine.viewport.height_px,
         );
         if row_style.display == Display::None {
+            ancestors.truncate(ancestor_len);
             continue;
         }
         let row_paint = paint && row_style.visibility == Visibility::Visible;
@@ -125,6 +150,7 @@ pub(super) fn layout_table<'doc>(
 
         ancestors.push(row.element);
         let mut x = content_box.x;
+        let mut row_cells = Vec::new();
         for cell in &row.cells {
             let cell_style = engine.styles.compute_style_in_viewport(
                 cell.element,
@@ -139,14 +165,6 @@ pub(super) fn layout_table<'doc>(
             let mut cell_paint = row_paint && cell_style.visibility == Visibility::Visible;
             if cell_paint && cell_style.opacity == 0 {
                 cell_paint = false;
-            }
-            let opacity = cell_style.opacity;
-            let needs_opacity_group = cell_paint && opacity < 255;
-            if needs_opacity_group {
-                engine
-                    .list
-                    .commands
-                    .push(DisplayCommand::PushOpacity(opacity));
             }
 
             let span_width =
@@ -169,19 +187,13 @@ pub(super) fn layout_table<'doc>(
             };
             let content = border_box.inset(add_edges(border, padding));
 
-            let background_indices = if cell_paint {
-                engine.push_background(Some(cell.element), border_box, &cell_style, 0)?
-            } else {
-                Vec::new()
-            };
-
             ancestors.push(cell.element);
             let content_height = engine.layout_flow_children(
                 &cell.element.children,
                 &cell_style,
                 ancestors,
                 content,
-                cell_paint,
+                false,
             )?;
             ancestors.pop();
             let mut cell_height = border
@@ -194,19 +206,65 @@ pub(super) fn layout_table<'doc>(
                 cell_height = cell_height.max(min_height);
             }
 
-            if !background_indices.is_empty() {
-                engine.set_background_height(&background_indices, cell_height);
+            row_height = row_height.max(cell_height);
+            row_cells.push(RowCellLayout {
+                element: cell.element,
+                style: cell_style,
+                x,
+                span_width,
+                border,
+                padding,
+                paint: cell_paint,
+            });
+            x = x.saturating_add(span_width).saturating_add(cellspacing);
+        }
+
+        for cell in &row_cells {
+            let opacity = cell.style.opacity;
+            let needs_opacity_group = cell.paint && opacity < 255;
+            if needs_opacity_group {
+                engine
+                    .list
+                    .commands
+                    .push(DisplayCommand::PushOpacity(opacity));
             }
-            if cell_paint {
-                engine.paint_border(
-                    Rect {
-                        x: border_box.x,
-                        y: border_box.y,
-                        width: border_box.width,
-                        height: cell_height,
-                    },
-                    &cell_style,
-                );
+
+            let border_box = Rect {
+                x: cell.x,
+                y,
+                width: cell.span_width,
+                height: row_height,
+            };
+            if cell.paint {
+                let _ = engine.push_background(
+                    Some(cell.element),
+                    border_box,
+                    &cell.style,
+                    row_height,
+                )?;
+            }
+
+            let content_box = Rect {
+                x: cell.x,
+                y,
+                width: cell.span_width,
+                height: 0,
+            }
+            .inset(add_edges(cell.border, cell.padding));
+            if cell.paint {
+                ancestors.push(cell.element);
+                let _ = engine.layout_flow_children(
+                    &cell.element.children,
+                    &cell.style,
+                    ancestors,
+                    content_box,
+                    true,
+                )?;
+                ancestors.pop();
+            }
+
+            if cell.paint {
+                engine.paint_border(border_box, &cell.style);
             }
 
             if needs_opacity_group {
@@ -215,11 +273,8 @@ pub(super) fn layout_table<'doc>(
                     .commands
                     .push(DisplayCommand::PopOpacity(opacity));
             }
-
-            row_height = row_height.max(cell_height);
-            x = x.saturating_add(span_width).saturating_add(cellspacing);
         }
-        ancestors.pop();
+        ancestors.truncate(ancestor_len);
 
         y = y.saturating_add(row_height).saturating_add(cellspacing);
     }
@@ -256,10 +311,34 @@ fn compute_intrinsic_column_widths<'doc>(
     let mut fixed = vec![false; grid.columns];
 
     for row in &grid.rows {
+        let ancestor_len = ancestors.len();
+        let mut row_parent_style = table_style;
+        let row_group_style = row.group.map(|group| {
+            let style = engine.styles.compute_style_in_viewport(
+                group,
+                table_style,
+                ancestors,
+                engine.viewport.width_px,
+                engine.viewport.height_px,
+            );
+            ancestors.push(group);
+            style
+        });
+        if let Some(style) = row_group_style.as_ref() {
+            row_parent_style = style;
+        }
+        let row_style = engine.styles.compute_style_in_viewport(
+            row.element,
+            row_parent_style,
+            ancestors,
+            engine.viewport.width_px,
+            engine.viewport.height_px,
+        );
+        ancestors.push(row.element);
         for cell in &row.cells {
             let cell_style = engine.styles.compute_style_in_viewport(
                 cell.element,
-                table_style,
+                &row_style,
                 ancestors,
                 engine.viewport.width_px,
                 engine.viewport.height_px,
@@ -285,6 +364,7 @@ fn compute_intrinsic_column_widths<'doc>(
                 explicit_width.is_some() || cell_style.text_align == TextAlign::Right,
             );
         }
+        ancestors.truncate(ancestor_len);
     }
 
     Ok(IntrinsicColumnWidths {
@@ -410,6 +490,7 @@ fn distribute_span_extra(col_widths: &mut [i32], start: usize, span: usize, extr
 }
 
 struct GridRow<'doc> {
+    group: Option<&'doc Element>,
     element: &'doc Element,
     cells: Vec<GridCell<'doc>>,
 }
@@ -425,14 +506,19 @@ struct Grid<'doc> {
     rows: Vec<GridRow<'doc>>,
 }
 
-fn build_grid<'doc>(rows: Vec<&'doc Element>) -> Grid<'doc> {
+struct TableRow<'doc> {
+    group: Option<&'doc Element>,
+    element: &'doc Element,
+}
+
+fn build_grid<'doc>(rows: Vec<TableRow<'doc>>) -> Grid<'doc> {
     let mut grid_rows = Vec::new();
     let mut columns = 0usize;
 
     for row in rows {
         let mut col_index = 0usize;
         let mut cells = Vec::new();
-        for child in &row.children {
+        for child in &row.element.children {
             let Node::Element(el) = child else {
                 continue;
             };
@@ -454,7 +540,8 @@ fn build_grid<'doc>(rows: Vec<&'doc Element>) -> Grid<'doc> {
         }
         columns = columns.max(col_index);
         grid_rows.push(GridRow {
-            element: row,
+            group: row.group,
+            element: row.element,
             cells,
         });
     }
@@ -465,14 +552,17 @@ fn build_grid<'doc>(rows: Vec<&'doc Element>) -> Grid<'doc> {
     }
 }
 
-fn collect_table_rows<'doc>(table: &'doc Element) -> Vec<&'doc Element> {
+fn collect_table_rows<'doc>(table: &'doc Element) -> Vec<TableRow<'doc>> {
     let mut rows = Vec::new();
     for child in &table.children {
         let Node::Element(el) = child else {
             continue;
         };
         if el.name == "tr" {
-            rows.push(el);
+            rows.push(TableRow {
+                group: None,
+                element: el,
+            });
             continue;
         }
         if is_table_row_group(el.name.as_str()) {
@@ -481,7 +571,10 @@ fn collect_table_rows<'doc>(table: &'doc Element) -> Vec<&'doc Element> {
                     continue;
                 };
                 if row.name == "tr" {
-                    rows.push(row);
+                    rows.push(TableRow {
+                        group: Some(el),
+                        element: row,
+                    });
                 }
             }
         }
@@ -555,6 +648,15 @@ fn add_edges(a: Edges, b: Edges) -> Edges {
         bottom: a.bottom.saturating_add(b.bottom),
         left: a.left.saturating_add(b.left),
     }
+}
+
+fn table_cellspacing_px(table: &Element, table_style: &ComputedStyle) -> i32 {
+    table
+        .attributes
+        .get("cellspacing")
+        .and_then(parse_i32)
+        .unwrap_or(table_style.border_spacing_px)
+        .max(0)
 }
 
 fn parse_i32(value: &str) -> Option<i32> {
