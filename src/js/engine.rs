@@ -21,10 +21,12 @@ enum Statement {
     },
     FunctionDeclaration {
         name: String,
-        params: Vec<String>,
+        params: Vec<Parameter>,
         body: Vec<Statement>,
     },
     Return(Option<Expression>),
+    Throw(Expression),
+    Break,
     If {
         test: Expression,
         consequent: Box<Statement>,
@@ -40,10 +42,20 @@ enum Statement {
         test: Expression,
         body: Box<Statement>,
     },
+    Switch {
+        discriminant: Expression,
+        cases: Vec<SwitchCase>,
+    },
     For {
         init: Option<ForInit>,
         test: Option<Expression>,
         update: Option<Expression>,
+        body: Box<Statement>,
+    },
+    ForEach {
+        binding: VariableDeclarator,
+        operator: ForEachOperator,
+        iterable: Expression,
         body: Box<Statement>,
     },
     Expression(Expression),
@@ -51,14 +63,44 @@ enum Statement {
 
 #[derive(Clone, Debug)]
 struct VariableDeclarator {
-    name: String,
+    pattern: BindingPattern,
     init: Option<Expression>,
+}
+
+#[derive(Clone, Debug)]
+enum BindingPattern {
+    Identifier(String),
+    Object(Vec<ObjectBindingProperty>),
+}
+
+#[derive(Clone, Debug)]
+struct ObjectBindingProperty {
+    key: String,
+    binding: String,
+}
+
+#[derive(Clone, Debug)]
+struct Parameter {
+    name: String,
+    default: Option<Expression>,
+}
+
+#[derive(Clone, Debug)]
+struct SwitchCase {
+    test: Option<Expression>,
+    consequent: Vec<Statement>,
 }
 
 #[derive(Clone, Debug)]
 enum ForInit {
     VariableDeclaration(Vec<VariableDeclarator>),
     Expression(Expression),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ForEachOperator {
+    In,
+    Of,
 }
 
 #[derive(Clone, Debug)]
@@ -68,9 +110,30 @@ enum ObjectKey {
     Number(f64),
 }
 
+#[derive(Clone, Debug)]
+enum ObjectProperty {
+    KeyValue(ObjectKey, Expression),
+    Computed(Expression, Expression),
+    Shorthand(String),
+}
+
+#[derive(Clone, Debug)]
+enum ArrayElement {
+    Expression(Expression),
+    Spread(Expression),
+}
+
+#[derive(Clone, Debug)]
+enum TemplateSegment {
+    String(String),
+    Expression(Expression),
+}
+
 #[derive(Clone, Copy, Debug)]
 enum UnaryOperator {
     Not,
+    Plus,
+    Minus,
     Typeof,
     Delete,
 }
@@ -87,6 +150,7 @@ enum BinaryOperator {
     Greater,
     GreaterEqual,
     In,
+    Instanceof,
     Equal,
     NotEqual,
     StrictEqual,
@@ -114,11 +178,14 @@ enum Expression {
         source: String,
         flags: String,
     },
-    Array(Vec<Expression>),
-    Object(Vec<(ObjectKey, Expression)>),
+    TemplateLiteral(Vec<TemplateSegment>),
+    Array(Vec<ArrayElement>),
+    Object(Vec<ObjectProperty>),
     Function {
-        params: Vec<String>,
+        params: Vec<Parameter>,
         body: Vec<Statement>,
+        lexical_this: bool,
+        constructible: bool,
     },
     Member {
         object: Box<Expression>,
@@ -145,6 +212,11 @@ enum Expression {
         operator: UnaryOperator,
         argument: Box<Expression>,
     },
+    Conditional {
+        test: Box<Expression>,
+        consequent: Box<Expression>,
+        alternate: Box<Expression>,
+    },
     Binary {
         left: Box<Expression>,
         operator: BinaryOperator,
@@ -162,11 +234,17 @@ enum Token {
     String(String),
     Number(f64),
     Regex { source: String, flags: String },
+    TemplateLiteral(TemplateLiteralToken),
     KeywordVar,
     KeywordLet,
     KeywordConst,
     KeywordFunction,
     KeywordReturn,
+    KeywordThrow,
+    KeywordBreak,
+    KeywordSwitch,
+    KeywordCase,
+    KeywordDefault,
     KeywordIf,
     KeywordElse,
     KeywordTrue,
@@ -181,6 +259,8 @@ enum Token {
     KeywordWhile,
     KeywordFor,
     KeywordIn,
+    KeywordOf,
+    KeywordInstanceof,
     Dot,
     LeftParen,
     RightParen,
@@ -191,6 +271,8 @@ enum Token {
     Comma,
     Semicolon,
     Colon,
+    Question,
+    Arrow,
     Equal,
     EqualEqual,
     EqualEqualEqual,
@@ -206,6 +288,7 @@ enum Token {
     Star,
     Slash,
     Percent,
+    Ellipsis,
     Less,
     LessEqual,
     Greater,
@@ -215,6 +298,17 @@ enum Token {
     AndAnd,
     OrOr,
     Eof,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TemplateLiteralToken {
+    parts: Vec<TemplateLiteralPartToken>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum TemplateLiteralPartToken {
+    String(String),
+    Expression(String),
 }
 
 struct Lexer<'a> {
@@ -253,6 +347,11 @@ impl<'a> Lexer<'a> {
                 '%' => {
                     self.advance_char();
                     out.push(Token::Percent);
+                }
+                '`' => out.push(Token::TemplateLiteral(self.consume_template_literal()?)),
+                '.' if self.starts_with("...") => {
+                    self.cursor += 3;
+                    out.push(Token::Ellipsis);
                 }
                 '.' => {
                     self.advance_char();
@@ -293,6 +392,14 @@ impl<'a> Lexer<'a> {
                 ':' => {
                     self.advance_char();
                     out.push(Token::Colon);
+                }
+                '?' => {
+                    self.advance_char();
+                    out.push(Token::Question);
+                }
+                '=' if self.starts_with("=>") => {
+                    self.cursor += 2;
+                    out.push(Token::Arrow);
                 }
                 '+' if self.starts_with("++") => {
                     self.cursor += 2;
@@ -384,6 +491,11 @@ impl<'a> Lexer<'a> {
                         "const" => Token::KeywordConst,
                         "function" => Token::KeywordFunction,
                         "return" => Token::KeywordReturn,
+                        "throw" => Token::KeywordThrow,
+                        "break" => Token::KeywordBreak,
+                        "switch" => Token::KeywordSwitch,
+                        "case" => Token::KeywordCase,
+                        "default" => Token::KeywordDefault,
                         "if" => Token::KeywordIf,
                         "else" => Token::KeywordElse,
                         "true" => Token::KeywordTrue,
@@ -398,6 +510,8 @@ impl<'a> Lexer<'a> {
                         "while" => Token::KeywordWhile,
                         "for" => Token::KeywordFor,
                         "in" => Token::KeywordIn,
+                        "of" => Token::KeywordOf,
+                        "instanceof" => Token::KeywordInstanceof,
                         _ => Token::Identifier(identifier),
                     });
                 }
@@ -567,6 +681,121 @@ impl<'a> Lexer<'a> {
         }
         self.input[start..self.cursor].to_owned()
     }
+
+    fn consume_template_literal(&mut self) -> Result<TemplateLiteralToken, String> {
+        self.advance_char();
+        let mut parts = Vec::new();
+        let mut current = String::new();
+
+        while let Some(ch) = self.advance_char() {
+            match ch {
+                '`' => {
+                    parts.push(TemplateLiteralPartToken::String(current));
+                    return Ok(TemplateLiteralToken { parts });
+                }
+                '\\' => {
+                    let escaped = self
+                        .advance_char()
+                        .ok_or_else(|| "Unterminated template escape".to_owned())?;
+                    match escaped {
+                        'n' => current.push('\n'),
+                        'r' => current.push('\r'),
+                        't' => current.push('\t'),
+                        '\\' => current.push('\\'),
+                        '\'' => current.push('\''),
+                        '"' => current.push('"'),
+                        '`' => current.push('`'),
+                        '$' => current.push('$'),
+                        other => current.push(other),
+                    }
+                }
+                '$' if self.peek_char() == Some('{') => {
+                    self.advance_char();
+                    parts.push(TemplateLiteralPartToken::String(std::mem::take(&mut current)));
+                    let source = self.consume_template_expression_source()?;
+                    parts.push(TemplateLiteralPartToken::Expression(source));
+                }
+                _ => current.push(ch),
+            }
+        }
+
+        Err("Unterminated template literal".to_owned())
+    }
+
+    fn consume_template_expression_source(&mut self) -> Result<String, String> {
+        let mut out = String::new();
+        let mut depth = 1;
+
+        while let Some(ch) = self.advance_char() {
+            match ch {
+                '\'' | '"' => {
+                    out.push(ch);
+                    self.consume_string_source(ch, &mut out)?;
+                }
+                '`' => {
+                    out.push(ch);
+                    self.consume_nested_template_source(&mut out)?;
+                }
+                '{' => {
+                    depth += 1;
+                    out.push(ch);
+                }
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(out);
+                    }
+                    out.push(ch);
+                }
+                _ => out.push(ch),
+            }
+        }
+
+        Err("Unterminated template expression".to_owned())
+    }
+
+    fn consume_string_source(&mut self, quote: char, out: &mut String) -> Result<(), String> {
+        while let Some(ch) = self.advance_char() {
+            out.push(ch);
+            if ch == '\\' {
+                let escaped = self
+                    .advance_char()
+                    .ok_or_else(|| "Unterminated string escape".to_owned())?;
+                out.push(escaped);
+                continue;
+            }
+            if ch == quote {
+                return Ok(());
+            }
+        }
+
+        Err("Unterminated string literal".to_owned())
+    }
+
+    fn consume_nested_template_source(&mut self, out: &mut String) -> Result<(), String> {
+        while let Some(ch) = self.advance_char() {
+            out.push(ch);
+            match ch {
+                '\\' => {
+                    let escaped = self
+                        .advance_char()
+                        .ok_or_else(|| "Unterminated template escape".to_owned())?;
+                    out.push(escaped);
+                }
+                '`' => return Ok(()),
+                '$' if self.peek_char() == Some('{') => {
+                    self.advance_char();
+                    out.push('{');
+                    let source = self.consume_template_expression_source()?;
+                    out.push_str(source.as_str());
+                    out.push('}');
+                }
+                _ => {}
+            }
+        }
+
+        Err("Unterminated nested template literal".to_owned())
+    }
 }
 
 struct Parser {
@@ -617,6 +846,17 @@ impl Parser {
             return Ok(Statement::Return(expression));
         }
 
+        if self.match_token(&Token::KeywordThrow) {
+            let expression = self.parse_expression()?;
+            self.match_token(&Token::Semicolon);
+            return Ok(Statement::Throw(expression));
+        }
+
+        if self.match_token(&Token::KeywordBreak) {
+            self.match_token(&Token::Semicolon);
+            return Ok(Statement::Break);
+        }
+
         if self.match_token(&Token::KeywordIf) {
             self.expect(&Token::LeftParen)?;
             let test = self.parse_expression()?;
@@ -656,12 +896,73 @@ impl Parser {
             return Ok(Statement::While { test, body });
         }
 
+        if self.match_token(&Token::KeywordSwitch) {
+            self.expect(&Token::LeftParen)?;
+            let discriminant = self.parse_expression()?;
+            self.expect(&Token::RightParen)?;
+            self.expect(&Token::LeftBrace)?;
+            let mut cases = Vec::new();
+            while !self.check(&Token::RightBrace) && !self.is_at_end() {
+                let test = if self.match_token(&Token::KeywordCase) {
+                    let test = self.parse_expression()?;
+                    self.expect(&Token::Colon)?;
+                    Some(test)
+                } else if self.match_token(&Token::KeywordDefault) {
+                    self.expect(&Token::Colon)?;
+                    None
+                } else {
+                    return Err(format!("Unexpected token in JS switch: {:?}", self.peek()));
+                };
+                let mut consequent = Vec::new();
+                while !self.check(&Token::RightBrace)
+                    && !self.check(&Token::KeywordCase)
+                    && !self.check(&Token::KeywordDefault)
+                {
+                    while self.match_token(&Token::Semicolon) {}
+                    if self.check(&Token::RightBrace)
+                        || self.check(&Token::KeywordCase)
+                        || self.check(&Token::KeywordDefault)
+                    {
+                        break;
+                    }
+                    consequent.push(self.parse_statement()?);
+                }
+                cases.push(SwitchCase { test, consequent });
+            }
+            self.expect(&Token::RightBrace)?;
+            return Ok(Statement::Switch { discriminant, cases });
+        }
+
         if self.match_token(&Token::KeywordFor) {
             self.expect(&Token::LeftParen)?;
             let init = if self.match_token(&Token::Semicolon) {
                 None
             } else if self.match_any(&[Token::KeywordVar, Token::KeywordLet, Token::KeywordConst]) {
-                let declarations = self.parse_variable_declaration_list()?;
+                let first = self.parse_variable_declarator(true)?;
+                let operator = if self.match_token(&Token::KeywordIn) {
+                    Some(ForEachOperator::In)
+                } else if self.match_token(&Token::KeywordOf) {
+                    Some(ForEachOperator::Of)
+                } else {
+                    None
+                };
+
+                if let Some(operator) = operator {
+                    let iterable = self.parse_expression()?;
+                    self.expect(&Token::RightParen)?;
+                    let body = Box::new(self.parse_statement()?);
+                    return Ok(Statement::ForEach {
+                        binding: first,
+                        operator,
+                        iterable,
+                        body,
+                    });
+                }
+
+                let mut declarations = vec![first];
+                while self.match_token(&Token::Comma) {
+                    declarations.push(self.parse_variable_declarator(true)?);
+                }
                 self.expect(&Token::Semicolon)?;
                 Some(ForInit::VariableDeclaration(declarations))
             } else {
@@ -715,17 +1016,9 @@ impl Parser {
 
     fn parse_function_signature_and_body(
         &mut self,
-    ) -> Result<(Vec<String>, Vec<Statement>), String> {
+    ) -> Result<(Vec<Parameter>, Vec<Statement>), String> {
         self.expect(&Token::LeftParen)?;
-        let mut params = Vec::new();
-        if !self.check(&Token::RightParen) {
-            loop {
-                params.push(self.expect_identifier()?);
-                if !self.match_token(&Token::Comma) {
-                    break;
-                }
-            }
-        }
+        let params = self.parse_parameter_list_contents()?;
         self.expect(&Token::RightParen)?;
         let body = self.parse_block_statements()?;
         Ok((params, body))
@@ -734,13 +1027,7 @@ impl Parser {
     fn parse_variable_declaration_list(&mut self) -> Result<Vec<VariableDeclarator>, String> {
         let mut declarations = Vec::new();
         loop {
-            let name = self.expect_identifier()?;
-            let init = if self.match_token(&Token::Equal) {
-                Some(self.parse_expression()?)
-            } else {
-                None
-            };
-            declarations.push(VariableDeclarator { name, init });
+            declarations.push(self.parse_variable_declarator(true)?);
             if !self.match_token(&Token::Comma) {
                 break;
             }
@@ -753,7 +1040,11 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Result<Expression, String> {
-        let expression = self.parse_logical_or()?;
+        if self.is_arrow_function_start()? {
+            return self.parse_arrow_function();
+        }
+
+        let expression = self.parse_conditional()?;
         if self.match_token(&Token::Equal) {
             let value = self.parse_assignment()?;
             return Ok(Expression::Assignment {
@@ -795,6 +1086,21 @@ impl Parser {
             });
         }
         Ok(expression)
+    }
+
+    fn parse_conditional(&mut self) -> Result<Expression, String> {
+        let expression = self.parse_logical_or()?;
+        if !self.match_token(&Token::Question) {
+            return Ok(expression);
+        }
+        let consequent = self.parse_assignment()?;
+        self.expect(&Token::Colon)?;
+        let alternate = self.parse_assignment()?;
+        Ok(Expression::Conditional {
+            test: Box::new(expression),
+            consequent: Box::new(consequent),
+            alternate: Box::new(alternate),
+        })
     }
 
     fn parse_logical_or(&mut self) -> Result<Expression, String> {
@@ -856,6 +1162,8 @@ impl Parser {
         loop {
             let operator = if self.match_token(&Token::KeywordIn) {
                 Some(BinaryOperator::In)
+            } else if self.match_token(&Token::KeywordInstanceof) {
+                Some(BinaryOperator::Instanceof)
             } else if self.match_token(&Token::Less) {
                 Some(BinaryOperator::Less)
             } else if self.match_token(&Token::LessEqual) {
@@ -945,6 +1253,18 @@ impl Parser {
                 prefix: true,
             });
         }
+        if self.match_token(&Token::Plus) {
+            return Ok(Expression::Unary {
+                operator: UnaryOperator::Plus,
+                argument: Box::new(self.parse_unary()?),
+            });
+        }
+        if self.match_token(&Token::Minus) {
+            return Ok(Expression::Unary {
+                operator: UnaryOperator::Minus,
+                argument: Box::new(self.parse_unary()?),
+            });
+        }
         if self.match_token(&Token::Bang) {
             return Ok(Expression::Unary {
                 operator: UnaryOperator::Not,
@@ -970,7 +1290,7 @@ impl Parser {
             } else {
                 Vec::new()
             };
-            return Ok(Expression::New {
+            return self.finish_call_member(Expression::New {
                 callee: Box::new(callee),
                 arguments,
             });
@@ -998,41 +1318,8 @@ impl Parser {
     }
 
     fn parse_call_member(&mut self) -> Result<Expression, String> {
-        let mut expression = self.parse_member_expression()?;
-
-        loop {
-            if self.match_token(&Token::LeftParen) {
-                let arguments = self.parse_call_arguments()?;
-                expression = Expression::Call {
-                    callee: Box::new(expression),
-                    arguments,
-                };
-                continue;
-            }
-
-            if self.match_token(&Token::Dot) {
-                let property = self.expect_property_identifier()?;
-                expression = Expression::Member {
-                    object: Box::new(expression),
-                    property,
-                };
-                continue;
-            }
-
-            if self.match_token(&Token::LeftBracket) {
-                let property = self.parse_expression()?;
-                self.expect(&Token::RightBracket)?;
-                expression = Expression::ComputedMember {
-                    object: Box::new(expression),
-                    property: Box::new(property),
-                };
-                continue;
-            }
-
-            break;
-        }
-
-        Ok(expression)
+        let expression = self.parse_member_expression()?;
+        self.finish_call_member(expression)
     }
 
     fn parse_member_expression(&mut self) -> Result<Expression, String> {
@@ -1081,6 +1368,42 @@ impl Parser {
         Ok(arguments)
     }
 
+    fn finish_call_member(&mut self, mut expression: Expression) -> Result<Expression, String> {
+        loop {
+            if self.match_token(&Token::LeftParen) {
+                let arguments = self.parse_call_arguments()?;
+                expression = Expression::Call {
+                    callee: Box::new(expression),
+                    arguments,
+                };
+                continue;
+            }
+
+            if self.match_token(&Token::Dot) {
+                let property = self.expect_property_identifier()?;
+                expression = Expression::Member {
+                    object: Box::new(expression),
+                    property,
+                };
+                continue;
+            }
+
+            if self.match_token(&Token::LeftBracket) {
+                let property = self.parse_expression()?;
+                self.expect(&Token::RightBracket)?;
+                expression = Expression::ComputedMember {
+                    object: Box::new(expression),
+                    property: Box::new(property),
+                };
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(expression)
+    }
+
     fn parse_primary(&mut self) -> Result<Expression, String> {
         match self.advance() {
             Token::Identifier(name) => Ok(Expression::Identifier(name)),
@@ -1091,6 +1414,7 @@ impl Parser {
             Token::KeywordNull => Ok(Expression::Null),
             Token::KeywordThis => Ok(Expression::This),
             Token::Regex { source, flags } => Ok(Expression::Regex { source, flags }),
+            Token::TemplateLiteral(template) => self.parse_template_literal(template),
             Token::LeftParen => {
                 let expression = self.parse_expression()?;
                 self.expect(&Token::RightParen)?;
@@ -1100,7 +1424,11 @@ impl Parser {
                 let mut items = Vec::new();
                 if !self.check(&Token::RightBracket) {
                     loop {
-                        items.push(self.parse_expression()?);
+                        if self.match_token(&Token::Ellipsis) {
+                            items.push(ArrayElement::Spread(self.parse_expression()?));
+                        } else {
+                            items.push(ArrayElement::Expression(self.parse_expression()?));
+                        }
                         if !self.match_token(&Token::Comma) {
                             break;
                         }
@@ -1116,8 +1444,37 @@ impl Parser {
                 let mut properties = Vec::new();
                 if !self.check(&Token::RightBrace) {
                     loop {
+                        if self.match_token(&Token::LeftBracket) {
+                            let key = self.parse_expression()?;
+                            self.expect(&Token::RightBracket)?;
+                            self.expect(&Token::Colon)?;
+                            let value = self.parse_expression()?;
+                            properties.push(ObjectProperty::Computed(key, value));
+                            if !self.match_token(&Token::Comma) {
+                                break;
+                            }
+                            if self.check(&Token::RightBrace) {
+                                break;
+                            }
+                            continue;
+                        }
                         let key = match self.advance() {
-                            Token::Identifier(name) => ObjectKey::Identifier(name),
+                            Token::Identifier(name) => {
+                                if self.match_token(&Token::Colon) {
+                                    let key = ObjectKey::Identifier(name);
+                                    let value = self.parse_expression()?;
+                                    properties.push(ObjectProperty::KeyValue(key, value));
+                                } else {
+                                    properties.push(ObjectProperty::Shorthand(name));
+                                }
+                                if !self.match_token(&Token::Comma) {
+                                    break;
+                                }
+                                if self.check(&Token::RightBrace) {
+                                    break;
+                                }
+                                continue;
+                            }
                             Token::String(value) => ObjectKey::String(value),
                             Token::Number(value) => ObjectKey::Number(value),
                             other => {
@@ -1128,7 +1485,7 @@ impl Parser {
                         };
                         self.expect(&Token::Colon)?;
                         let value = self.parse_expression()?;
-                        properties.push((key, value));
+                        properties.push(ObjectProperty::KeyValue(key, value));
                         if !self.match_token(&Token::Comma) {
                             break;
                         }
@@ -1147,10 +1504,163 @@ impl Parser {
                     None
                 };
                 let (params, body) = self.parse_function_signature_and_body()?;
-                Ok(Expression::Function { params, body })
+                Ok(Expression::Function {
+                    params,
+                    body,
+                    lexical_this: false,
+                    constructible: true,
+                })
             }
             other => Err(format!("Unexpected token in JS expression: {other:?}")),
         }
+    }
+
+    fn parse_variable_declarator(
+        &mut self,
+        allow_initializer: bool,
+    ) -> Result<VariableDeclarator, String> {
+        let pattern = self.parse_binding_pattern()?;
+        let init = if self.match_token(&Token::Equal) {
+            if !allow_initializer {
+                return Err("Unexpected initializer in JS for-in/of binding".to_owned());
+            }
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        Ok(VariableDeclarator { pattern, init })
+    }
+
+    fn parse_binding_pattern(&mut self) -> Result<BindingPattern, String> {
+        if self.match_token(&Token::LeftBrace) {
+            let mut properties = Vec::new();
+            if !self.check(&Token::RightBrace) {
+                loop {
+                    let key = self.expect_property_identifier()?;
+                    let binding = if self.match_token(&Token::Colon) {
+                        self.expect_identifier()?
+                    } else {
+                        key.clone()
+                    };
+                    properties.push(ObjectBindingProperty { key, binding });
+                    if !self.match_token(&Token::Comma) {
+                        break;
+                    }
+                    if self.check(&Token::RightBrace) {
+                        break;
+                    }
+                }
+            }
+            self.expect(&Token::RightBrace)?;
+            return Ok(BindingPattern::Object(properties));
+        }
+
+        Ok(BindingPattern::Identifier(self.expect_identifier()?))
+    }
+
+    fn parse_parameter_list_contents(&mut self) -> Result<Vec<Parameter>, String> {
+        let mut params = Vec::new();
+        if !self.check(&Token::RightParen) {
+            loop {
+                params.push(self.parse_parameter()?);
+                if !self.match_token(&Token::Comma) {
+                    break;
+                }
+                if self.check(&Token::RightParen) {
+                    break;
+                }
+            }
+        }
+        Ok(params)
+    }
+
+    fn parse_parameter(&mut self) -> Result<Parameter, String> {
+        let name = self.expect_identifier()?;
+        let default = if self.match_token(&Token::Equal) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        Ok(Parameter { name, default })
+    }
+
+    fn is_arrow_function_start(&mut self) -> Result<bool, String> {
+        let saved = self.cursor;
+        let result = if matches!(self.peek(), Token::Identifier(_))
+            && matches!(self.peek_next(), Token::Arrow)
+        {
+            true
+        } else if self.match_token(&Token::LeftParen) {
+            let params_ok = if self.check(&Token::RightParen) {
+                true
+            } else {
+                self.parse_parameter_list_contents().is_ok()
+            };
+            params_ok && self.match_token(&Token::RightParen) && self.check(&Token::Arrow)
+        } else {
+            false
+        };
+        self.cursor = saved;
+        Ok(result)
+    }
+
+    fn parse_arrow_function(&mut self) -> Result<Expression, String> {
+        let params = if matches!(self.peek(), Token::Identifier(_))
+            && matches!(self.peek_next(), Token::Arrow)
+        {
+            vec![Parameter {
+                name: self.expect_identifier()?,
+                default: None,
+            }]
+        } else {
+            self.expect(&Token::LeftParen)?;
+            let params = self.parse_parameter_list_contents()?;
+            self.expect(&Token::RightParen)?;
+            params
+        };
+        self.expect(&Token::Arrow)?;
+        let body = if self.check(&Token::LeftBrace) {
+            self.parse_block_statements()?
+        } else {
+            vec![Statement::Return(Some(self.parse_expression()?))]
+        };
+        Ok(Expression::Function {
+            params,
+            body,
+            lexical_this: true,
+            constructible: false,
+        })
+    }
+
+    fn parse_template_literal(
+        &self,
+        template: TemplateLiteralToken,
+    ) -> Result<Expression, String> {
+        let mut segments = Vec::new();
+        for part in template.parts {
+            match part {
+                TemplateLiteralPartToken::String(value) => {
+                    segments.push(TemplateSegment::String(value));
+                }
+                TemplateLiteralPartToken::Expression(source) => {
+                    let expression = Parser::new(Lexer::new(source.as_str()).tokenize()?)
+                        .parse_expression_only()?;
+                    segments.push(TemplateSegment::Expression(expression));
+                }
+            }
+        }
+        Ok(Expression::TemplateLiteral(segments))
+    }
+
+    fn parse_expression_only(mut self) -> Result<Expression, String> {
+        let expression = self.parse_expression()?;
+        if !self.is_at_end() {
+            return Err(format!(
+                "Unexpected trailing token in JS expression: {:?}",
+                self.peek()
+            ));
+        }
+        Ok(expression)
     }
 
     fn is_at_end(&self) -> bool {
@@ -1159,6 +1669,13 @@ impl Parser {
 
     fn peek(&self) -> Token {
         self.tokens.get(self.cursor).cloned().unwrap_or(Token::Eof)
+    }
+
+    fn peek_next(&self) -> Token {
+        self.tokens
+            .get(self.cursor + 1)
+            .cloned()
+            .unwrap_or(Token::Eof)
     }
 
     fn advance(&mut self) -> Token {
@@ -1211,6 +1728,11 @@ impl Parser {
             Token::KeywordConst => Ok("const".to_owned()),
             Token::KeywordFunction => Ok("function".to_owned()),
             Token::KeywordReturn => Ok("return".to_owned()),
+            Token::KeywordThrow => Ok("throw".to_owned()),
+            Token::KeywordBreak => Ok("break".to_owned()),
+            Token::KeywordSwitch => Ok("switch".to_owned()),
+            Token::KeywordCase => Ok("case".to_owned()),
+            Token::KeywordDefault => Ok("default".to_owned()),
             Token::KeywordIf => Ok("if".to_owned()),
             Token::KeywordElse => Ok("else".to_owned()),
             Token::KeywordTrue => Ok("true".to_owned()),
@@ -1225,6 +1747,8 @@ impl Parser {
             Token::KeywordWhile => Ok("while".to_owned()),
             Token::KeywordFor => Ok("for".to_owned()),
             Token::KeywordIn => Ok("in".to_owned()),
+            Token::KeywordOf => Ok("of".to_owned()),
+            Token::KeywordInstanceof => Ok("instanceof".to_owned()),
             other => Err(format!("Expected property identifier, found {other:?}")),
         }
     }
@@ -1281,9 +1805,11 @@ struct BoundFunctionValue {
 
 #[derive(Clone)]
 struct UserFunction {
-    params: Vec<String>,
+    params: Vec<Parameter>,
     body: Vec<Statement>,
     env: ScopeRef,
+    lexical_this: bool,
+    constructible: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1294,6 +1820,7 @@ enum NativeFunction {
     ObjectCreate,
     ObjectKeys,
     ObjectHasOwnProperty,
+    ErrorConstructor,
     SetConstructor,
     RegExpConstructor,
     FunctionConstructor,
@@ -1336,6 +1863,7 @@ struct Executor<'a> {
 enum ControlFlow {
     Continue(Value),
     Return(Value),
+    Break,
 }
 
 impl<'a> Executor<'a> {
@@ -1436,6 +1964,9 @@ impl<'a> Executor<'a> {
         );
         executor.declare_global("Object", object_ctor);
 
+        let error_ctor = executor.create_native_function(NativeFunction::ErrorConstructor);
+        executor.declare_global("Error", error_ctor);
+
         executor.declare_global(
             "RegExp",
             executor.create_native_function(NativeFunction::RegExpConstructor),
@@ -1500,6 +2031,10 @@ impl<'a> Executor<'a> {
             executor.create_native_function(NativeFunction::SetConstructor),
         );
 
+        let element_ctor = executor.create_native_function(NativeFunction::Noop);
+        executor.declare_global("Element", element_ctor.clone());
+        executor.declare_global("HTMLElement", element_ctor);
+
         let promise_ctor = executor.create_native_function(NativeFunction::Noop);
         let promise_proto = executor.create_plain_object();
         let _ = executor.set_property_value(
@@ -1515,7 +2050,7 @@ impl<'a> Executor<'a> {
 
     fn execute_program(&mut self, statements: &[Statement]) -> Result<(), String> {
         match self.execute_statements(statements)? {
-            ControlFlow::Continue(_) | ControlFlow::Return(_) => Ok(()),
+            ControlFlow::Continue(_) | ControlFlow::Return(_) | ControlFlow::Break => Ok(()),
         }
     }
 
@@ -1525,6 +2060,7 @@ impl<'a> Executor<'a> {
             match self.execute_statement(statement)? {
                 ControlFlow::Continue(value) => last = value,
                 ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                ControlFlow::Break => return Ok(ControlFlow::Break),
             }
         }
         Ok(ControlFlow::Continue(last))
@@ -1540,13 +2076,14 @@ impl<'a> Executor<'a> {
                     } else {
                         Value::Undefined
                     };
-                    self.declare_binding(&declaration.name, value.clone());
+                    self.declare_pattern(&declaration.pattern, value.clone())?;
                     last = value;
                 }
                 Ok(ControlFlow::Continue(last))
             }
             Statement::FunctionDeclaration { name, params, body } => {
-                let function = self.create_user_function(params.clone(), body.clone());
+                let function =
+                    self.create_user_function(params.clone(), body.clone(), false, true);
                 self.declare_binding(name, function.clone());
                 Ok(ControlFlow::Continue(function))
             }
@@ -1558,6 +2095,11 @@ impl<'a> Executor<'a> {
                 };
                 Ok(ControlFlow::Return(value))
             }
+            Statement::Throw(expression) => {
+                let value = self.evaluate_expression(expression)?;
+                Err(self.error_to_string(&value))
+            }
+            Statement::Break => Ok(ControlFlow::Break),
             Statement::If {
                 test,
                 consequent,
@@ -1597,7 +2139,33 @@ impl<'a> Executor<'a> {
                     match self.execute_statement(body)? {
                         ControlFlow::Continue(value) => last = value,
                         ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                        ControlFlow::Break => break,
                     }
+                }
+                Ok(ControlFlow::Continue(last))
+            }
+            Statement::Switch { discriminant, cases } => {
+                let value = self.evaluate_expression(discriminant)?;
+                let default_index = cases.iter().position(|case| case.test.is_none());
+                let mut index = cases
+                    .iter()
+                    .position(|case| {
+                        case.test.as_ref().is_some_and(|test| {
+                            self.evaluate_expression(test)
+                                .is_ok_and(|candidate| strict_equals(&value, &candidate))
+                        })
+                    })
+                    .or(default_index);
+                let mut last = Value::Undefined;
+                while let Some(current) = index {
+                    match self.execute_statements(&cases[current].consequent)? {
+                        ControlFlow::Continue(value) => last = value,
+                        ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                        ControlFlow::Break => return Ok(ControlFlow::Continue(last)),
+                    }
+                    index = current
+                        .checked_add(1)
+                        .filter(|next| *next < cases.len());
                 }
                 Ok(ControlFlow::Continue(last))
             }
@@ -1617,7 +2185,7 @@ impl<'a> Executor<'a> {
                                 } else {
                                     Value::Undefined
                                 };
-                                self.declare_binding(&declaration.name, value);
+                                self.declare_pattern(&declaration.pattern, value)?;
                             }
                         }
                         ForInit::Expression(expression) => {
@@ -1634,9 +2202,34 @@ impl<'a> Executor<'a> {
                     match self.execute_statement(body)? {
                         ControlFlow::Continue(value) => last = value,
                         ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                        ControlFlow::Break => break,
                     }
                     if let Some(update) = update {
                         last = self.evaluate_expression(update)?;
+                    }
+                }
+                Ok(ControlFlow::Continue(last))
+            }
+            Statement::ForEach {
+                binding,
+                operator,
+                iterable,
+                body,
+            } => {
+                let values = match operator {
+                    ForEachOperator::In => own_property_names(&self.evaluate_expression(iterable)?)?
+                        .into_iter()
+                        .map(Value::String)
+                        .collect::<Vec<_>>(),
+                    ForEachOperator::Of => array_like_values(&self.evaluate_expression(iterable)?),
+                };
+                let mut last = Value::Undefined;
+                for value in values {
+                    self.declare_pattern(&binding.pattern, value)?;
+                    match self.execute_statement(body)? {
+                        ControlFlow::Continue(next) => last = next,
+                        ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
+                        ControlFlow::Break => break,
                     }
                 }
                 Ok(ControlFlow::Continue(last))
@@ -1661,25 +2254,64 @@ impl<'a> Executor<'a> {
                 source: source.clone(),
                 flags: flags.clone(),
             })),
+            Expression::TemplateLiteral(segments) => {
+                let mut out = String::new();
+                for segment in segments {
+                    match segment {
+                        TemplateSegment::String(value) => out.push_str(value.as_str()),
+                        TemplateSegment::Expression(expression) => out.push_str(
+                            self.evaluate_expression(expression)?.to_string_value().as_str(),
+                        ),
+                    }
+                }
+                Ok(Value::String(out))
+            }
             Expression::Array(items) => {
                 let mut values = Vec::with_capacity(items.len());
                 for item in items {
-                    values.push(self.evaluate_expression(item)?);
+                    match item {
+                        ArrayElement::Expression(expression) => {
+                            values.push(self.evaluate_expression(expression)?);
+                        }
+                        ArrayElement::Spread(expression) => values
+                            .extend(array_like_values(&self.evaluate_expression(expression)?)),
+                    }
                 }
                 Ok(Value::Array(Rc::new(RefCell::new(values))))
             }
             Expression::Object(properties) => {
                 let object = self.create_plain_object();
-                for (key, value) in properties {
-                    let key = object_key_to_string(key);
-                    let value = self.evaluate_expression(value)?;
-                    self.set_property_value(object.clone(), key.as_str(), value)?;
+                for property in properties {
+                    match property {
+                        ObjectProperty::KeyValue(key, value) => {
+                            let key = object_key_to_string(key);
+                            let value = self.evaluate_expression(value)?;
+                            self.set_property_value(object.clone(), key.as_str(), value)?;
+                        }
+                        ObjectProperty::Computed(key, value) => {
+                            let key = self.evaluate_expression(key)?.to_property_key();
+                            let value = self.evaluate_expression(value)?;
+                            self.set_property_value(object.clone(), key.as_str(), value)?;
+                        }
+                        ObjectProperty::Shorthand(name) => {
+                            let value = self.lookup_binding(name).unwrap_or(Value::Undefined);
+                            self.set_property_value(object.clone(), name.as_str(), value)?;
+                        }
+                    }
                 }
                 Ok(object)
             }
-            Expression::Function { params, body } => {
-                Ok(self.create_user_function(params.clone(), body.clone()))
-            }
+            Expression::Function {
+                params,
+                body,
+                lexical_this,
+                constructible,
+            } => Ok(self.create_user_function(
+                params.clone(),
+                body.clone(),
+                *lexical_this,
+                *constructible,
+            )),
             Expression::Member { object, property } => {
                 let object = self.evaluate_expression(object)?;
                 self.get_member_value(object, property)
@@ -1701,6 +2333,17 @@ impl<'a> Executor<'a> {
                 prefix,
             } => self.evaluate_update(target, *operator, *prefix),
             Expression::Unary { operator, argument } => self.evaluate_unary(*operator, argument),
+            Expression::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
+                if self.evaluate_expression(test)?.is_truthy() {
+                    self.evaluate_expression(consequent)
+                } else {
+                    self.evaluate_expression(alternate)
+                }
+            }
             Expression::Binary {
                 left,
                 operator,
@@ -1725,6 +2368,12 @@ impl<'a> Executor<'a> {
         match operator {
             UnaryOperator::Not => Ok(Value::Bool(
                 !self.evaluate_expression(argument)?.is_truthy(),
+            )),
+            UnaryOperator::Plus => Ok(Value::Number(
+                self.evaluate_expression(argument)?.to_number_value(),
+            )),
+            UnaryOperator::Minus => Ok(Value::Number(
+                -self.evaluate_expression(argument)?.to_number_value(),
             )),
             UnaryOperator::Typeof => Ok(Value::String(
                 self.evaluate_expression(argument)?.type_name(),
@@ -1836,6 +2485,11 @@ impl<'a> Executor<'a> {
                 let property = self.evaluate_expression(left)?.to_property_key();
                 let object = self.evaluate_expression(right)?;
                 Ok(Value::Bool(self.has_property(object, property.as_str())))
+            }
+            BinaryOperator::Instanceof => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Bool(self.instanceof_value(&left, &right)))
             }
             BinaryOperator::Equal => {
                 let left = self.evaluate_expression(left)?;
@@ -2016,18 +2670,28 @@ impl<'a> Executor<'a> {
                     let next_scope = Scope::new(Some(function.env.clone()));
                     {
                         let mut bindings = next_scope.borrow_mut();
-                        bindings.bindings.insert("this".to_owned(), this_value);
-                        for (index, param) in function.params.iter().enumerate() {
-                            bindings.bindings.insert(
-                                param.clone(),
-                                arguments.get(index).cloned().unwrap_or(Value::Undefined),
-                            );
+                        if !function.lexical_this {
+                            bindings.bindings.insert("this".to_owned(), this_value);
                         }
                     }
                     self.scope = next_scope;
+                    for (index, param) in function.params.iter().enumerate() {
+                        let argument = arguments.get(index).cloned().unwrap_or(Value::Undefined);
+                        let value = if matches!(argument, Value::Undefined) {
+                            if let Some(default) = &param.default {
+                                self.evaluate_expression(default)?
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            argument
+                        };
+                        self.declare_binding(&param.name, value);
+                    }
                     let result = match self.execute_statements(&function.body)? {
                         ControlFlow::Continue(_) => Value::Undefined,
                         ControlFlow::Return(value) => value,
+                        ControlFlow::Break => Value::Undefined,
                     };
                     self.scope = previous_scope;
                     Ok(result)
@@ -2055,7 +2719,10 @@ impl<'a> Executor<'a> {
             FunctionKind::Native(kind) => {
                 self.call_native_function(kind, Value::Undefined, arguments)
             }
-            FunctionKind::User(_) => {
+            FunctionKind::User(function_state) => {
+                if !function_state.constructible {
+                    return Err("Unsupported constructor".to_owned());
+                }
                 let prototype = function.properties.borrow().get("prototype").cloned();
                 let instance = self.create_object_with_prototype(prototype);
                 let value =
@@ -2115,6 +2782,20 @@ impl<'a> Executor<'a> {
                 Ok(Value::Bool(
                     self.has_own_property(this_value, property.as_str()),
                 ))
+            }
+            NativeFunction::ErrorConstructor => {
+                let error = self.create_plain_object();
+                let message = arguments
+                    .first()
+                    .cloned()
+                    .unwrap_or(Value::String(String::new()));
+                let _ = self.set_property_value(error.clone(), "message", message);
+                let _ = self.set_property_value(
+                    error.clone(),
+                    "name",
+                    Value::String("Error".to_owned()),
+                );
+                Ok(error)
             }
             NativeFunction::SetConstructor => {
                 let set = Value::Set(Rc::new(RefCell::new(Vec::new())));
@@ -3000,6 +3681,24 @@ impl<'a> Executor<'a> {
             .insert(name.to_owned(), value);
     }
 
+    fn declare_pattern(&mut self, pattern: &BindingPattern, value: Value) -> Result<(), String> {
+        match pattern {
+            BindingPattern::Identifier(name) => {
+                self.declare_binding(name, value);
+                Ok(())
+            }
+            BindingPattern::Object(properties) => {
+                for property in properties {
+                    let member = self
+                        .get_member_value(value.clone(), property.key.as_str())
+                        .unwrap_or(Value::Undefined);
+                    self.declare_binding(&property.binding, member);
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn lookup_binding(&self, name: &str) -> Option<Value> {
         lookup_scope(&self.scope, name)
     }
@@ -3038,18 +3737,28 @@ impl<'a> Executor<'a> {
         }))
     }
 
-    fn create_user_function(&self, params: Vec<String>, body: Vec<Statement>) -> Value {
+    fn create_user_function(
+        &self,
+        params: Vec<Parameter>,
+        body: Vec<Statement>,
+        lexical_this: bool,
+        constructible: bool,
+    ) -> Value {
         let function = Value::Function(Rc::new(FunctionValue {
             kind: FunctionKind::User(UserFunction {
                 params,
                 body,
                 env: self.scope.clone(),
+                lexical_this,
+                constructible,
             }),
             properties: Rc::new(RefCell::new(HashMap::new())),
         }));
-        let prototype = self.create_plain_object();
-        let _ = self.set_property_value(prototype.clone(), "constructor", function.clone());
-        let _ = self.set_property_value(function.clone(), "prototype", prototype);
+        if constructible {
+            let prototype = self.create_plain_object();
+            let _ = self.set_property_value(prototype.clone(), "constructor", function.clone());
+            let _ = self.set_property_value(function.clone(), "prototype", prototype);
+        }
         function
     }
 
@@ -3144,6 +3853,90 @@ impl<'a> Executor<'a> {
             }
             _ => true,
         }
+    }
+
+    fn error_to_string(&mut self, value: &Value) -> String {
+        if let Value::Object(_) = value {
+            let name = self
+                .get_member_value(value.clone(), "name")
+                .unwrap_or(Value::Undefined)
+                .to_string_value();
+            let message = self
+                .get_member_value(value.clone(), "message")
+                .unwrap_or(Value::Undefined)
+                .to_string_value();
+            if !name.is_empty() && !message.is_empty() {
+                return format!("{name}: {message}");
+            }
+            if !message.is_empty() {
+                return message;
+            }
+        }
+        value.to_string_value()
+    }
+
+    fn instanceof_value(&self, left: &Value, right: &Value) -> bool {
+        if self
+            .lookup_binding("HTMLElement")
+            .is_some_and(|value| strict_equals(&value, right))
+            || self
+                .lookup_binding("Element")
+                .is_some_and(|value| strict_equals(&value, right))
+        {
+            return matches!(left, Value::LiveElement(_) | Value::DetachedElement(_));
+        }
+
+        if self
+            .lookup_binding("Array")
+            .is_some_and(|value| strict_equals(&value, right))
+        {
+            return matches!(left, Value::Array(_));
+        }
+        if self
+            .lookup_binding("Set")
+            .is_some_and(|value| strict_equals(&value, right))
+        {
+            return matches!(left, Value::Set(_));
+        }
+        if self
+            .lookup_binding("RegExp")
+            .is_some_and(|value| strict_equals(&value, right))
+        {
+            return matches!(left, Value::Regex(_));
+        }
+        if self
+            .lookup_binding("Function")
+            .is_some_and(|value| strict_equals(&value, right))
+        {
+            return matches!(left, Value::Function(_) | Value::BoundFunction(_));
+        }
+
+        let prototype = match right {
+            Value::Function(function) => function.properties.borrow().get("prototype").cloned(),
+            Value::BoundFunction(function) => function.properties.borrow().get("prototype").cloned(),
+            _ => None,
+        };
+
+        let Some(prototype) = prototype else {
+            return false;
+        };
+
+        let mut current = match left {
+            Value::Object(properties) => properties.borrow().get("__proto__").cloned(),
+            _ => None,
+        };
+
+        while let Some(value) = current {
+            if strict_equals(&value, &prototype) {
+                return true;
+            }
+            current = match value {
+                Value::Object(properties) => properties.borrow().get("__proto__").cloned(),
+                _ => None,
+            };
+        }
+
+        false
     }
 
     fn set_property_value(
@@ -3353,6 +4146,7 @@ fn object_key_to_string(key: &ObjectKey) -> String {
 fn array_like_values(value: &Value) -> Vec<Value> {
     match value {
         Value::Array(items) => items.borrow().clone(),
+        Value::Set(items) => items.borrow().clone(),
         Value::NodeList(ids) | Value::JQueryCollection(ids) => {
             ids.iter().copied().map(Value::LiveElement).collect()
         }
@@ -3587,6 +4381,7 @@ fn should_parse_regex(previous: Option<&Token>) -> bool {
                 | Token::String(_)
                 | Token::Number(_)
                 | Token::Regex { .. }
+                | Token::TemplateLiteral(_)
                 | Token::KeywordTrue
                 | Token::KeywordFalse
                 | Token::KeywordNull
@@ -3932,5 +4727,69 @@ mod tests {
             .find_first_element_by_name("body")
             .expect("missing body element");
         assert_eq!(collect_text_content(body), "aa:123:true:1:2");
+    }
+
+    #[test]
+    fn supports_bundle_style_syntax_features() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            const suffixes = ["b", "c"];
+            const labelFor = (prefix = "a") => `${prefix}${suffixes[0]}`;
+            const labels = ["a", ...suffixes];
+            const payload = { label: labelFor(), labels };
+            const { label, labels: copiedLabels } = payload;
+            let joined = "";
+            for (const part of copiedLabels) {
+                joined += part;
+            }
+            let keySummary = "";
+            for (const key in { first: 1, second: 2 }) {
+                keySummary += key[0];
+            }
+            let thrown = "";
+            try {
+                throw new Error("boom");
+            } catch (error) {
+                thrown = error;
+            }
+            document.body.textContent =
+                (document.body instanceof HTMLElement)
+                    ? `${label}:${joined}:${keySummary}:${+true}:${thrown}`
+                    : "bad";
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "ab:abc:fs:1:Error: boom");
+    }
+
+    #[test]
+    fn parses_captured_riki_bundle_syntax() {
+        let source =
+            std::fs::read_to_string("tmp/riki-load.php.js").expect("missing captured bundle");
+        let tokens = Lexer::new(source.as_str())
+            .tokenize()
+            .expect("bundle should tokenize");
+        let mut parser = Parser::new(tokens);
+        while !parser.is_at_end() {
+            while parser.match_token(&Token::Semicolon) {}
+            if parser.is_at_end() {
+                break;
+            }
+            if let Err(err) = parser.parse_statement() {
+                let start = parser.cursor.saturating_sub(5);
+                let end = (parser.cursor + 5).min(parser.tokens.len());
+                panic!(
+                    "bundle should parse: {err}; around tokens {:?}",
+                    &parser.tokens[start..end]
+                );
+            }
+        }
     }
 }
