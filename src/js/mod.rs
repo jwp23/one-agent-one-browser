@@ -11,9 +11,10 @@ pub fn execute_inline_scripts(document: &mut Document) {
 
 pub fn execute_script_sources(document: &mut Document, sources: &[String]) {
     let trace_errors = trace_js_errors_enabled();
+    let mut runtime = engine::Runtime::new(document);
 
     for (index, source) in sources.iter().enumerate() {
-        if let Err(err) = engine::execute(document, source)
+        if let Err(err) = runtime.execute(document, source)
             && trace_errors
         {
             eprintln!(
@@ -680,6 +681,24 @@ mod tests {
         assert!(html.attributes.has_class("client-js"));
         assert!(html.attributes.has_class("skin-vector"));
         assert!(!html.attributes.has_class("client-nojs"));
+    }
+
+    #[test]
+    fn shares_globals_across_script_sources() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute_script_sources(
+            &mut document,
+            &[
+                "window.sharedState = { ready: true };".to_owned(),
+                "document.body.textContent = sharedState.ready;".to_owned(),
+            ],
+        );
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(contains_descendant_text(body, "true"), true);
     }
 
     #[test]

@@ -5,13 +5,38 @@ use std::rc::Rc;
 
 type ScopeRef = Rc<RefCell<Scope>>;
 type ObjectRef = Rc<RefCell<HashMap<String, Value>>>;
-type ArrayRef = Rc<RefCell<Vec<Value>>>;
+type ArrayRef = Rc<RefCell<ArrayValue>>;
 type SetRef = Rc<RefCell<Vec<Value>>>;
 
+#[derive(Clone, Default)]
+struct ArrayValue {
+    items: Vec<Value>,
+    properties: HashMap<String, Value>,
+}
+
+pub(crate) struct Runtime {
+    global: ScopeRef,
+}
+
+#[cfg(test)]
 pub fn execute(document: &mut Document, source: &str) -> Result<(), String> {
-    let tokens = Lexer::new(source).tokenize()?;
-    let program = Parser::new(tokens).parse_program()?;
-    Executor::new(document).execute_program(&program)
+    let mut runtime = Runtime::new(document);
+    runtime.execute(document, source)
+}
+
+impl Runtime {
+    pub(crate) fn new(document: &mut Document) -> Self {
+        let executor = Executor::new(document);
+        Self {
+            global: executor.global.clone(),
+        }
+    }
+
+    pub(crate) fn execute(&mut self, document: &mut Document, source: &str) -> Result<(), String> {
+        let tokens = Lexer::new(source).tokenize()?;
+        let program = Parser::new(tokens).parse_program()?;
+        Executor::with_global(document, self.global.clone()).execute_program(&program)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1908,6 +1933,8 @@ enum NativeFunction {
     FunctionApply,
     FunctionBind,
     ArrayForEach,
+    ArrayJoin,
+    ArrayPush,
     ArrayMap,
     ArrayFilter,
     ArraySlice,
@@ -1923,6 +1950,7 @@ enum NativeFunction {
     MathMin,
     MathRound,
     MathCeil,
+    EncodeURIComponent,
     Noop,
 }
 
@@ -1979,6 +2007,10 @@ impl<'a> Executor<'a> {
         executor.declare_global(
             "cancelIdleCallback",
             executor.create_native_function(NativeFunction::CancelIdleCallback),
+        );
+        executor.declare_global(
+            "encodeURIComponent",
+            executor.create_native_function(NativeFunction::EncodeURIComponent),
         );
         let console = executor.create_plain_object();
         let _ = executor.set_property_value(
@@ -2117,6 +2149,16 @@ impl<'a> Executor<'a> {
         );
         let _ = executor.set_property_value(
             array_proto.clone(),
+            "join",
+            executor.create_native_function(NativeFunction::ArrayJoin),
+        );
+        let _ = executor.set_property_value(
+            array_proto.clone(),
+            "push",
+            executor.create_native_function(NativeFunction::ArrayPush),
+        );
+        let _ = executor.set_property_value(
+            array_proto.clone(),
             "map",
             executor.create_native_function(NativeFunction::ArrayMap),
         );
@@ -2168,6 +2210,14 @@ impl<'a> Executor<'a> {
         executor.declare_global("Promise", promise_ctor);
 
         executor
+    }
+
+    fn with_global(document: &'a mut Document, global: ScopeRef) -> Self {
+        Self {
+            document,
+            global: global.clone(),
+            scope: global,
+        }
     }
 
     fn execute_program(&mut self, statements: &[Statement]) -> Result<(), String> {
@@ -2406,7 +2456,7 @@ impl<'a> Executor<'a> {
                             .extend(array_like_values(&self.evaluate_expression(expression)?)),
                     }
                 }
-                Ok(Value::Array(Rc::new(RefCell::new(values))))
+                Ok(new_array_value(values))
             }
             Expression::Object(properties) => {
                 let object = self.create_plain_object();
@@ -2677,12 +2727,13 @@ impl<'a> Executor<'a> {
         callee: &Expression,
         arguments: &[Expression],
     ) -> Result<Value, String> {
+        let context = format!("call {}", expression_debug_label(callee));
         let evaluated_arguments = arguments
             .iter()
             .map(|argument| self.evaluate_expression(argument))
             .collect::<Result<Vec<_>, _>>()?;
 
-        match callee {
+        let result = match callee {
             Expression::Member { object, property } => {
                 let receiver = self.evaluate_expression(object)?;
                 self.call_member(receiver, property, &evaluated_arguments)
@@ -2702,7 +2753,9 @@ impl<'a> Executor<'a> {
                 }
                 self.call_value(callee_value, Value::Window, &evaluated_arguments)
             }
-        }
+        };
+
+        self.annotate_trace_error(result, context.as_str())
     }
 
     fn assign_target(&mut self, target: &Expression, value: Value) -> Result<(), String> {
@@ -2796,7 +2849,8 @@ impl<'a> Executor<'a> {
         property: &str,
         arguments: &[Value],
     ) -> Result<Value, String> {
-        match receiver.clone() {
+        let context = format!("member {}.{}", receiver.trace_label(), property);
+        let result = match receiver.clone() {
             Value::Document => self.call_document_method(property, arguments),
             Value::LiveElement(node_id) => self.call_element_method(node_id, property, arguments),
             Value::ClassList(node_id) => self.call_class_list_method(node_id, property, arguments),
@@ -2816,7 +2870,9 @@ impl<'a> Executor<'a> {
                 }
                 self.call_value(callee, receiver, arguments)
             }
-        }
+        };
+
+        self.annotate_trace_error(result, context.as_str())
     }
 
     fn call_value(
@@ -2825,7 +2881,8 @@ impl<'a> Executor<'a> {
         this_value: Value,
         arguments: &[Value],
     ) -> Result<Value, String> {
-        match callee {
+        let context = format!("invoke {}", callee.trace_label());
+        let result = match callee {
             Value::Function(function) => match function.kind.clone() {
                 FunctionKind::Native(kind) => {
                     self.call_native_function(kind, this_value, arguments)
@@ -2875,7 +2932,9 @@ impl<'a> Executor<'a> {
                 "Unsupported JS call target: {}",
                 callee.debug_label()
             )),
-        }
+        };
+
+        self.annotate_trace_error(result, context.as_str())
     }
 
     fn construct_value(&mut self, callee: Value, arguments: &[Value]) -> Result<Value, String> {
@@ -2940,13 +2999,13 @@ impl<'a> Executor<'a> {
             }
             NativeFunction::ObjectKeys => {
                 let Some(value) = arguments.first() else {
-                    return Ok(Value::Array(Rc::new(RefCell::new(Vec::new()))));
+                    return Ok(new_array_value(Vec::new()));
                 };
                 let keys = own_property_names(value)?
                     .into_iter()
                     .map(Value::String)
                     .collect();
-                Ok(Value::Array(Rc::new(RefCell::new(keys))))
+                Ok(new_array_value(keys))
             }
             NativeFunction::ObjectHasOwnProperty => {
                 let property = first_string_argument(arguments)?;
@@ -3011,6 +3070,12 @@ impl<'a> Executor<'a> {
             NativeFunction::ArrayForEach => {
                 self.call_array_prototype_method(this_value, "forEach", arguments)
             }
+            NativeFunction::ArrayJoin => {
+                self.call_array_prototype_method(this_value, "join", arguments)
+            }
+            NativeFunction::ArrayPush => {
+                self.call_array_prototype_method(this_value, "push", arguments)
+            }
             NativeFunction::ArrayMap => {
                 self.call_array_prototype_method(this_value, "map", arguments)
             }
@@ -3060,6 +3125,9 @@ impl<'a> Executor<'a> {
                     .unwrap_or(0.0)
                     .ceil(),
             )),
+            NativeFunction::EncodeURIComponent => Ok(Value::String(encode_uri_component(
+                js_string_argument(arguments.first()).as_str(),
+            ))),
             NativeFunction::Noop => Ok(Value::Undefined),
         }
     }
@@ -3202,7 +3270,7 @@ impl<'a> Executor<'a> {
                         .map(|part| Value::String(part.to_owned()))
                         .collect()
                 };
-                Ok(Value::Array(Rc::new(RefCell::new(parts))))
+                Ok(new_array_value(parts))
             }
             "match" => {
                 let pattern = arguments.first().cloned().unwrap_or(Value::Undefined);
@@ -3287,28 +3355,39 @@ impl<'a> Executor<'a> {
         property: &str,
         arguments: &[Value],
     ) -> Result<Value, String> {
+        if property == "length"
+            || parse_array_index(property).is_some()
+            || array_has_custom_property(&items, property)
+        {
+            let callee = lookup_array_member(&items, property)
+                .unwrap_or_else(|| self.array_prototype_property(property));
+            return self.call_value(callee, Value::Array(items), arguments);
+        }
+
         match property {
             "shift" => Ok(items
                 .borrow_mut()
+                .items
                 .drain(..1)
                 .next()
                 .unwrap_or(Value::Undefined)),
             "push" => {
                 let mut items = items.borrow_mut();
-                items.extend_from_slice(arguments);
-                Ok(Value::Number(items.len() as f64))
+                items.items.extend_from_slice(arguments);
+                Ok(Value::Number(items.items.len() as f64))
             }
-            "pop" => Ok(items.borrow_mut().pop().unwrap_or(Value::Undefined)),
+            "pop" => Ok(items.borrow_mut().items.pop().unwrap_or(Value::Undefined)),
             "includes" => {
                 let needle = arguments.first().cloned().unwrap_or(Value::Undefined);
                 Ok(Value::Bool(
                     items
                         .borrow()
+                        .items
                         .iter()
                         .any(|value| strict_equals(value, &needle)),
                 ))
             }
-            "forEach" | "map" | "filter" | "slice" | "sort" | "reduce" => {
+            "forEach" | "join" | "map" | "filter" | "slice" | "sort" | "reduce" => {
                 self.call_array_prototype_method(Value::Array(items), property, arguments)
             }
             _ => {
@@ -3356,7 +3435,10 @@ impl<'a> Executor<'a> {
                 let set_value = Value::Set(items);
                 for value in snapshot {
                     let args = [value.clone(), value, set_value.clone()];
-                    let _ = self.call_value(callback.clone(), this_arg.clone(), &args)?;
+                    let callback_result =
+                        self.call_value(callback.clone(), this_arg.clone(), &args);
+                    let _ =
+                        self.annotate_trace_error(callback_result, "Set.forEach callback")?;
                 }
                 Ok(Value::Undefined)
             }
@@ -3377,9 +3459,33 @@ impl<'a> Executor<'a> {
                 let values = array_like_values(&this_value);
                 for (index, item) in values.into_iter().enumerate() {
                     let args = [item, Value::Number(index as f64), this_value.clone()];
-                    let _ = self.call_value(callback.clone(), this_arg.clone(), &args)?;
+                    let callback_result =
+                        self.call_value(callback.clone(), this_arg.clone(), &args);
+                    let _ = self
+                        .annotate_trace_error(callback_result, "Array.forEach callback")?;
                 }
                 Ok(Value::Undefined)
+            }
+            "join" => {
+                let separator = arguments
+                    .first()
+                    .map(Value::to_string_value)
+                    .unwrap_or_else(|| ",".to_owned());
+                let joined = array_like_values(&this_value)
+                    .into_iter()
+                    .map(array_join_fragment)
+                    .collect::<Vec<_>>()
+                    .join(separator.as_str());
+                Ok(Value::String(joined))
+            }
+            "push" => {
+                if let Value::Array(items) = &this_value {
+                    let mut items = items.borrow_mut();
+                    items.items.extend_from_slice(arguments);
+                    return Ok(Value::Number(items.items.len() as f64));
+                }
+                let length = array_like_values(&this_value).len() + arguments.len();
+                Ok(Value::Number(length as f64))
             }
             "map" => {
                 let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
@@ -3388,9 +3494,11 @@ impl<'a> Executor<'a> {
                 let mut mapped = Vec::with_capacity(values.len());
                 for (index, item) in values.into_iter().enumerate() {
                     let args = [item, Value::Number(index as f64), this_value.clone()];
-                    mapped.push(self.call_value(callback.clone(), this_arg.clone(), &args)?);
+                    let callback_result =
+                        self.call_value(callback.clone(), this_arg.clone(), &args);
+                    mapped.push(self.annotate_trace_error(callback_result, "Array.map callback")?);
                 }
-                Ok(Value::Array(Rc::new(RefCell::new(mapped))))
+                Ok(new_array_value(mapped))
             }
             "filter" => {
                 let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
@@ -3403,14 +3511,16 @@ impl<'a> Executor<'a> {
                         Value::Number(index as f64),
                         this_value.clone(),
                     ];
+                    let callback_result =
+                        self.call_value(callback.clone(), this_arg.clone(), &args);
                     if self
-                        .call_value(callback.clone(), this_arg.clone(), &args)?
+                        .annotate_trace_error(callback_result, "Array.filter callback")?
                         .is_truthy()
                     {
                         filtered.push(item);
                     }
                 }
-                Ok(Value::Array(Rc::new(RefCell::new(filtered))))
+                Ok(new_array_value(filtered))
             }
             "slice" => {
                 let values = array_like_values(&this_value);
@@ -3422,7 +3532,7 @@ impl<'a> Executor<'a> {
                 } else {
                     values[start as usize..end as usize].to_vec()
                 };
-                Ok(Value::Array(Rc::new(RefCell::new(slice))))
+                Ok(new_array_value(slice))
             }
             "sort" => {
                 let comparator = arguments
@@ -3432,10 +3542,10 @@ impl<'a> Executor<'a> {
                 let mut values = array_like_values(&this_value);
                 sort_values(self, &mut values, comparator)?;
                 if let Value::Array(items) = &this_value {
-                    *items.borrow_mut() = values.clone();
+                    items.borrow_mut().items = values.clone();
                     return Ok(this_value);
                 }
-                Ok(Value::Array(Rc::new(RefCell::new(values))))
+                Ok(new_array_value(values))
             }
             "reduce" => {
                 let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
@@ -3455,7 +3565,10 @@ impl<'a> Executor<'a> {
                         Value::Number(index as f64),
                         this_value.clone(),
                     ];
-                    accumulator = self.call_value(callback.clone(), Value::Undefined, &args)?;
+                    let callback_result =
+                        self.call_value(callback.clone(), Value::Undefined, &args);
+                    accumulator =
+                        self.annotate_trace_error(callback_result, "Array.reduce callback")?;
                 }
                 Ok(accumulator)
             }
@@ -3474,7 +3587,8 @@ impl<'a> Executor<'a> {
         let Some(callback) = arguments.first().cloned() else {
             return Ok(Value::Number(0.0));
         };
-        let _ = self.call_value(callback, Value::Window, &arguments[2..])?;
+        let callback_result = self.call_value(callback, Value::Window, &arguments[2..]);
+        let _ = self.annotate_trace_error(callback_result, "setTimeout callback")?;
         Ok(Value::Number(0.0))
     }
 
@@ -3489,7 +3603,8 @@ impl<'a> Executor<'a> {
             "timeRemaining",
             self.create_native_function(NativeFunction::ReturnZero),
         );
-        let _ = self.call_value(callback, Value::Window, &[deadline])?;
+        let callback_result = self.call_value(callback, Value::Window, &[deadline]);
+        let _ = self.annotate_trace_error(callback_result, "requestIdleCallback callback")?;
         Ok(Value::Number(0.0))
     }
 
@@ -3621,14 +3736,18 @@ impl<'a> Executor<'a> {
             }
             Value::Array(items) => {
                 if property == "length" {
-                    return Ok(Value::Number(items.borrow().len() as f64));
+                    return Ok(Value::Number(items.borrow().items.len() as f64));
                 }
                 if let Some(index) = parse_array_index(property) {
                     return Ok(items
                         .borrow()
+                        .items
                         .get(index)
                         .cloned()
                         .unwrap_or(Value::Undefined));
+                }
+                if let Some(value) = lookup_array_custom_property(&items, property) {
+                    return Ok(value);
                 }
                 Ok(self.array_prototype_property(property))
             }
@@ -3697,6 +3816,7 @@ impl<'a> Executor<'a> {
                         | "clearTimeout"
                         | "requestIdleCallback"
                         | "cancelIdleCallback"
+                        | "encodeURIComponent"
                 ) || self.lookup_binding(property).is_some()
             }
             Value::Document => matches!(
@@ -3713,7 +3833,9 @@ impl<'a> Executor<'a> {
             ),
             Value::Array(items) => {
                 property == "length"
-                    || parse_array_index(property).is_some_and(|index| index < items.borrow().len())
+                    || parse_array_index(property)
+                        .is_some_and(|index| index < items.borrow().items.len())
+                    || array_has_custom_property(&items, property)
                     || !matches!(self.array_prototype_property(property), Value::Undefined)
             }
             Value::Set(_) => matches!(property, "size" | "add" | "has" | "delete" | "forEach"),
@@ -3828,13 +3950,17 @@ impl<'a> Executor<'a> {
             Value::Array(items) => {
                 if let Some(index) = parse_array_index(property) {
                     let mut items = items.borrow_mut();
-                    if index >= items.len() {
-                        items.resize(index + 1, Value::Undefined);
+                    if index >= items.items.len() {
+                        items.items.resize(index + 1, Value::Undefined);
                     }
-                    items[index] = value;
+                    items.items[index] = value;
                     return Ok(());
                 }
-                Err(format!("Unsupported array property assignment: {property}"))
+                items
+                    .borrow_mut()
+                    .properties
+                    .insert(property.to_owned(), value);
+                Ok(())
             }
             Value::Set(_) => Err(format!("Unsupported set property assignment: {property}")),
             _ => Err(format!(
@@ -4054,7 +4180,9 @@ impl<'a> Executor<'a> {
             Value::BoundFunction(function) => function.properties.borrow().contains_key(property),
             Value::Array(items) => {
                 property == "length"
-                    || parse_array_index(property).is_some_and(|index| index < items.borrow().len())
+                    || parse_array_index(property)
+                        .is_some_and(|index| index < items.borrow().items.len())
+                    || array_has_custom_property(&items, property)
             }
             Value::Set(_) => property == "size",
             Value::NodeList(ids) | Value::JQueryCollection(ids) => {
@@ -4082,6 +4210,7 @@ impl<'a> Executor<'a> {
                         | "clearTimeout"
                         | "requestIdleCallback"
                         | "cancelIdleCallback"
+                        | "encodeURIComponent"
                 ) || self.lookup_binding(property).is_some()
             }
             Value::Document => matches!(
@@ -4116,10 +4245,11 @@ impl<'a> Executor<'a> {
             }
             Value::Array(items) => {
                 if let Some(index) = parse_array_index(property)
-                    && let Some(slot) = items.borrow_mut().get_mut(index)
+                    && let Some(slot) = items.borrow_mut().items.get_mut(index)
                 {
                     *slot = Value::Undefined;
                 }
+                items.borrow_mut().properties.remove(property);
                 true
             }
             _ => true,
@@ -4144,6 +4274,10 @@ impl<'a> Executor<'a> {
             }
         }
         value.to_string_value()
+    }
+
+    fn annotate_trace_error<T>(&self, result: Result<T, String>, context: &str) -> Result<T, String> {
+        result.map_err(|err| trace_annotate_error(err, context))
     }
 
     fn instanceof_value(&self, left: &Value, right: &Value) -> bool {
@@ -4271,6 +4405,19 @@ impl Value {
         }
     }
 
+    fn trace_label(&self) -> String {
+        match self {
+            Value::Function(function) => match &function.kind {
+                FunctionKind::Native(kind) => format!("native {}", kind.debug_name()),
+                FunctionKind::User(_) => "function".to_owned(),
+            },
+            Value::BoundFunction(function) => {
+                format!("bound {}", function.target.trace_label())
+            }
+            _ => self.debug_label().to_owned(),
+        }
+    }
+
     fn to_string_value(&self) -> String {
         match self {
             Value::Undefined => String::new(),
@@ -4343,6 +4490,46 @@ impl Value {
     }
 }
 
+impl NativeFunction {
+    fn debug_name(&self) -> &'static str {
+        match self {
+            NativeFunction::Dollar => "$",
+            NativeFunction::ArrayIsArray => "Array.isArray",
+            NativeFunction::ObjectAssign => "Object.assign",
+            NativeFunction::ObjectCreate => "Object.create",
+            NativeFunction::ObjectKeys => "Object.keys",
+            NativeFunction::ObjectHasOwnProperty => "Object.hasOwnProperty",
+            NativeFunction::ErrorConstructor => "Error",
+            NativeFunction::SetConstructor => "Set",
+            NativeFunction::RegExpConstructor => "RegExp",
+            NativeFunction::FunctionConstructor => "Function",
+            NativeFunction::FunctionCall => "Function.call",
+            NativeFunction::FunctionApply => "Function.apply",
+            NativeFunction::FunctionBind => "Function.bind",
+            NativeFunction::ArrayForEach => "Array.forEach",
+            NativeFunction::ArrayJoin => "Array.join",
+            NativeFunction::ArrayPush => "Array.push",
+            NativeFunction::ArrayMap => "Array.map",
+            NativeFunction::ArrayFilter => "Array.filter",
+            NativeFunction::ArraySlice => "Array.slice",
+            NativeFunction::ArraySort => "Array.sort",
+            NativeFunction::ArrayReduce => "Array.reduce",
+            NativeFunction::SetTimeout => "setTimeout",
+            NativeFunction::ClearTimeout => "clearTimeout",
+            NativeFunction::RequestIdleCallback => "requestIdleCallback",
+            NativeFunction::CancelIdleCallback => "cancelIdleCallback",
+            NativeFunction::ReturnZero => "returnZero",
+            NativeFunction::DateNow => "Date.now",
+            NativeFunction::MathMax => "Math.max",
+            NativeFunction::MathMin => "Math.min",
+            NativeFunction::MathRound => "Math.round",
+            NativeFunction::MathCeil => "Math.ceil",
+            NativeFunction::EncodeURIComponent => "encodeURIComponent",
+            NativeFunction::Noop => "noop",
+        }
+    }
+}
+
 fn lookup_scope(scope: &ScopeRef, name: &str) -> Option<Value> {
     if let Some(value) = scope.borrow().bindings.get(name) {
         return Some(value.clone());
@@ -4405,9 +4592,15 @@ fn own_property_names(value: &Value) -> Result<Vec<String>, String> {
             keys.sort();
             Ok(keys)
         }
-        Value::Array(items) => Ok((0..items.borrow().len())
-            .map(|index| index.to_string())
-            .collect()),
+        Value::Array(items) => {
+            let items = items.borrow();
+            let mut keys: Vec<String> =
+                (0..items.items.len()).map(|index| index.to_string()).collect();
+            let mut properties: Vec<String> = items.properties.keys().cloned().collect();
+            properties.sort();
+            keys.extend(properties);
+            Ok(keys)
+        }
         Value::Set(_) => Ok(vec!["size".to_owned()]),
         _ => Err("Unsupported Object.keys target".to_owned()),
     }
@@ -4421,12 +4614,23 @@ fn own_property_entries(value: &Value) -> Result<Vec<(String, Value)>, String> {
             .filter(|(key, _)| key.as_str() != "__proto__")
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect()),
-        Value::Array(items) => Ok(items
-            .borrow()
-            .iter()
-            .enumerate()
-            .map(|(index, value)| (index.to_string(), value.clone()))
-            .collect()),
+        Value::Array(items) => {
+            let items = items.borrow();
+            let mut entries: Vec<(String, Value)> = items
+                .items
+                .iter()
+                .enumerate()
+                .map(|(index, value)| (index.to_string(), value.clone()))
+                .collect();
+            let mut properties: Vec<(String, Value)> = items
+                .properties
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            properties.sort_by(|left, right| left.0.cmp(&right.0));
+            entries.extend(properties);
+            Ok(entries)
+        }
         _ => Err("Unsupported Object.assign source".to_owned()),
     }
 }
@@ -4438,9 +4642,44 @@ fn object_key_to_string(key: &ObjectKey) -> String {
     }
 }
 
+fn new_array_ref(items: Vec<Value>) -> ArrayRef {
+    Rc::new(RefCell::new(ArrayValue {
+        items,
+        properties: HashMap::new(),
+    }))
+}
+
+fn new_array_value(items: Vec<Value>) -> Value {
+    Value::Array(new_array_ref(items))
+}
+
+fn lookup_array_member(items: &ArrayRef, property: &str) -> Option<Value> {
+    if property == "length" {
+        return Some(Value::Number(items.borrow().items.len() as f64));
+    }
+    if let Some(index) = parse_array_index(property) {
+        return Some(
+            items.borrow()
+                .items
+                .get(index)
+                .cloned()
+                .unwrap_or(Value::Undefined),
+        );
+    }
+    lookup_array_custom_property(items, property)
+}
+
+fn lookup_array_custom_property(items: &ArrayRef, property: &str) -> Option<Value> {
+    items.borrow().properties.get(property).cloned()
+}
+
+fn array_has_custom_property(items: &ArrayRef, property: &str) -> bool {
+    items.borrow().properties.contains_key(property)
+}
+
 fn array_like_values(value: &Value) -> Vec<Value> {
     match value {
-        Value::Array(items) => items.borrow().clone(),
+        Value::Array(items) => items.borrow().items.clone(),
         Value::Set(items) => items.borrow().clone(),
         Value::NodeList(ids) | Value::JQueryCollection(ids) => {
             ids.iter().copied().map(Value::LiveElement).collect()
@@ -4655,7 +4894,7 @@ fn simple_match(text: &str, pattern: Value) -> Value {
     match pattern {
         Value::String(needle) => {
             if text.contains(needle.as_str()) {
-                Value::Array(Rc::new(RefCell::new(vec![Value::String(needle)])))
+                new_array_value(vec![Value::String(needle)])
             } else {
                 Value::Null
             }
@@ -4667,7 +4906,7 @@ fn simple_match(text: &str, pattern: Value) -> Value {
                     .next()
                     .map(|ch| Value::String(ch.to_string()))
                     .unwrap_or(Value::Undefined);
-                return Value::Array(Rc::new(RefCell::new(vec![value])));
+                return new_array_value(vec![value]);
             }
             if !regex.source.chars().any(|ch| {
                 matches!(
@@ -4676,7 +4915,7 @@ fn simple_match(text: &str, pattern: Value) -> Value {
                 )
             }) && text.contains(regex.source.as_str())
             {
-                return Value::Array(Rc::new(RefCell::new(vec![Value::String(regex.source)])));
+                return new_array_value(vec![Value::String(regex.source)]);
             }
             Value::Null
         }
@@ -4776,6 +5015,16 @@ fn set_detached_member_value(target: &mut Value, property: &str, value: &Value) 
                 .insert("value".to_owned(), value.to_string_value());
             true
         }
+        "src" => {
+            let next = value.to_string_value();
+            if next.is_empty() {
+                element.attributes.remove("src");
+            } else {
+                element.attributes.insert("src".to_owned(), next);
+            }
+            true
+        }
+        "onload" | "onerror" => true,
         _ => false,
     }
 }
@@ -4787,8 +5036,12 @@ fn expression_debug_label(expression: &Expression) -> String {
         Expression::Member { object, property } => {
             format!("{}.{}", expression_debug_label(object), property)
         }
-        Expression::ComputedMember { object, .. } => {
-            format!("{}[...]", expression_debug_label(object))
+        Expression::ComputedMember { object, property } => {
+            format!(
+                "{}[{}]",
+                expression_debug_label(object),
+                computed_property_debug_label(property)
+            )
         }
         Expression::Call { callee, .. } => format!("{}(...)", expression_debug_label(callee)),
         Expression::New { callee, .. } => format!("new {}", expression_debug_label(callee)),
@@ -4807,6 +5060,78 @@ fn expression_debug_label(expression: &Expression) -> String {
         Expression::Bool(_) => "bool".to_owned(),
         Expression::Null => "null".to_owned(),
         Expression::Regex { .. } => "regex".to_owned(),
+    }
+}
+
+fn computed_property_debug_label(expression: &Expression) -> String {
+    match expression {
+        Expression::Identifier(name) => name.clone(),
+        Expression::String(value) => format!("{value:?}"),
+        Expression::Number(value) => number_to_string(*value),
+        _ => "...".to_owned(),
+    }
+}
+
+fn array_join_fragment(value: Value) -> String {
+    match value {
+        Value::Undefined | Value::Null => String::new(),
+        other => other.to_string_value(),
+    }
+}
+
+fn js_string_argument(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::Undefined) | None => "undefined".to_owned(),
+        Some(Value::Null) => "null".to_owned(),
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Bool(true)) => "true".to_owned(),
+        Some(Value::Bool(false)) => "false".to_owned(),
+        Some(Value::Number(value)) => number_to_string(*value),
+        Some(other) => other.to_string_value(),
+    }
+}
+
+fn encode_uri_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        if matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'_'
+                | b'.'
+                | b'!'
+                | b'~'
+                | b'*'
+                | b'\''
+                | b'('
+                | b')'
+        ) {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push(hex_digit(byte >> 4));
+            out.push(hex_digit(byte & 0x0f));
+        }
+    }
+    out
+}
+
+fn hex_digit(value: u8) -> char {
+    match value {
+        0..=9 => (b'0' + value) as char,
+        10..=15 => (b'A' + (value - 10)) as char,
+        _ => unreachable!("hex digit out of range"),
+    }
+}
+
+fn trace_annotate_error(err: String, context: &str) -> String {
+    if std::env::var_os("OAB_TRACE_JS_ERRORS").is_some() {
+        format!("{err} [via {context}]")
+    } else {
+        err
     }
 }
 
@@ -5017,6 +5342,46 @@ mod tests {
             .find_first_element_by_name("body")
             .expect("missing body element");
         assert_eq!(collect_text_content(body), "beta");
+    }
+
+    #[test]
+    fn supports_array_join_for_mediawiki_startup() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var labels = ["alpha", null, undefined, "omega"];
+            document.body.textContent =
+                labels.join("|") + ":" + Array.prototype.join.call(["x", "y"], ".");
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "alpha|||omega:x.y");
+    }
+
+    #[test]
+    fn supports_array_push_apply_for_mediawiki_startup() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var values = ["a"];
+            Array.prototype.push.apply(values, ["b", "c"]);
+            document.body.textContent = values.join("|");
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "a|b|c");
     }
 
     #[test]
@@ -5311,6 +5676,80 @@ mod tests {
             .find_first_element_by_name("body")
             .expect("missing body element");
         assert_eq!(collect_text_content(body), "5:1:2:3:0");
+    }
+
+    #[test]
+    fn supports_encode_uri_component_for_mediawiki_startup() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            document.body.textContent = encodeURIComponent("lang=en&title=Riki LeCotey");
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(
+            collect_text_content(body),
+            "lang%3Den%26title%3DRiki%20LeCotey"
+        );
+    }
+
+    #[test]
+    fn supports_script_src_assignment_before_append() {
+        let mut document = crate::html::parse_document(r#"<html><head></head><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var script = document.createElement("script");
+            script.src = "/w/load.php?modules=startup";
+            document.head.appendChild(script);
+            "#,
+        )
+        .expect("script should execute");
+
+        let head = document
+            .find_first_element_by_name("head")
+            .expect("missing head element");
+        let inserted = head
+            .children
+            .iter()
+            .find_map(|child| match child {
+                Node::Element(element) if element.name == "script" => Some(element),
+                _ => None,
+            })
+            .expect("missing inserted script");
+        assert_eq!(
+            inserted.attributes.get("src"),
+            Some("/w/load.php?modules=startup")
+        );
+    }
+
+    #[test]
+    fn supports_script_event_handler_assignment_before_append() {
+        let mut document = crate::html::parse_document(r#"<html><head></head><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var script = document.createElement("script");
+            script.onload = function() {};
+            script.onerror = function() {};
+            document.head.appendChild(script);
+            document.body.textContent = "ok";
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "ok");
     }
 
     #[test]
