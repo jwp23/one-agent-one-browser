@@ -27,6 +27,8 @@
 
 ## Workflow & Verification
 - Plan: bullet minimal steps; note risks and edge cases.
+- Branches: do all work on a git branch; do not work directly on the main branch.
+- Worktrees: when the task is extensive, do the work in a git worktree under `.worktrees/` instead of the primary checkout.
 - Patch: small, focused diffs with paths; exclude unrelated changes.
 - Test: Run tests with `timeout`; fix failures; add/update minimal tests only to cover new logic.
 - Use `tools/oracle` for tasks that depend on real JavaScript execution, browser console/page errors, or validating rendered DOM/text/screenshot against a real browser.
