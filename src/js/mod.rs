@@ -10,11 +10,49 @@ pub fn execute_inline_scripts(document: &mut Document) {
 }
 
 pub fn execute_script_sources(document: &mut Document, sources: &[String]) {
-    for source in sources {
-        let _ = engine::execute(document, source);
+    let trace_errors = trace_js_errors_enabled();
+
+    for (index, source) in sources.iter().enumerate() {
+        if let Err(err) = engine::execute(document, source)
+            && trace_errors
+        {
+            eprintln!(
+                "js[{index}] bytes={} err={} src={}",
+                source.len(),
+                sanitize_diagnostic(&err),
+                script_preview(source)
+            );
+        }
     }
 
     inject_vector_appearance_fallback(document);
+}
+
+fn trace_js_errors_enabled() -> bool {
+    std::env::var_os("OAB_TRACE_JS_ERRORS").is_some()
+}
+
+fn sanitize_diagnostic(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\n' | '\r' | '\t' => ' ',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn script_preview(source: &str) -> String {
+    let compact = sanitize_diagnostic(source);
+    let compact = compact.trim();
+    let mut preview = String::new();
+    for ch in compact.chars().take(96) {
+        preview.push(ch);
+    }
+    if compact.chars().count() > 96 {
+        preview.push('…');
+    }
+    preview
 }
 
 fn collect_inline_classic_scripts(element: &Element, out: &mut Vec<String>) {

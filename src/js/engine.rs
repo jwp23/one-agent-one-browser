@@ -53,7 +53,7 @@ enum Statement {
         body: Box<Statement>,
     },
     ForEach {
-        binding: VariableDeclarator,
+        binding: ForEachBinding,
         operator: ForEachOperator,
         iterable: Expression,
         body: Box<Statement>,
@@ -95,6 +95,12 @@ struct SwitchCase {
 enum ForInit {
     VariableDeclaration(Vec<VariableDeclarator>),
     Expression(Expression),
+}
+
+#[derive(Clone, Debug)]
+enum ForEachBinding {
+    Declaration(VariableDeclarator),
+    Target(Expression),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -145,6 +151,9 @@ enum BinaryOperator {
     Multiply,
     Divide,
     Modulo,
+    LeftShift,
+    RightShift,
+    UnsignedRightShift,
     Less,
     LessEqual,
     Greater,
@@ -217,6 +226,7 @@ enum Expression {
         consequent: Box<Expression>,
         alternate: Box<Expression>,
     },
+    Sequence(Vec<Expression>),
     Binary {
         left: Box<Expression>,
         operator: BinaryOperator,
@@ -289,8 +299,11 @@ enum Token {
     Slash,
     Percent,
     Ellipsis,
+    LessLess,
     Less,
     LessEqual,
+    GreaterGreaterGreater,
+    GreaterGreater,
     Greater,
     GreaterEqual,
     Caret,
@@ -425,6 +438,10 @@ impl<'a> Lexer<'a> {
                     self.advance_char();
                     out.push(Token::Minus);
                 }
+                '<' if self.starts_with("<<") => {
+                    self.cursor += 2;
+                    out.push(Token::LessLess);
+                }
                 '<' if self.starts_with("<=") => {
                     self.cursor += 2;
                     out.push(Token::LessEqual);
@@ -432,6 +449,14 @@ impl<'a> Lexer<'a> {
                 '<' => {
                     self.advance_char();
                     out.push(Token::Less);
+                }
+                '>' if self.starts_with(">>>") => {
+                    self.cursor += 3;
+                    out.push(Token::GreaterGreaterGreater);
+                }
+                '>' if self.starts_with(">>") => {
+                    self.cursor += 2;
+                    out.push(Token::GreaterGreater);
                 }
                 '>' if self.starts_with(">=") => {
                     self.cursor += 2;
@@ -952,7 +977,7 @@ impl Parser {
                     self.expect(&Token::RightParen)?;
                     let body = Box::new(self.parse_statement()?);
                     return Ok(Statement::ForEach {
-                        binding: first,
+                        binding: ForEachBinding::Declaration(first),
                         operator,
                         iterable,
                         body,
@@ -966,6 +991,29 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Some(ForInit::VariableDeclaration(declarations))
             } else {
+                let for_each_cursor = self.cursor;
+                if let Ok(target) = self.parse_member_expression() {
+                    let operator = if self.match_token(&Token::KeywordIn) {
+                        Some(ForEachOperator::In)
+                    } else if self.match_token(&Token::KeywordOf) {
+                        Some(ForEachOperator::Of)
+                    } else {
+                        None
+                    };
+
+                    if let Some(operator) = operator {
+                        let iterable = self.parse_expression()?;
+                        self.expect(&Token::RightParen)?;
+                        let body = Box::new(self.parse_statement()?);
+                        return Ok(Statement::ForEach {
+                            binding: ForEachBinding::Target(target),
+                            operator,
+                            iterable,
+                            body,
+                        });
+                    }
+                }
+                self.cursor = for_each_cursor;
                 let expression = self.parse_expression()?;
                 self.expect(&Token::Semicolon)?;
                 Some(ForInit::Expression(expression))
@@ -1158,7 +1206,7 @@ impl Parser {
     }
 
     fn parse_relational(&mut self) -> Result<Expression, String> {
-        let mut expression = self.parse_additive()?;
+        let mut expression = self.parse_shift()?;
         loop {
             let operator = if self.match_token(&Token::KeywordIn) {
                 Some(BinaryOperator::In)
@@ -1172,6 +1220,31 @@ impl Parser {
                 Some(BinaryOperator::Greater)
             } else if self.match_token(&Token::GreaterEqual) {
                 Some(BinaryOperator::GreaterEqual)
+            } else {
+                None
+            };
+            let Some(operator) = operator else {
+                break;
+            };
+            let right = self.parse_shift()?;
+            expression = Expression::Binary {
+                left: Box::new(expression),
+                operator,
+                right: Box::new(right),
+            };
+        }
+        Ok(expression)
+    }
+
+    fn parse_shift(&mut self) -> Result<Expression, String> {
+        let mut expression = self.parse_additive()?;
+        loop {
+            let operator = if self.match_token(&Token::LessLess) {
+                Some(BinaryOperator::LeftShift)
+            } else if self.match_token(&Token::GreaterGreaterGreater) {
+                Some(BinaryOperator::UnsignedRightShift)
+            } else if self.match_token(&Token::GreaterGreater) {
+                Some(BinaryOperator::RightShift)
             } else {
                 None
             };
@@ -1416,9 +1489,16 @@ impl Parser {
             Token::Regex { source, flags } => Ok(Expression::Regex { source, flags }),
             Token::TemplateLiteral(template) => self.parse_template_literal(template),
             Token::LeftParen => {
-                let expression = self.parse_expression()?;
+                let mut expressions = vec![self.parse_assignment()?];
+                while self.match_token(&Token::Comma) {
+                    expressions.push(self.parse_assignment()?);
+                }
                 self.expect(&Token::RightParen)?;
-                Ok(expression)
+                Ok(if expressions.len() == 1 {
+                    expressions.pop().unwrap_or(Expression::Null)
+                } else {
+                    Expression::Sequence(expressions)
+                })
             }
             Token::LeftBracket => {
                 let mut items = Vec::new();
@@ -1825,6 +1905,7 @@ enum NativeFunction {
     RegExpConstructor,
     FunctionConstructor,
     FunctionCall,
+    FunctionApply,
     FunctionBind,
     ArrayForEach,
     ArrayMap,
@@ -1837,6 +1918,11 @@ enum NativeFunction {
     RequestIdleCallback,
     CancelIdleCallback,
     ReturnZero,
+    DateNow,
+    MathMax,
+    MathMin,
+    MathRound,
+    MathCeil,
     Noop,
 }
 
@@ -1941,6 +2027,37 @@ impl<'a> Executor<'a> {
         let _ = executor.set_property_value(performance.clone(), "timing", timing);
         executor.declare_global("performance", performance);
 
+        let date = executor.create_plain_object();
+        let _ = executor.set_property_value(
+            date.clone(),
+            "now",
+            executor.create_native_function(NativeFunction::DateNow),
+        );
+        executor.declare_global("Date", date);
+
+        let math = executor.create_plain_object();
+        let _ = executor.set_property_value(
+            math.clone(),
+            "max",
+            executor.create_native_function(NativeFunction::MathMax),
+        );
+        let _ = executor.set_property_value(
+            math.clone(),
+            "min",
+            executor.create_native_function(NativeFunction::MathMin),
+        );
+        let _ = executor.set_property_value(
+            math.clone(),
+            "round",
+            executor.create_native_function(NativeFunction::MathRound),
+        );
+        let _ = executor.set_property_value(
+            math.clone(),
+            "ceil",
+            executor.create_native_function(NativeFunction::MathCeil),
+        );
+        executor.declare_global("Math", math);
+
         let object_ctor = executor.create_native_function(NativeFunction::Noop);
         let _ = executor.set_property_value(
             object_ctor.clone(),
@@ -1977,6 +2094,11 @@ impl<'a> Executor<'a> {
             function_proto.clone(),
             "call",
             executor.create_native_function(NativeFunction::FunctionCall),
+        );
+        let _ = executor.set_property_value(
+            function_proto.clone(),
+            "apply",
+            executor.create_native_function(NativeFunction::FunctionApply),
         );
         let _ = executor.set_property_value(
             function_proto.clone(),
@@ -2225,7 +2347,14 @@ impl<'a> Executor<'a> {
                 };
                 let mut last = Value::Undefined;
                 for value in values {
-                    self.declare_pattern(&binding.pattern, value)?;
+                    match binding {
+                        ForEachBinding::Declaration(binding) => {
+                            self.declare_pattern(&binding.pattern, value)?;
+                        }
+                        ForEachBinding::Target(target) => {
+                            self.assign_target(target, value)?;
+                        }
+                    }
                     match self.execute_statement(body)? {
                         ControlFlow::Continue(next) => last = next,
                         ControlFlow::Return(value) => return Ok(ControlFlow::Return(value)),
@@ -2344,6 +2473,13 @@ impl<'a> Executor<'a> {
                     self.evaluate_expression(alternate)
                 }
             }
+            Expression::Sequence(expressions) => {
+                let mut last = Value::Undefined;
+                for expression in expressions {
+                    last = self.evaluate_expression(expression)?;
+                }
+                Ok(last)
+            }
             Expression::Binary {
                 left,
                 operator,
@@ -2461,6 +2597,21 @@ impl<'a> Executor<'a> {
                     left.to_number_value() % right.to_number_value(),
                 ))
             }
+            BinaryOperator::LeftShift => {
+                let left = to_js_int32(self.evaluate_expression(left)?.to_number_value());
+                let right = shift_count(self.evaluate_expression(right)?.to_number_value());
+                Ok(Value::Number((((left as u32) << right) as i32) as f64))
+            }
+            BinaryOperator::RightShift => {
+                let left = to_js_int32(self.evaluate_expression(left)?.to_number_value());
+                let right = shift_count(self.evaluate_expression(right)?.to_number_value());
+                Ok(Value::Number((left >> right) as f64))
+            }
+            BinaryOperator::UnsignedRightShift => {
+                let left = to_js_uint32(self.evaluate_expression(left)?.to_number_value());
+                let right = shift_count(self.evaluate_expression(right)?.to_number_value());
+                Ok(Value::Number((left >> right) as f64))
+            }
             BinaryOperator::Less => {
                 let left = self.evaluate_expression(left)?;
                 let right = self.evaluate_expression(right)?;
@@ -2542,8 +2693,14 @@ impl<'a> Executor<'a> {
                 self.call_member(receiver, property.as_str(), &evaluated_arguments)
             }
             _ => {
-                let callee = self.evaluate_expression(callee)?;
-                self.call_value(callee, Value::Window, &evaluated_arguments)
+                let callee_value = self.evaluate_expression(callee)?;
+                if matches!(callee_value, Value::Undefined) {
+                    return Err(format!(
+                        "Unsupported JS call target: {}",
+                        expression_debug_label(callee)
+                    ));
+                }
+                self.call_value(callee_value, Value::Window, &evaluated_arguments)
             }
         }
     }
@@ -2644,11 +2801,19 @@ impl<'a> Executor<'a> {
             Value::LiveElement(node_id) => self.call_element_method(node_id, property, arguments),
             Value::ClassList(node_id) => self.call_class_list_method(node_id, property, arguments),
             Value::String(text) => self.call_string_method(text.as_str(), property, arguments),
+            Value::Number(number) => self.call_number_method(number, property, arguments),
             Value::Array(items) => self.call_array_method(items, property, arguments),
             Value::Set(items) => self.call_set_method(items, property, arguments),
             Value::JQueryCollection(ids) => self.call_jquery_method(ids, property, arguments),
             _ => {
                 let callee = self.get_member_value(receiver.clone(), property)?;
+                if matches!(callee, Value::Undefined) {
+                    return Err(format!(
+                        "Unsupported member call: {}.{}",
+                        receiver.debug_label(),
+                        property
+                    ));
+                }
                 self.call_value(callee, receiver, arguments)
             }
         }
@@ -2706,13 +2871,19 @@ impl<'a> Executor<'a> {
                     &bound_arguments,
                 )
             }
-            _ => Err("Unsupported JS call target".to_owned()),
+            _ => Err(format!(
+                "Unsupported JS call target: {}",
+                callee.debug_label()
+            )),
         }
     }
 
     fn construct_value(&mut self, callee: Value, arguments: &[Value]) -> Result<Value, String> {
         let Value::Function(function) = callee else {
-            return Err("Unsupported constructor".to_owned());
+            return Err(format!(
+                "Unsupported constructor: {}",
+                callee.debug_label()
+            ));
         };
 
         match function.kind.clone() {
@@ -2822,6 +2993,16 @@ impl<'a> Executor<'a> {
                     return Ok(Value::Undefined);
                 };
                 self.call_value(this_value, this_arg, &arguments[1..])
+                    .map_err(|err| format!("Function.call: {err}"))
+            }
+            NativeFunction::FunctionApply => {
+                let this_arg = arguments.first().cloned().unwrap_or(Value::Undefined);
+                let applied_arguments = arguments
+                    .get(1)
+                    .map(array_like_values)
+                    .unwrap_or_default();
+                self.call_value(this_value, this_arg, &applied_arguments)
+                    .map_err(|err| format!("Function.apply: {err}"))
             }
             NativeFunction::FunctionBind => {
                 let this_arg = arguments.first().cloned().unwrap_or(Value::Undefined);
@@ -2850,6 +3031,35 @@ impl<'a> Executor<'a> {
             NativeFunction::RequestIdleCallback => self.call_idle_callback(arguments),
             NativeFunction::CancelIdleCallback => Ok(Value::Undefined),
             NativeFunction::ReturnZero => Ok(Value::Number(0.0)),
+            NativeFunction::DateNow => Ok(Value::Number(0.0)),
+            NativeFunction::MathMax => Ok(Value::Number(
+                arguments
+                    .iter()
+                    .map(Value::to_number_value)
+                    .reduce(f64::max)
+                    .unwrap_or(f64::NEG_INFINITY),
+            )),
+            NativeFunction::MathMin => Ok(Value::Number(
+                arguments
+                    .iter()
+                    .map(Value::to_number_value)
+                    .reduce(f64::min)
+                    .unwrap_or(f64::INFINITY),
+            )),
+            NativeFunction::MathRound => Ok(Value::Number(
+                arguments
+                    .first()
+                    .map(Value::to_number_value)
+                    .unwrap_or(0.0)
+                    .round(),
+            )),
+            NativeFunction::MathCeil => Ok(Value::Number(
+                arguments
+                    .first()
+                    .map(Value::to_number_value)
+                    .unwrap_or(0.0)
+                    .ceil(),
+            )),
             NativeFunction::Noop => Ok(Value::Undefined),
         }
     }
@@ -3011,11 +3221,63 @@ impl<'a> Executor<'a> {
                     replacement.as_str(),
                 )))
             }
+            "lastIndexOf" => {
+                let needle = first_string_argument(arguments)?;
+                let result = if needle.is_empty() {
+                    text.len()
+                } else {
+                    text.rfind(needle.as_str()).unwrap_or(usize::MAX)
+                };
+                Ok(Value::Number(if result == usize::MAX {
+                    -1.0
+                } else {
+                    result as f64
+                }))
+            }
+            "slice" => {
+                let chars: Vec<char> = text.chars().collect();
+                let len = chars.len() as i32;
+                let start = normalized_slice_index(arguments.first(), len);
+                let end = normalized_slice_end(arguments.get(1), len);
+                let value = if start >= end {
+                    String::new()
+                } else {
+                    chars[start as usize..end as usize].iter().collect()
+                };
+                Ok(Value::String(value))
+            }
+            "charCodeAt" => {
+                let index = normalized_slice_index(arguments.first(), text.chars().count() as i32);
+                let value = text
+                    .chars()
+                    .nth(index as usize)
+                    .map(|ch| ch as u32 as f64)
+                    .unwrap_or(f64::NAN);
+                Ok(Value::Number(value))
+            }
             "startsWith" => {
                 let prefix = first_string_argument(arguments)?;
                 Ok(Value::Bool(text.starts_with(prefix.as_str())))
             }
             _ => Err(format!("Unsupported string method: {property}")),
+        }
+    }
+
+    fn call_number_method(
+        &mut self,
+        number: f64,
+        property: &str,
+        arguments: &[Value],
+    ) -> Result<Value, String> {
+        match property {
+            "toString" => {
+                let radix = arguments
+                    .first()
+                    .map(Value::to_number_value)
+                    .unwrap_or(10.0) as i32;
+                Ok(Value::String(number_to_radix_string(number, radix)))
+            }
+            _ => Err(format!("Unsupported number method: {property}")),
         }
     }
 
@@ -3383,6 +3645,7 @@ impl<'a> Executor<'a> {
                 }
                 match property {
                     "call" => Ok(self.create_native_function(NativeFunction::FunctionCall)),
+                    "apply" => Ok(self.create_native_function(NativeFunction::FunctionApply)),
                     "bind" => Ok(self.create_native_function(NativeFunction::FunctionBind)),
                     _ => Ok(Value::Undefined),
                 }
@@ -3393,6 +3656,7 @@ impl<'a> Executor<'a> {
                 }
                 match property {
                     "call" => Ok(self.create_native_function(NativeFunction::FunctionCall)),
+                    "apply" => Ok(self.create_native_function(NativeFunction::FunctionApply)),
                     "bind" => Ok(self.create_native_function(NativeFunction::FunctionBind)),
                     _ => Ok(Value::Undefined),
                 }
@@ -3460,11 +3724,11 @@ impl<'a> Executor<'a> {
             Value::Object(properties) => lookup_object_property(&properties, property).is_some(),
             Value::Function(function) => {
                 function.properties.borrow().contains_key(property)
-                    || matches!(property, "call" | "bind")
+                    || matches!(property, "call" | "apply" | "bind")
             }
             Value::BoundFunction(function) => {
                 function.properties.borrow().contains_key(property)
-                    || matches!(property, "call" | "bind")
+                    || matches!(property, "call" | "apply" | "bind")
             }
             Value::String(text) => {
                 property == "length"
@@ -3489,6 +3753,13 @@ impl<'a> Executor<'a> {
         value: Value,
     ) -> Result<(), String> {
         match object {
+            Value::Window => {
+                self.global
+                    .borrow_mut()
+                    .bindings
+                    .insert(property.to_owned(), value);
+                Ok(())
+            }
             Value::LiveElement(node_id) => {
                 let Some(element) = self.document.find_element_by_node_id_mut(node_id) else {
                     return Ok(());
@@ -3976,6 +4247,30 @@ enum InsertPosition {
 }
 
 impl Value {
+    fn debug_label(&self) -> &'static str {
+        match self {
+            Value::Undefined => "undefined",
+            Value::Null => "null",
+            Value::String(_) => "string",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::Regex(_) => "regexp",
+            Value::Object(_) => "object",
+            Value::Array(_) => "array",
+            Value::Set(_) => "set",
+            Value::Function(_) => "function",
+            Value::BoundFunction(_) => "bound-function",
+            Value::Window => "window",
+            Value::Document => "document",
+            Value::LiveElement(_) => "element",
+            Value::DetachedElement(_) => "detached-element",
+            Value::DetachedText(_) => "text-node",
+            Value::ClassList(_) => "class-list",
+            Value::NodeList(_) => "node-list",
+            Value::JQueryCollection(_) => "jquery-collection",
+        }
+    }
+
     fn to_string_value(&self) -> String {
         match self {
             Value::Undefined => String::new(),
@@ -4236,6 +4531,34 @@ fn number_to_string(value: f64) -> String {
     }
 }
 
+fn number_to_radix_string(value: f64, radix: i32) -> String {
+    if radix == 10 || !(2..=36).contains(&radix) || !value.is_finite() || value.fract() != 0.0 {
+        return number_to_string(value);
+    }
+
+    let negative = value.is_sign_negative();
+    let mut number = value.abs() as u64;
+    if number == 0 {
+        return "0".to_owned();
+    }
+
+    let mut digits = Vec::new();
+    let radix = radix as u64;
+    while number > 0 {
+        let digit = (number % radix) as u8;
+        digits.push(if digit < 10 {
+            (b'0' + digit) as char
+        } else {
+            (b'a' + digit - 10) as char
+        });
+        number /= radix;
+    }
+    if negative {
+        digits.push('-');
+    }
+    digits.iter().rev().collect()
+}
+
 fn compare_values(left: &Value, right: &Value) -> i32 {
     match (left, right) {
         (Value::String(left), Value::String(right)) => match left.cmp(right) {
@@ -4255,6 +4578,21 @@ fn compare_values(left: &Value, right: &Value) -> i32 {
             }
         }
     }
+}
+
+fn to_js_uint32(value: f64) -> u32 {
+    if !value.is_finite() || value == 0.0 {
+        return 0;
+    }
+    value.trunc().rem_euclid(4294967296.0) as u32
+}
+
+fn to_js_int32(value: f64) -> i32 {
+    to_js_uint32(value) as i32
+}
+
+fn shift_count(value: f64) -> u32 {
+    to_js_uint32(value) & 31
 }
 
 fn lookup_object_property(properties: &ObjectRef, property: &str) -> Option<Value> {
@@ -4439,6 +4777,36 @@ fn set_detached_member_value(target: &mut Value, property: &str, value: &Value) 
             true
         }
         _ => false,
+    }
+}
+
+fn expression_debug_label(expression: &Expression) -> String {
+    match expression {
+        Expression::Identifier(name) => name.clone(),
+        Expression::This => "this".to_owned(),
+        Expression::Member { object, property } => {
+            format!("{}.{}", expression_debug_label(object), property)
+        }
+        Expression::ComputedMember { object, .. } => {
+            format!("{}[...]", expression_debug_label(object))
+        }
+        Expression::Call { callee, .. } => format!("{}(...)", expression_debug_label(callee)),
+        Expression::New { callee, .. } => format!("new {}", expression_debug_label(callee)),
+        Expression::Sequence(_) => "sequence".to_owned(),
+        Expression::Function { .. } => "function".to_owned(),
+        Expression::TemplateLiteral(_) => "template".to_owned(),
+        Expression::Array(_) => "array".to_owned(),
+        Expression::Object(_) => "object".to_owned(),
+        Expression::Assignment { .. } => "assignment".to_owned(),
+        Expression::Update { .. } => "update".to_owned(),
+        Expression::Unary { .. } => "unary".to_owned(),
+        Expression::Conditional { .. } => "conditional".to_owned(),
+        Expression::Binary { .. } => "binary".to_owned(),
+        Expression::String(_) => "string".to_owned(),
+        Expression::Number(_) => "number".to_owned(),
+        Expression::Bool(_) => "bool".to_owned(),
+        Expression::Null => "null".to_owned(),
+        Expression::Regex { .. } => "regex".to_owned(),
     }
 }
 
@@ -4791,5 +5159,177 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn reports_missing_member_calls_with_receiver_context() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        let err = execute(&mut document, r#"({}).closest("main");"#)
+            .expect_err("script should fail");
+
+        assert_eq!(err, "Unsupported member call: object.closest");
+    }
+
+    #[test]
+    fn supports_shift_operators_needed_by_mediawiki_startup() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var left = 1 << 5;
+            var signed = -16 >> 2;
+            var unsigned = -1 >>> 0;
+            document.body.textContent = left + ":" + signed + ":" + unsigned;
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "32:-4:4294967295");
+    }
+
+    #[test]
+    fn supports_for_in_with_existing_binding_targets() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var source = { alpha: 1, beta: 2 };
+            var key = "";
+            for (key in source) {
+                document.body.textContent += key[0];
+            }
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "ab");
+    }
+
+    #[test]
+    fn supports_parenthesized_sequence_expressions() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            document.body.textContent = (1, 2, 3);
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "3");
+    }
+
+    #[test]
+    fn supports_window_property_assignment_for_globals() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            window.mediaWiki = { ready: true };
+            document.body.textContent = window.mediaWiki.ready;
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "true");
+    }
+
+    #[test]
+    fn supports_function_apply() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            function describe(a, b) {
+                document.body.textContent = this.label + ":" + a + ":" + b;
+            }
+            describe.apply({ label: "ctx" }, [1, 2]);
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "ctx:1:2");
+    }
+
+    #[test]
+    fn supports_string_last_index_of() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            document.body.textContent = "alpha@beta@gamma".lastIndexOf("@");
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "10");
+    }
+
+    #[test]
+    fn supports_math_and_date_statics_used_by_mediawiki() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            document.body.textContent =
+                Math.max(1, 5, 3) + ":" +
+                Math.min(1, 5, 3) + ":" +
+                Math.round(2.4) + ":" +
+                Math.ceil(2.1) + ":" +
+                Date.now();
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "5:1:2:3:0");
+    }
+
+    #[test]
+    fn supports_mediawiki_hash_string_and_number_helpers() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var hash = (255).toString(36).slice(0, 2);
+            var code = "AZ".charCodeAt(1);
+            document.body.textContent = hash + ":" + code;
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "73:90");
     }
 }
