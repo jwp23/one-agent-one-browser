@@ -6,6 +6,7 @@ use std::rc::Rc;
 type ScopeRef = Rc<RefCell<Scope>>;
 type ObjectRef = Rc<RefCell<HashMap<String, Value>>>;
 type ArrayRef = Rc<RefCell<Vec<Value>>>;
+type SetRef = Rc<RefCell<Vec<Value>>>;
 
 pub fn execute(document: &mut Document, source: &str) -> Result<(), String> {
     let tokens = Lexer::new(source).tokenize()?;
@@ -71,13 +72,16 @@ enum ObjectKey {
 enum UnaryOperator {
     Not,
     Typeof,
+    Delete,
 }
 
 #[derive(Clone, Copy, Debug)]
 enum BinaryOperator {
     Add,
     Subtract,
+    Multiply,
     Divide,
+    Modulo,
     Less,
     LessEqual,
     Greater,
@@ -171,6 +175,7 @@ enum Token {
     KeywordThis,
     KeywordNew,
     KeywordTypeof,
+    KeywordDelete,
     KeywordTry,
     KeywordCatch,
     KeywordWhile,
@@ -198,7 +203,9 @@ enum Token {
     Minus,
     MinusMinus,
     MinusEqual,
+    Star,
     Slash,
+    Percent,
     Less,
     LessEqual,
     Greater,
@@ -238,6 +245,14 @@ impl<'a> Lexer<'a> {
                 '/' => {
                     self.advance_char();
                     out.push(Token::Slash);
+                }
+                '*' => {
+                    self.advance_char();
+                    out.push(Token::Star);
+                }
+                '%' => {
+                    self.advance_char();
+                    out.push(Token::Percent);
                 }
                 '.' => {
                     self.advance_char();
@@ -377,6 +392,7 @@ impl<'a> Lexer<'a> {
                         "this" => Token::KeywordThis,
                         "new" => Token::KeywordNew,
                         "typeof" => Token::KeywordTypeof,
+                        "delete" => Token::KeywordDelete,
                         "try" => Token::KeywordTry,
                         "catch" => Token::KeywordCatch,
                         "while" => Token::KeywordWhile,
@@ -386,7 +402,10 @@ impl<'a> Lexer<'a> {
                     });
                 }
                 _ => {
-                    return Err(format!("Unsupported token in JS source near byte {}", self.cursor));
+                    return Err(format!(
+                        "Unsupported token in JS source near byte {}",
+                        self.cursor
+                    ));
                 }
             }
         }
@@ -694,7 +713,9 @@ impl Parser {
         Ok(out)
     }
 
-    fn parse_function_signature_and_body(&mut self) -> Result<(Vec<String>, Vec<Statement>), String> {
+    fn parse_function_signature_and_body(
+        &mut self,
+    ) -> Result<(Vec<String>, Vec<Statement>), String> {
         self.expect(&Token::LeftParen)?;
         let mut params = Vec::new();
         if !self.check(&Token::RightParen) {
@@ -886,11 +907,23 @@ impl Parser {
 
     fn parse_multiplicative(&mut self) -> Result<Expression, String> {
         let mut expression = self.parse_unary()?;
-        while self.match_token(&Token::Slash) {
+        loop {
+            let operator = if self.match_token(&Token::Star) {
+                Some(BinaryOperator::Multiply)
+            } else if self.match_token(&Token::Slash) {
+                Some(BinaryOperator::Divide)
+            } else if self.match_token(&Token::Percent) {
+                Some(BinaryOperator::Modulo)
+            } else {
+                None
+            };
+            let Some(operator) = operator else {
+                break;
+            };
             let right = self.parse_unary()?;
             expression = Expression::Binary {
                 left: Box::new(expression),
-                operator: BinaryOperator::Divide,
+                operator,
                 right: Box::new(right),
             };
         }
@@ -921,6 +954,12 @@ impl Parser {
         if self.match_token(&Token::KeywordTypeof) {
             return Ok(Expression::Unary {
                 operator: UnaryOperator::Typeof,
+                argument: Box::new(self.parse_unary()?),
+            });
+        }
+        if self.match_token(&Token::KeywordDelete) {
+            return Ok(Expression::Unary {
+                operator: UnaryOperator::Delete,
                 argument: Box::new(self.parse_unary()?),
             });
         }
@@ -972,7 +1011,7 @@ impl Parser {
             }
 
             if self.match_token(&Token::Dot) {
-                let property = self.expect_identifier()?;
+                let property = self.expect_property_identifier()?;
                 expression = Expression::Member {
                     object: Box::new(expression),
                     property,
@@ -1001,7 +1040,7 @@ impl Parser {
 
         loop {
             if self.match_token(&Token::Dot) {
-                let property = self.expect_identifier()?;
+                let property = self.expect_property_identifier()?;
                 expression = Expression::Member {
                     object: Box::new(expression),
                     property,
@@ -1163,6 +1202,32 @@ impl Parser {
             other => Err(format!("Expected identifier, found {other:?}")),
         }
     }
+
+    fn expect_property_identifier(&mut self) -> Result<String, String> {
+        match self.advance() {
+            Token::Identifier(name) => Ok(name),
+            Token::KeywordVar => Ok("var".to_owned()),
+            Token::KeywordLet => Ok("let".to_owned()),
+            Token::KeywordConst => Ok("const".to_owned()),
+            Token::KeywordFunction => Ok("function".to_owned()),
+            Token::KeywordReturn => Ok("return".to_owned()),
+            Token::KeywordIf => Ok("if".to_owned()),
+            Token::KeywordElse => Ok("else".to_owned()),
+            Token::KeywordTrue => Ok("true".to_owned()),
+            Token::KeywordFalse => Ok("false".to_owned()),
+            Token::KeywordNull => Ok("null".to_owned()),
+            Token::KeywordThis => Ok("this".to_owned()),
+            Token::KeywordNew => Ok("new".to_owned()),
+            Token::KeywordTypeof => Ok("typeof".to_owned()),
+            Token::KeywordDelete => Ok("delete".to_owned()),
+            Token::KeywordTry => Ok("try".to_owned()),
+            Token::KeywordCatch => Ok("catch".to_owned()),
+            Token::KeywordWhile => Ok("while".to_owned()),
+            Token::KeywordFor => Ok("for".to_owned()),
+            Token::KeywordIn => Ok("in".to_owned()),
+            other => Err(format!("Expected property identifier, found {other:?}")),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1175,6 +1240,7 @@ enum Value {
     Regex(RegexValue),
     Object(ObjectRef),
     Array(ArrayRef),
+    Set(SetRef),
     Function(Rc<FunctionValue>),
     BoundFunction(Rc<BoundFunctionValue>),
     Window,
@@ -1224,12 +1290,26 @@ struct UserFunction {
 enum NativeFunction {
     Dollar,
     ArrayIsArray,
+    ObjectAssign,
     ObjectCreate,
+    ObjectKeys,
     ObjectHasOwnProperty,
+    SetConstructor,
     RegExpConstructor,
     FunctionConstructor,
     FunctionCall,
     FunctionBind,
+    ArrayForEach,
+    ArrayMap,
+    ArrayFilter,
+    ArraySlice,
+    ArraySort,
+    ArrayReduce,
+    SetTimeout,
+    ClearTimeout,
+    RequestIdleCallback,
+    CancelIdleCallback,
+    ReturnZero,
     Noop,
 }
 
@@ -1270,6 +1350,22 @@ impl<'a> Executor<'a> {
         executor.declare_global("window", Value::Window);
         executor.declare_global("document", Value::Document);
         executor.declare_global("$", executor.create_native_function(NativeFunction::Dollar));
+        executor.declare_global(
+            "setTimeout",
+            executor.create_native_function(NativeFunction::SetTimeout),
+        );
+        executor.declare_global(
+            "clearTimeout",
+            executor.create_native_function(NativeFunction::ClearTimeout),
+        );
+        executor.declare_global(
+            "requestIdleCallback",
+            executor.create_native_function(NativeFunction::RequestIdleCallback),
+        );
+        executor.declare_global(
+            "cancelIdleCallback",
+            executor.create_native_function(NativeFunction::CancelIdleCallback),
+        );
         let console = executor.create_plain_object();
         let _ = executor.set_property_value(
             console.clone(),
@@ -1309,14 +1405,29 @@ impl<'a> Executor<'a> {
             "mark",
             executor.create_native_function(NativeFunction::Noop),
         );
+        let _ = executor.set_property_value(
+            performance.clone(),
+            "now",
+            executor.create_native_function(NativeFunction::ReturnZero),
+        );
         let _ = executor.set_property_value(performance.clone(), "timing", timing);
         executor.declare_global("performance", performance);
 
         let object_ctor = executor.create_native_function(NativeFunction::Noop);
         let _ = executor.set_property_value(
             object_ctor.clone(),
+            "assign",
+            executor.create_native_function(NativeFunction::ObjectAssign),
+        );
+        let _ = executor.set_property_value(
+            object_ctor.clone(),
             "create",
             executor.create_native_function(NativeFunction::ObjectCreate),
+        );
+        let _ = executor.set_property_value(
+            object_ctor.clone(),
+            "keys",
+            executor.create_native_function(NativeFunction::ObjectKeys),
         );
         let _ = executor.set_property_value(
             object_ctor.clone(),
@@ -1345,12 +1456,49 @@ impl<'a> Executor<'a> {
         executor.declare_global("Function", function_ctor);
 
         let array_ctor = executor.create_native_function(NativeFunction::Noop);
+        let array_proto = executor.create_plain_object();
+        let _ = executor.set_property_value(
+            array_proto.clone(),
+            "forEach",
+            executor.create_native_function(NativeFunction::ArrayForEach),
+        );
+        let _ = executor.set_property_value(
+            array_proto.clone(),
+            "map",
+            executor.create_native_function(NativeFunction::ArrayMap),
+        );
+        let _ = executor.set_property_value(
+            array_proto.clone(),
+            "filter",
+            executor.create_native_function(NativeFunction::ArrayFilter),
+        );
+        let _ = executor.set_property_value(
+            array_proto.clone(),
+            "slice",
+            executor.create_native_function(NativeFunction::ArraySlice),
+        );
+        let _ = executor.set_property_value(
+            array_proto.clone(),
+            "sort",
+            executor.create_native_function(NativeFunction::ArraySort),
+        );
+        let _ = executor.set_property_value(
+            array_proto.clone(),
+            "reduce",
+            executor.create_native_function(NativeFunction::ArrayReduce),
+        );
         let _ = executor.set_property_value(
             array_ctor.clone(),
             "isArray",
             executor.create_native_function(NativeFunction::ArrayIsArray),
         );
+        let _ = executor.set_property_value(array_ctor.clone(), "prototype", array_proto);
         executor.declare_global("Array", array_ctor);
+
+        executor.declare_global(
+            "Set",
+            executor.create_native_function(NativeFunction::SetConstructor),
+        );
 
         let promise_ctor = executor.create_native_function(NativeFunction::Noop);
         let promise_proto = executor.create_plain_object();
@@ -1501,7 +1649,9 @@ impl<'a> Executor<'a> {
 
     fn evaluate_expression(&mut self, expression: &Expression) -> Result<Value, String> {
         match expression {
-            Expression::Identifier(name) => Ok(self.lookup_binding(name).unwrap_or(Value::Undefined)),
+            Expression::Identifier(name) => {
+                Ok(self.lookup_binding(name).unwrap_or(Value::Undefined))
+            }
             Expression::This => Ok(self.lookup_binding("this").unwrap_or(Value::Window)),
             Expression::String(value) => Ok(Value::String(value.clone())),
             Expression::Number(value) => Ok(Value::Number(*value)),
@@ -1573,8 +1723,13 @@ impl<'a> Executor<'a> {
         argument: &Expression,
     ) -> Result<Value, String> {
         match operator {
-            UnaryOperator::Not => Ok(Value::Bool(!self.evaluate_expression(argument)?.is_truthy())),
-            UnaryOperator::Typeof => Ok(Value::String(self.evaluate_expression(argument)?.type_name())),
+            UnaryOperator::Not => Ok(Value::Bool(
+                !self.evaluate_expression(argument)?.is_truthy(),
+            )),
+            UnaryOperator::Typeof => Ok(Value::String(
+                self.evaluate_expression(argument)?.type_name(),
+            )),
+            UnaryOperator::Delete => self.delete_target(argument),
         }
     }
 
@@ -1591,11 +1746,7 @@ impl<'a> Executor<'a> {
         };
         let updated = Value::Number(current.to_number_value() + delta);
         self.assign_target(target, updated.clone())?;
-        if prefix {
-            Ok(updated)
-        } else {
-            Ok(current)
-        }
+        if prefix { Ok(updated) } else { Ok(current) }
     }
 
     fn evaluate_binary(
@@ -1629,17 +1780,37 @@ impl<'a> Executor<'a> {
                         right.to_string_value()
                     )));
                 }
-                Ok(Value::Number(left.to_number_value() + right.to_number_value()))
+                Ok(Value::Number(
+                    left.to_number_value() + right.to_number_value(),
+                ))
             }
             BinaryOperator::Subtract => {
                 let left = self.evaluate_expression(left)?;
                 let right = self.evaluate_expression(right)?;
-                Ok(Value::Number(left.to_number_value() - right.to_number_value()))
+                Ok(Value::Number(
+                    left.to_number_value() - right.to_number_value(),
+                ))
+            }
+            BinaryOperator::Multiply => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Number(
+                    left.to_number_value() * right.to_number_value(),
+                ))
             }
             BinaryOperator::Divide => {
                 let left = self.evaluate_expression(left)?;
                 let right = self.evaluate_expression(right)?;
-                Ok(Value::Number(left.to_number_value() / right.to_number_value()))
+                Ok(Value::Number(
+                    left.to_number_value() / right.to_number_value(),
+                ))
+            }
+            BinaryOperator::Modulo => {
+                let left = self.evaluate_expression(left)?;
+                let right = self.evaluate_expression(right)?;
+                Ok(Value::Number(
+                    left.to_number_value() % right.to_number_value(),
+                ))
             }
             BinaryOperator::Less => {
                 let left = self.evaluate_expression(left)?;
@@ -1689,7 +1860,9 @@ impl<'a> Executor<'a> {
             BinaryOperator::BitXor => {
                 let left = self.evaluate_expression(left)?;
                 let right = self.evaluate_expression(right)?;
-                Ok(Value::Number(((left.to_number_value() as i32) ^ (right.to_number_value() as i32)) as f64))
+                Ok(Value::Number(
+                    ((left.to_number_value() as i32) ^ (right.to_number_value() as i32)) as f64,
+                ))
             }
         }
     }
@@ -1748,7 +1921,9 @@ impl<'a> Executor<'a> {
 
     fn read_target_value(&mut self, target: &Expression) -> Result<Value, String> {
         match target {
-            Expression::Identifier(name) => Ok(self.lookup_binding(name).unwrap_or(Value::Undefined)),
+            Expression::Identifier(name) => {
+                Ok(self.lookup_binding(name).unwrap_or(Value::Undefined))
+            }
             Expression::Member { object, property } => {
                 let object = self.evaluate_expression(object)?;
                 self.get_member_value(object, property)
@@ -1759,6 +1934,22 @@ impl<'a> Executor<'a> {
                 self.get_member_value(object, property.as_str())
             }
             _ => Err("Unsupported assignment target".to_owned()),
+        }
+    }
+
+    fn delete_target(&mut self, target: &Expression) -> Result<Value, String> {
+        match target {
+            Expression::Identifier(_) => Ok(Value::Bool(true)),
+            Expression::Member { object, property } => {
+                let object = self.evaluate_expression(object)?;
+                Ok(Value::Bool(self.delete_property(object, property)))
+            }
+            Expression::ComputedMember { object, property } => {
+                let object = self.evaluate_expression(object)?;
+                let property = self.evaluate_expression(property)?.to_property_key();
+                Ok(Value::Bool(self.delete_property(object, property.as_str())))
+            }
+            _ => Ok(Value::Bool(true)),
         }
     }
 
@@ -1800,6 +1991,7 @@ impl<'a> Executor<'a> {
             Value::ClassList(node_id) => self.call_class_list_method(node_id, property, arguments),
             Value::String(text) => self.call_string_method(text.as_str(), property, arguments),
             Value::Array(items) => self.call_array_method(items, property, arguments),
+            Value::Set(items) => self.call_set_method(items, property, arguments),
             Value::JQueryCollection(ids) => self.call_jquery_method(ids, property, arguments),
             _ => {
                 let callee = self.get_member_value(receiver.clone(), property)?;
@@ -1816,7 +2008,9 @@ impl<'a> Executor<'a> {
     ) -> Result<Value, String> {
         match callee {
             Value::Function(function) => match function.kind.clone() {
-                FunctionKind::Native(kind) => self.call_native_function(kind, this_value, arguments),
+                FunctionKind::Native(kind) => {
+                    self.call_native_function(kind, this_value, arguments)
+                }
                 FunctionKind::User(function) => {
                     let previous_scope = self.scope.clone();
                     let next_scope = Scope::new(Some(function.env.clone()));
@@ -1858,11 +2052,14 @@ impl<'a> Executor<'a> {
         };
 
         match function.kind.clone() {
-            FunctionKind::Native(kind) => self.call_native_function(kind, Value::Undefined, arguments),
+            FunctionKind::Native(kind) => {
+                self.call_native_function(kind, Value::Undefined, arguments)
+            }
             FunctionKind::User(_) => {
                 let prototype = function.properties.borrow().get("prototype").cloned();
                 let instance = self.create_object_with_prototype(prototype);
-                let value = self.call_value(Value::Function(function), instance.clone(), arguments)?;
+                let value =
+                    self.call_value(Value::Function(function), instance.clone(), arguments)?;
                 Ok(match value {
                     Value::Undefined => instance,
                     other => other,
@@ -1884,22 +2081,52 @@ impl<'a> Executor<'a> {
                     self.document.query_selector_all_ids(selector.as_str()),
                 ))
             }
-            NativeFunction::ArrayIsArray => {
-                Ok(Value::Bool(matches!(arguments.first(), Some(Value::Array(_)))))
+            NativeFunction::ArrayIsArray => Ok(Value::Bool(matches!(
+                arguments.first(),
+                Some(Value::Array(_))
+            ))),
+            NativeFunction::ObjectAssign => {
+                let Some(target) = arguments.first().cloned() else {
+                    return Ok(Value::Undefined);
+                };
+                for source in &arguments[1..] {
+                    for (key, value) in own_property_entries(source)? {
+                        self.set_property_value(target.clone(), key.as_str(), value)?;
+                    }
+                }
+                Ok(target)
             }
             NativeFunction::ObjectCreate => {
                 let prototype = arguments.first().cloned();
                 Ok(self.create_object_with_prototype(prototype))
             }
+            NativeFunction::ObjectKeys => {
+                let Some(value) = arguments.first() else {
+                    return Ok(Value::Array(Rc::new(RefCell::new(Vec::new()))));
+                };
+                let keys = own_property_names(value)?
+                    .into_iter()
+                    .map(Value::String)
+                    .collect();
+                Ok(Value::Array(Rc::new(RefCell::new(keys))))
+            }
             NativeFunction::ObjectHasOwnProperty => {
                 let property = first_string_argument(arguments)?;
-                Ok(Value::Bool(self.has_own_property(this_value, property.as_str())))
+                Ok(Value::Bool(
+                    self.has_own_property(this_value, property.as_str()),
+                ))
+            }
+            NativeFunction::SetConstructor => {
+                let set = Value::Set(Rc::new(RefCell::new(Vec::new())));
+                if let Some(iterable) = arguments.first() {
+                    for value in array_like_values(iterable) {
+                        insert_set_value(&set, value);
+                    }
+                }
+                Ok(set)
             }
             NativeFunction::RegExpConstructor => {
-                let source = arguments
-                    .first()
-                    .map(regex_source)
-                    .unwrap_or_default();
+                let source = arguments.first().map(regex_source).unwrap_or_default();
                 let flags = arguments
                     .get(1)
                     .map(Value::to_string_value)
@@ -1919,6 +2146,29 @@ impl<'a> Executor<'a> {
                 let this_arg = arguments.first().cloned().unwrap_or(Value::Undefined);
                 Ok(self.create_bound_function(this_value, this_arg, arguments[1..].to_vec()))
             }
+            NativeFunction::ArrayForEach => {
+                self.call_array_prototype_method(this_value, "forEach", arguments)
+            }
+            NativeFunction::ArrayMap => {
+                self.call_array_prototype_method(this_value, "map", arguments)
+            }
+            NativeFunction::ArrayFilter => {
+                self.call_array_prototype_method(this_value, "filter", arguments)
+            }
+            NativeFunction::ArraySlice => {
+                self.call_array_prototype_method(this_value, "slice", arguments)
+            }
+            NativeFunction::ArraySort => {
+                self.call_array_prototype_method(this_value, "sort", arguments)
+            }
+            NativeFunction::ArrayReduce => {
+                self.call_array_prototype_method(this_value, "reduce", arguments)
+            }
+            NativeFunction::SetTimeout => self.call_timer(arguments),
+            NativeFunction::ClearTimeout => Ok(Value::Undefined),
+            NativeFunction::RequestIdleCallback => self.call_idle_callback(arguments),
+            NativeFunction::CancelIdleCallback => Ok(Value::Undefined),
+            NativeFunction::ReturnZero => Ok(Value::Number(0.0)),
             NativeFunction::Noop => Ok(Value::Undefined),
         }
     }
@@ -1978,7 +2228,9 @@ impl<'a> Executor<'a> {
                     .find_element_by_node_id(node_id)
                     .and_then(|element| element.query_selector(selector.as_str()))
                     .map(|element| element.node_id);
-                Ok(element_id.map(Value::LiveElement).unwrap_or(Value::Undefined))
+                Ok(element_id
+                    .map(Value::LiveElement)
+                    .unwrap_or(Value::Undefined))
             }
             "querySelectorAll" => {
                 let selector = first_string_argument(arguments)?;
@@ -2051,7 +2303,9 @@ impl<'a> Executor<'a> {
             "split" => {
                 let separator = first_string_argument(arguments)?;
                 let parts = if separator.is_empty() {
-                    text.chars().map(|ch| Value::String(ch.to_string())).collect()
+                    text.chars()
+                        .map(|ch| Value::String(ch.to_string()))
+                        .collect()
                 } else {
                     text.split(separator.as_str())
                         .map(|part| Value::String(part.to_owned()))
@@ -2070,7 +2324,11 @@ impl<'a> Executor<'a> {
                     .cloned()
                     .unwrap_or(Value::String(String::new()))
                     .to_string_value();
-                Ok(Value::String(simple_replace(text, pattern, replacement.as_str())))
+                Ok(Value::String(simple_replace(
+                    text,
+                    pattern,
+                    replacement.as_str(),
+                )))
             }
             "startsWith" => {
                 let prefix = first_string_argument(arguments)?;
@@ -2087,17 +2345,11 @@ impl<'a> Executor<'a> {
         arguments: &[Value],
     ) -> Result<Value, String> {
         match property {
-            "forEach" => {
-                let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
-                let snapshot = items.borrow().clone();
-                for (index, item) in snapshot.into_iter().enumerate() {
-                    let array_value = Value::Array(items.clone());
-                    let args = [item, Value::Number(index as f64), array_value];
-                    let _ = self.call_value(callback.clone(), Value::Undefined, &args)?;
-                }
-                Ok(Value::Undefined)
-            }
-            "shift" => Ok(items.borrow_mut().drain(..1).next().unwrap_or(Value::Undefined)),
+            "shift" => Ok(items
+                .borrow_mut()
+                .drain(..1)
+                .next()
+                .unwrap_or(Value::Undefined)),
             "push" => {
                 let mut items = items.borrow_mut();
                 items.extend_from_slice(arguments);
@@ -2107,11 +2359,195 @@ impl<'a> Executor<'a> {
             "includes" => {
                 let needle = arguments.first().cloned().unwrap_or(Value::Undefined);
                 Ok(Value::Bool(
-                    items.borrow().iter().any(|value| strict_equals(value, &needle)),
+                    items
+                        .borrow()
+                        .iter()
+                        .any(|value| strict_equals(value, &needle)),
                 ))
             }
-            _ => Err(format!("Unsupported array method: {property}")),
+            "forEach" | "map" | "filter" | "slice" | "sort" | "reduce" => {
+                self.call_array_prototype_method(Value::Array(items), property, arguments)
+            }
+            _ => {
+                let callee = self.array_prototype_property(property);
+                self.call_value(callee, Value::Array(items), arguments)
+            }
         }
+    }
+
+    fn call_set_method(
+        &mut self,
+        items: SetRef,
+        property: &str,
+        arguments: &[Value],
+    ) -> Result<Value, String> {
+        match property {
+            "add" => {
+                if let Some(value) = arguments.first().cloned() {
+                    insert_set_value(&Value::Set(items.clone()), value);
+                }
+                Ok(Value::Set(items))
+            }
+            "has" => {
+                let needle = arguments.first().cloned().unwrap_or(Value::Undefined);
+                Ok(Value::Bool(
+                    items
+                        .borrow()
+                        .iter()
+                        .any(|value| strict_equals(value, &needle)),
+                ))
+            }
+            "delete" => {
+                let needle = arguments.first().cloned().unwrap_or(Value::Undefined);
+                let mut items = items.borrow_mut();
+                if let Some(index) = items.iter().position(|value| strict_equals(value, &needle)) {
+                    items.remove(index);
+                    return Ok(Value::Bool(true));
+                }
+                Ok(Value::Bool(false))
+            }
+            "forEach" => {
+                let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
+                let this_arg = arguments.get(1).cloned().unwrap_or(Value::Undefined);
+                let snapshot = items.borrow().clone();
+                let set_value = Value::Set(items);
+                for value in snapshot {
+                    let args = [value.clone(), value, set_value.clone()];
+                    let _ = self.call_value(callback.clone(), this_arg.clone(), &args)?;
+                }
+                Ok(Value::Undefined)
+            }
+            _ => Err(format!("Unsupported set method: {property}")),
+        }
+    }
+
+    fn call_array_prototype_method(
+        &mut self,
+        this_value: Value,
+        property: &str,
+        arguments: &[Value],
+    ) -> Result<Value, String> {
+        match property {
+            "forEach" => {
+                let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
+                let this_arg = arguments.get(1).cloned().unwrap_or(Value::Undefined);
+                let values = array_like_values(&this_value);
+                for (index, item) in values.into_iter().enumerate() {
+                    let args = [item, Value::Number(index as f64), this_value.clone()];
+                    let _ = self.call_value(callback.clone(), this_arg.clone(), &args)?;
+                }
+                Ok(Value::Undefined)
+            }
+            "map" => {
+                let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
+                let this_arg = arguments.get(1).cloned().unwrap_or(Value::Undefined);
+                let values = array_like_values(&this_value);
+                let mut mapped = Vec::with_capacity(values.len());
+                for (index, item) in values.into_iter().enumerate() {
+                    let args = [item, Value::Number(index as f64), this_value.clone()];
+                    mapped.push(self.call_value(callback.clone(), this_arg.clone(), &args)?);
+                }
+                Ok(Value::Array(Rc::new(RefCell::new(mapped))))
+            }
+            "filter" => {
+                let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
+                let this_arg = arguments.get(1).cloned().unwrap_or(Value::Undefined);
+                let values = array_like_values(&this_value);
+                let mut filtered = Vec::new();
+                for (index, item) in values.into_iter().enumerate() {
+                    let args = [
+                        item.clone(),
+                        Value::Number(index as f64),
+                        this_value.clone(),
+                    ];
+                    if self
+                        .call_value(callback.clone(), this_arg.clone(), &args)?
+                        .is_truthy()
+                    {
+                        filtered.push(item);
+                    }
+                }
+                Ok(Value::Array(Rc::new(RefCell::new(filtered))))
+            }
+            "slice" => {
+                let values = array_like_values(&this_value);
+                let len = values.len() as i32;
+                let start = normalized_slice_index(arguments.first(), len);
+                let end = normalized_slice_end(arguments.get(1), len);
+                let slice = if start >= end {
+                    Vec::new()
+                } else {
+                    values[start as usize..end as usize].to_vec()
+                };
+                Ok(Value::Array(Rc::new(RefCell::new(slice))))
+            }
+            "sort" => {
+                let comparator = arguments
+                    .first()
+                    .cloned()
+                    .filter(|value| !matches!(value, Value::Undefined));
+                let mut values = array_like_values(&this_value);
+                sort_values(self, &mut values, comparator)?;
+                if let Value::Array(items) = &this_value {
+                    *items.borrow_mut() = values.clone();
+                    return Ok(this_value);
+                }
+                Ok(Value::Array(Rc::new(RefCell::new(values))))
+            }
+            "reduce" => {
+                let callback = arguments.first().cloned().unwrap_or(Value::Undefined);
+                let values = array_like_values(&this_value);
+                let mut iter = values.into_iter().enumerate();
+                let mut accumulator = if let Some(initial) = arguments.get(1).cloned() {
+                    initial
+                } else if let Some((_, first)) = iter.next() {
+                    first
+                } else {
+                    return Ok(Value::Undefined);
+                };
+                for (index, item) in iter {
+                    let args = [
+                        accumulator.clone(),
+                        item,
+                        Value::Number(index as f64),
+                        this_value.clone(),
+                    ];
+                    accumulator = self.call_value(callback.clone(), Value::Undefined, &args)?;
+                }
+                Ok(accumulator)
+            }
+            _ => Err(format!("Unsupported array prototype method: {property}")),
+        }
+    }
+
+    fn array_prototype_property(&mut self, property: &str) -> Value {
+        self.lookup_binding("Array")
+            .and_then(|ctor| self.get_member_value(ctor, "prototype").ok())
+            .and_then(|prototype| self.get_member_value(prototype, property).ok())
+            .unwrap_or(Value::Undefined)
+    }
+
+    fn call_timer(&mut self, arguments: &[Value]) -> Result<Value, String> {
+        let Some(callback) = arguments.first().cloned() else {
+            return Ok(Value::Number(0.0));
+        };
+        let _ = self.call_value(callback, Value::Window, &arguments[2..])?;
+        Ok(Value::Number(0.0))
+    }
+
+    fn call_idle_callback(&mut self, arguments: &[Value]) -> Result<Value, String> {
+        let Some(callback) = arguments.first().cloned() else {
+            return Ok(Value::Number(0.0));
+        };
+        let deadline = self.create_plain_object();
+        let _ = self.set_property_value(deadline.clone(), "didTimeout", Value::Bool(false));
+        let _ = self.set_property_value(
+            deadline.clone(),
+            "timeRemaining",
+            self.create_native_function(NativeFunction::ReturnZero),
+        );
+        let _ = self.call_value(callback, Value::Window, &[deadline])?;
+        Ok(Value::Number(0.0))
     }
 
     fn call_jquery_method(
@@ -2155,9 +2591,25 @@ impl<'a> Executor<'a> {
             Value::Window => match property {
                 "document" => Ok(Value::Document),
                 "window" => Ok(Value::Window),
-                "localStorage" => Ok(self.lookup_binding("localStorage").unwrap_or(Value::Undefined)),
-                "performance" => Ok(self.lookup_binding("performance").unwrap_or(Value::Undefined)),
+                "localStorage" => Ok(self
+                    .lookup_binding("localStorage")
+                    .unwrap_or(Value::Undefined)),
+                "performance" => Ok(self
+                    .lookup_binding("performance")
+                    .unwrap_or(Value::Undefined)),
                 "console" => Ok(self.lookup_binding("console").unwrap_or(Value::Undefined)),
+                "setTimeout" => Ok(self
+                    .lookup_binding("setTimeout")
+                    .unwrap_or(Value::Undefined)),
+                "clearTimeout" => Ok(self
+                    .lookup_binding("clearTimeout")
+                    .unwrap_or(Value::Undefined)),
+                "requestIdleCallback" => Ok(self
+                    .lookup_binding("requestIdleCallback")
+                    .unwrap_or(Value::Undefined)),
+                "cancelIdleCallback" => Ok(self
+                    .lookup_binding("cancelIdleCallback")
+                    .unwrap_or(Value::Undefined)),
                 _ => Ok(self.lookup_binding(property).unwrap_or(Value::Undefined)),
             },
             Value::Document => match property {
@@ -2235,8 +2687,12 @@ impl<'a> Executor<'a> {
                         .cloned()
                         .unwrap_or(Value::Undefined));
                 }
-                Ok(Value::Undefined)
+                Ok(self.array_prototype_property(property))
             }
+            Value::Set(items) => match property {
+                "size" => Ok(Value::Number(items.borrow().len() as f64)),
+                _ => Ok(Value::Undefined),
+            },
             Value::Object(properties) => {
                 Ok(lookup_object_property(&properties, property).unwrap_or(Value::Undefined))
             }
@@ -2284,8 +2740,20 @@ impl<'a> Executor<'a> {
 
     fn has_property(&mut self, object: Value, property: &str) -> bool {
         match object {
-            Value::Window => matches!(property, "document" | "window" | "localStorage" | "performance" | "console")
-                || self.lookup_binding(property).is_some(),
+            Value::Window => {
+                matches!(
+                    property,
+                    "document"
+                        | "window"
+                        | "localStorage"
+                        | "performance"
+                        | "console"
+                        | "setTimeout"
+                        | "clearTimeout"
+                        | "requestIdleCallback"
+                        | "cancelIdleCallback"
+                ) || self.lookup_binding(property).is_some()
+            }
             Value::Document => matches!(
                 property,
                 "documentElement"
@@ -2298,8 +2766,12 @@ impl<'a> Executor<'a> {
                     | "createElement"
                     | "createTextNode"
             ),
-            Value::Array(items) => property == "length"
-                || parse_array_index(property).is_some_and(|index| index < items.borrow().len()),
+            Value::Array(items) => {
+                property == "length"
+                    || parse_array_index(property).is_some_and(|index| index < items.borrow().len())
+                    || !matches!(self.array_prototype_property(property), Value::Undefined)
+            }
+            Value::Set(_) => matches!(property, "size" | "add" | "has" | "delete" | "forEach"),
             Value::NodeList(ids) | Value::JQueryCollection(ids) => {
                 property == "length"
                     || parse_array_index(property).is_some_and(|index| index < ids.len())
@@ -2317,8 +2789,10 @@ impl<'a> Executor<'a> {
                 property == "length"
                     || parse_array_index(property).is_some_and(|index| index < text.chars().count())
             }
-            Value::Regex(regex) => matches!(property, "source" | "flags")
-                || !regex.source.is_empty() && property == "constructor",
+            Value::Regex(regex) => {
+                matches!(property, "source" | "flags")
+                    || !regex.source.is_empty() && property == "constructor"
+            }
             Value::LiveElement(_) => matches!(
                 property,
                 "classList" | "className" | "textContent" | "id" | "checked" | "disabled" | "value"
@@ -2376,7 +2850,9 @@ impl<'a> Executor<'a> {
                             .insert("value".to_owned(), value.to_string_value());
                         Ok(())
                     }
-                    _ => Err(format!("Unsupported element property assignment: {property}")),
+                    _ => Err(format!(
+                        "Unsupported element property assignment: {property}"
+                    )),
                 }
             }
             Value::Object(properties) => {
@@ -2384,11 +2860,17 @@ impl<'a> Executor<'a> {
                 Ok(())
             }
             Value::Function(function) => {
-                function.properties.borrow_mut().insert(property.to_owned(), value);
+                function
+                    .properties
+                    .borrow_mut()
+                    .insert(property.to_owned(), value);
                 Ok(())
             }
             Value::BoundFunction(function) => {
-                function.properties.borrow_mut().insert(property.to_owned(), value);
+                function
+                    .properties
+                    .borrow_mut()
+                    .insert(property.to_owned(), value);
                 Ok(())
             }
             Value::Array(items) => {
@@ -2402,7 +2884,10 @@ impl<'a> Executor<'a> {
                 }
                 Err(format!("Unsupported array property assignment: {property}"))
             }
-            _ => Err(format!("Unsupported assignment through property {property}")),
+            Value::Set(_) => Err(format!("Unsupported set property assignment: {property}")),
+            _ => Err(format!(
+                "Unsupported assignment through property {property}"
+            )),
         }
     }
 
@@ -2421,12 +2906,12 @@ impl<'a> Executor<'a> {
                 self.document.assign_element_ids(&mut element);
                 let inserted_id = element.node_id;
                 let inserted = match position {
-                    InsertPosition::Append => {
-                        self.document.append_child_to(parent_id, Node::Element(element))
-                    }
-                    InsertPosition::Prepend => {
-                        self.document.prepend_child_to(parent_id, Node::Element(element))
-                    }
+                    InsertPosition::Append => self
+                        .document
+                        .append_child_to(parent_id, Node::Element(element)),
+                    InsertPosition::Prepend => self
+                        .document
+                        .prepend_child_to(parent_id, Node::Element(element)),
                 };
                 if inserted {
                     Ok(Value::LiveElement(inserted_id))
@@ -2436,22 +2921,27 @@ impl<'a> Executor<'a> {
             }
             Value::DetachedText(text) => {
                 let _ = match position {
-                    InsertPosition::Append => self.document.append_child_to(parent_id, Node::Text(text)),
-                    InsertPosition::Prepend => self.document.prepend_child_to(parent_id, Node::Text(text)),
+                    InsertPosition::Append => {
+                        self.document.append_child_to(parent_id, Node::Text(text))
+                    }
+                    InsertPosition::Prepend => {
+                        self.document.prepend_child_to(parent_id, Node::Text(text))
+                    }
                 };
                 Ok(Value::Undefined)
             }
             Value::LiveElement(existing_id) => {
-                let Some(existing) = self.document.find_element_by_node_id(existing_id).cloned() else {
+                let Some(existing) = self.document.find_element_by_node_id(existing_id).cloned()
+                else {
                     return Ok(Value::Undefined);
                 };
                 let inserted = match position {
-                    InsertPosition::Append => {
-                        self.document.append_child_to(parent_id, Node::Element(existing))
-                    }
-                    InsertPosition::Prepend => {
-                        self.document.prepend_child_to(parent_id, Node::Element(existing))
-                    }
+                    InsertPosition::Append => self
+                        .document
+                        .append_child_to(parent_id, Node::Element(existing)),
+                    InsertPosition::Prepend => self
+                        .document
+                        .prepend_child_to(parent_id, Node::Element(existing)),
                 };
                 Ok(if inserted {
                     Value::LiveElement(existing_id)
@@ -2463,7 +2953,11 @@ impl<'a> Executor<'a> {
         }
     }
 
-    fn replace_element(&mut self, node_id: ElementId, arguments: &[Value]) -> Result<Value, String> {
+    fn replace_element(
+        &mut self,
+        node_id: ElementId,
+        arguments: &[Value],
+    ) -> Result<Value, String> {
         let Some(value) = arguments.first().cloned() else {
             return Ok(Value::Undefined);
         };
@@ -2478,7 +2972,8 @@ impl<'a> Executor<'a> {
                 }
             }
             Value::LiveElement(existing_id) => {
-                let Some(existing) = self.document.find_element_by_node_id(existing_id).cloned() else {
+                let Some(existing) = self.document.find_element_by_node_id(existing_id).cloned()
+                else {
                     return Ok(Value::Undefined);
                 };
                 if self.document.replace_element_with(node_id, existing) {
@@ -2492,11 +2987,17 @@ impl<'a> Executor<'a> {
     }
 
     fn declare_global(&mut self, name: &str, value: Value) {
-        self.global.borrow_mut().bindings.insert(name.to_owned(), value);
+        self.global
+            .borrow_mut()
+            .bindings
+            .insert(name.to_owned(), value);
     }
 
     fn declare_binding(&mut self, name: &str, value: Value) {
-        self.scope.borrow_mut().bindings.insert(name.to_owned(), value);
+        self.scope
+            .borrow_mut()
+            .bindings
+            .insert(name.to_owned(), value);
     }
 
     fn lookup_binding(&self, name: &str) -> Option<Value> {
@@ -2508,7 +3009,10 @@ impl<'a> Executor<'a> {
             scope.borrow_mut().bindings.insert(name.to_owned(), value);
             return;
         }
-        self.global.borrow_mut().bindings.insert(name.to_owned(), value);
+        self.global
+            .borrow_mut()
+            .bindings
+            .insert(name.to_owned(), value);
     }
 
     fn find_scope_containing(&self, name: &str) -> Option<ScopeRef> {
@@ -2572,6 +3076,7 @@ impl<'a> Executor<'a> {
                 property == "length"
                     || parse_array_index(property).is_some_and(|index| index < items.borrow().len())
             }
+            Value::Set(_) => property == "size",
             Value::NodeList(ids) | Value::JQueryCollection(ids) => {
                 property == "length"
                     || parse_array_index(property).is_some_and(|index| index < ids.len())
@@ -2585,10 +3090,20 @@ impl<'a> Executor<'a> {
                 property,
                 "classList" | "className" | "textContent" | "id" | "checked" | "disabled" | "value"
             ),
-            Value::Window => matches!(
-                property,
-                "document" | "window" | "localStorage" | "performance" | "console"
-            ) || self.lookup_binding(property).is_some(),
+            Value::Window => {
+                matches!(
+                    property,
+                    "document"
+                        | "window"
+                        | "localStorage"
+                        | "performance"
+                        | "console"
+                        | "setTimeout"
+                        | "clearTimeout"
+                        | "requestIdleCallback"
+                        | "cancelIdleCallback"
+                ) || self.lookup_binding(property).is_some()
+            }
             Value::Document => matches!(
                 property,
                 "documentElement"
@@ -2605,6 +3120,32 @@ impl<'a> Executor<'a> {
         }
     }
 
+    fn delete_property(&mut self, object: Value, property: &str) -> bool {
+        match object {
+            Value::Object(properties) => {
+                properties.borrow_mut().remove(property);
+                true
+            }
+            Value::Function(function) => {
+                function.properties.borrow_mut().remove(property);
+                true
+            }
+            Value::BoundFunction(function) => {
+                function.properties.borrow_mut().remove(property);
+                true
+            }
+            Value::Array(items) => {
+                if let Some(index) = parse_array_index(property)
+                    && let Some(slot) = items.borrow_mut().get_mut(index)
+                {
+                    *slot = Value::Undefined;
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+
     fn set_property_value(
         &self,
         target: Value,
@@ -2617,11 +3158,17 @@ impl<'a> Executor<'a> {
                 Ok(())
             }
             Value::Function(function) => {
-                function.properties.borrow_mut().insert(property.to_owned(), value);
+                function
+                    .properties
+                    .borrow_mut()
+                    .insert(property.to_owned(), value);
                 Ok(())
             }
             Value::BoundFunction(function) => {
-                function.properties.borrow_mut().insert(property.to_owned(), value);
+                function
+                    .properties
+                    .borrow_mut()
+                    .insert(property.to_owned(), value);
                 Ok(())
             }
             _ => Err(format!("Unsupported property target: {property}")),
@@ -2758,10 +3305,86 @@ fn collect_class_tokens(arguments: &[Value]) -> Vec<String> {
     out
 }
 
+fn own_property_names(value: &Value) -> Result<Vec<String>, String> {
+    match value {
+        Value::Object(properties) => {
+            let mut keys: Vec<String> = properties
+                .borrow()
+                .keys()
+                .filter(|key| key.as_str() != "__proto__")
+                .cloned()
+                .collect();
+            keys.sort();
+            Ok(keys)
+        }
+        Value::Array(items) => Ok((0..items.borrow().len())
+            .map(|index| index.to_string())
+            .collect()),
+        Value::Set(_) => Ok(vec!["size".to_owned()]),
+        _ => Err("Unsupported Object.keys target".to_owned()),
+    }
+}
+
+fn own_property_entries(value: &Value) -> Result<Vec<(String, Value)>, String> {
+    match value {
+        Value::Object(properties) => Ok(properties
+            .borrow()
+            .iter()
+            .filter(|(key, _)| key.as_str() != "__proto__")
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()),
+        Value::Array(items) => Ok(items
+            .borrow()
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (index.to_string(), value.clone()))
+            .collect()),
+        _ => Err("Unsupported Object.assign source".to_owned()),
+    }
+}
+
 fn object_key_to_string(key: &ObjectKey) -> String {
     match key {
         ObjectKey::Identifier(value) | ObjectKey::String(value) => value.clone(),
         ObjectKey::Number(value) => number_to_string(*value),
+    }
+}
+
+fn array_like_values(value: &Value) -> Vec<Value> {
+    match value {
+        Value::Array(items) => items.borrow().clone(),
+        Value::NodeList(ids) | Value::JQueryCollection(ids) => {
+            ids.iter().copied().map(Value::LiveElement).collect()
+        }
+        Value::String(text) => text
+            .chars()
+            .map(|ch| Value::String(ch.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn normalized_slice_index(argument: Option<&Value>, len: i32) -> i32 {
+    let Some(argument) = argument else {
+        return 0;
+    };
+    let index = argument.to_number_value() as i32;
+    if index < 0 {
+        (len + index).max(0).min(len)
+    } else {
+        index.min(len)
+    }
+}
+
+fn normalized_slice_end(argument: Option<&Value>, len: i32) -> i32 {
+    let Some(argument) = argument else {
+        return len;
+    };
+    let index = argument.to_number_value() as i32;
+    if index < 0 {
+        (len + index).max(0).min(len)
+    } else {
+        index.min(len)
     }
 }
 
@@ -2770,6 +3393,45 @@ fn parse_array_index(property: &str) -> Option<usize> {
         return None;
     }
     property.parse::<usize>().ok()
+}
+
+fn sort_values(
+    executor: &mut Executor<'_>,
+    values: &mut [Value],
+    comparator: Option<Value>,
+) -> Result<(), String> {
+    let len = values.len();
+    for i in 0..len {
+        for j in 0..len.saturating_sub(i + 1) {
+            let should_swap = if let Some(callback) = &comparator {
+                let result = executor.call_value(
+                    callback.clone(),
+                    Value::Undefined,
+                    &[values[j].clone(), values[j + 1].clone()],
+                )?;
+                result.to_number_value() > 0.0
+            } else {
+                compare_values(&values[j], &values[j + 1]) > 0
+            };
+            if should_swap {
+                values.swap(j, j + 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn insert_set_value(set: &Value, value: Value) {
+    let Value::Set(items) = set else {
+        return;
+    };
+    if !items
+        .borrow()
+        .iter()
+        .any(|existing| strict_equals(existing, &value))
+    {
+        items.borrow_mut().push(value);
+    }
 }
 
 fn number_to_string(value: f64) -> String {
@@ -2827,6 +3489,7 @@ fn strict_equals(left: &Value, right: &Value) -> bool {
             left.source == right.source && left.flags == right.flags
         }
         (Value::Array(left), Value::Array(right)) => Rc::ptr_eq(left, right),
+        (Value::Set(left), Value::Set(right)) => Rc::ptr_eq(left, right),
         (Value::Object(left), Value::Object(right)) => Rc::ptr_eq(left, right),
         (Value::Function(left), Value::Function(right)) => Rc::ptr_eq(left, right),
         (Value::BoundFunction(left), Value::BoundFunction(right)) => Rc::ptr_eq(left, right),
@@ -2837,7 +3500,10 @@ fn strict_equals(left: &Value, right: &Value) -> bool {
 }
 
 fn loose_equals(left: &Value, right: &Value) -> bool {
-    if matches!((left, right), (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null)) {
+    if matches!(
+        (left, right),
+        (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null)
+    ) {
         return true;
     }
     strict_equals(left, right)
@@ -2871,11 +3537,12 @@ fn simple_match(text: &str, pattern: Value) -> Value {
                     .unwrap_or(Value::Undefined);
                 return Value::Array(Rc::new(RefCell::new(vec![value])));
             }
-            if !regex
-                .source
-                .chars()
-                .any(|ch| matches!(ch, '[' | ']' | '(' | ')' | '?' | '+' | '*' | '|' | '^' | '$' | '\\'))
-                && text.contains(regex.source.as_str())
+            if !regex.source.chars().any(|ch| {
+                matches!(
+                    ch,
+                    '[' | ']' | '(' | ')' | '?' | '+' | '*' | '|' | '^' | '$' | '\\'
+                )
+            }) && text.contains(regex.source.as_str())
             {
                 return Value::Array(Rc::new(RefCell::new(vec![Value::String(regex.source)])));
             }
@@ -2997,7 +3664,10 @@ mod tests {
         let greeting = document
             .find_first_element_by_id("greeting")
             .expect("missing greeting");
-        assert_eq!(greeting.children, vec![Node::Text("Hello World!".to_owned())]);
+        assert_eq!(
+            greeting.children,
+            vec![Node::Text("Hello World!".to_owned())]
+        );
     }
 
     #[test]
@@ -3079,14 +3749,16 @@ mod tests {
         let greeting = document
             .find_first_element_by_id("greeting")
             .expect("missing greeting");
-        assert_eq!(greeting.children, vec![Node::Text("Hello from JS".to_owned())]);
+        assert_eq!(
+            greeting.children,
+            vec![Node::Text("Hello from JS".to_owned())]
+        );
     }
 
     #[test]
     fn executes_wikipedia_client_bootstrap_without_cookie() {
-        let mut document = crate::html::parse_document(
-            r#"<html class="client-nojs"><body></body></html>"#,
-        );
+        let mut document =
+            crate::html::parse_document(r#"<html class="client-nojs"><body></body></html>"#);
 
         execute(
             &mut document,
@@ -3182,5 +3854,83 @@ mod tests {
             .find_first_element_by_name("body")
             .expect("missing body element");
         assert_eq!(collect_text_content(body), "beta");
+    }
+
+    #[test]
+    fn supports_delete_set_and_startup_timers() {
+        let mut document = crate::html::parse_document(r#"<html><body></body></html>"#);
+
+        execute(
+            &mut document,
+            r#"
+            var prefs = { theme: "dark", width: "wide" };
+            var deletedTheme = delete prefs["theme"];
+            var values = new Set([1, 2, 2]);
+            values.add(3);
+            values.delete(2);
+            var sum = 0;
+            values.forEach(function(value) {
+                sum += value;
+            });
+            var idleState = "pending";
+            requestIdleCallback(function(deadline) {
+                if (deadline.didTimeout === false) {
+                    idleState = "idle";
+                }
+            });
+            setTimeout(function() {
+                document.body.textContent =
+                    deletedTheme + ":" + values.has(1) + ":" + values.has(2) + ":" + sum + ":" + values.size + ":" + idleState;
+            }, 0);
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "true:true:false:4:2:idle");
+    }
+
+    #[test]
+    fn supports_array_prototype_helpers_and_object_runtime_methods() {
+        let mut document = crate::html::parse_document(
+            r#"<html><body><div class="item" id="a"></div><div class="item" id="b"></div></body></html>"#,
+        );
+
+        execute(
+            &mut document,
+            r#"
+            var ids = [];
+            Array.prototype.forEach.call(document.querySelectorAll(".item"), function(node) {
+                ids.push(node.id);
+            });
+            var mapped = ids.map(function(id) {
+                return id + id;
+            });
+            var filtered = mapped.filter(function(id) {
+                return id !== "bb";
+            });
+            var sliced = filtered.slice(0, 1);
+            var sorted = [3, 1, 2];
+            sorted.sort(function(a, b) {
+                return a - b;
+            });
+            var reduced = sorted.reduce(function(acc, value) {
+                return acc * 10 + value;
+            }, 0);
+            var config = {};
+            Object.assign(config, { ready: true, items: sliced.length });
+            var keys = Object.keys(config);
+            document.body.textContent =
+                sliced[0] + ":" + reduced + ":" + config.ready + ":" + config.items + ":" + keys.length;
+            "#,
+        )
+        .expect("script should execute");
+
+        let body = document
+            .find_first_element_by_name("body")
+            .expect("missing body element");
+        assert_eq!(collect_text_content(body), "aa:123:true:1:2");
     }
 }
